@@ -10,8 +10,8 @@
 // @run-at       document-start
 // @grant        none
 // @noframes
-// @updateURL    https://oggs.orlandopb.com/oggs.user.js
-// @downloadURL  https://oggs.orlandopb.com/oggs.user.js
+// @updateURL    https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js
+// @downloadURL  https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js
 // ==/UserScript==
 
 // Built by tools/build.mjs from extension/ in https://github.com/Orlando-PB/OGGS: don't edit
@@ -615,7 +615,10 @@ section.off .opts { display: none; }
     filters.push({ fn, order });
     filters.sort((a, b) => a.order - b.order);
   }
-  const live = rec => !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
+  // A record is live while its texture exists and nothing newer has gone into the same
+  // slot; a record replaced by a later upload is marked stale so a filter finishing late
+  // can't write an old tile over the one now on screen.
+  const live = rec => !rec.stale && !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
 
   function makeRecord(gl, name, args, img) {
     const url = img.currentSrc || img.src;
@@ -634,7 +637,7 @@ section.off .opts { display: none; }
     const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
       && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
-    if (i >= 0) records.splice(i, 1);
+    if (i >= 0) records.splice(i, 1)[0].stale = true;
     records.push(rec);
     if (records.length > MAX) records.splice(0, records.length - MAX);
   }
@@ -727,6 +730,7 @@ section.off .opts { display: none; }
       scheduled = null;
       const old = records.filter(live);
       records.length = 0;
+      for (const r of old) r.stale = true;      // the copies made below take their place
       let n = 0;
       await Promise.all(old.map(async r => {
         const img = new Image();
@@ -735,7 +739,7 @@ section.off .opts { display: none; }
         img.src = r.url;
         try { await img.decode(); } catch { return; }
         try {
-          const rec = { ...r, img };
+          const rec = { ...r, img, stale: false };
           if (upload(rec, handle(rec))) n++;
         } catch (err) { ggs.log('tiles: replay failed', err); }
       }));
@@ -2094,7 +2098,7 @@ section.off .opts { display: none; }
 (() => {
   globalThis.__ggs.registry.push({
     id: 'lying-signs',
-    name: 'Lying signs (experimental)',
+    name: 'Lying signs',
     description: 'Rewrites the text on signs.',
     defaultEnabled: false,
     options: [
@@ -2273,14 +2277,29 @@ section.off .opts { display: none; }
     workerReady.catch(err => { ggs.log('lying-signs: text detector failed to load', err); workerReady = null; });
     return workerReady;
   }
-  // Detection queue: the tile nearest to where you're looking first; a queued tile whose
-  // textures are gone (pano changed) is dropped unrun.
+  // Detection queue: the tile nearest to where you're looking first. A queued tile whose
+  // textures are gone or overwritten (pano changed) is dropped unrun, tiles of panoramas
+  // no longer shown are dropped as soon as the panorama moves on, and the queue is capped
+  // so moving quickly never builds a backlog (a dropped tile is detected again if it is
+  // uploaded again).
   const queue = [];                           // [{ img, cfg, res, alive, url }]
   let inflight = 0;
-  const MAX_INFLIGHT = 2;
+  const MAX_INFLIGHT = 2, MAX_QUEUE = 300;
   ggs.lyingSigns.debug = () => ({ queue: queue.length, inflight, waiting: waiting.size, tiles: tiles.size });
   function detect(img, cfg, alive, url) {
-    return new Promise(res => { queue.push({ img, cfg, res, alive, url }); pump(); });
+    return new Promise(res => {
+      queue.push({ img, cfg, res, alive, url });
+      while (queue.length > MAX_QUEUE) { stats.skipped = (stats.skipped || 0) + 1; queue.shift().res(null); }
+      pump();
+    });
+  }
+  function pruneQueue() {
+    const shown = new Set();
+    for (const p of panos) { try { shown.add(p.getPano()); } catch {} }
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const id = ggs.tileKey(queue[i].url)?.pano;
+      if (id && !shown.has(id)) { stats.skipped = (stats.skipped || 0) + 1; queue.splice(i, 1)[0].res(null); }
+    }
   }
   function tileDistance(url) {
     const k = ggs.tileKey(url);
@@ -2649,7 +2668,11 @@ section.off .opts { display: none; }
 
   // which way you're looking, for the queue order
   const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => { panos.add(p); if (active?.noZoom) lockZoom(p); });
+  ggs.maps.hook('StreetViewPanorama', p => {
+    panos.add(p);
+    if (active?.noZoom) lockZoom(p);
+    try { p.addListener('pano_changed', pruneQueue); } catch {}
+  });
 
   // "Disable zoom": the wheel and zoom buttons are switched off on every panorama and any zoom
   // that still gets through (GeoGuessr's own buttons and keys call setZoom) is put straight back
@@ -2690,7 +2713,7 @@ section.off .opts { display: none; }
   const ggs = globalThis.__ggs;
   ggs.registry.push({
     id: 'minecraft',
-    name: 'Minecraft world (experimental)',
+    name: 'Minecraft world',
     description: 'The round is redrawn in Minecraft.',
     defaultEnabled: false,
     options: [
@@ -2710,6 +2733,9 @@ section.off .opts { display: none; }
 // Nothing but that id, the size, a random per-install client id and the optional code
 // leaves the page. Until the picture is back, tiles go up black; then every tile is
 // swapped for the matching crop, so looking around and zooming never generate again.
+// Generation waits until the panorama has stayed still for a moment, so walking through
+// several positions only redraws the one you stop at; the ones passed through get their
+// real tiles back.
 (() => {
   const ggs = globalThis.__ggs;
   const SERVER = 'https://oggs.orlandopb.com/minecraft.php'; // holds the prompt, models and daily limits
@@ -2750,6 +2776,38 @@ section.off .opts { display: none; }
 
   const gens = new Map(); // `${panoId}/${mode}` -> { promise, image, pending: [uploads waiting], error }
   let active = null, overlay = null; // active: the cfg while the script is on
+  const panos = new Set();
+  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
+  function shownPano() {
+    for (const p of panos) { try { const id = p.getPano(); if (id) return id; } catch {} }
+    return null;
+  }
+
+  // Tiles of a panorama that has no generation yet wait here (black on screen) until the
+  // view has stayed on one panorama for SETTLE ms; then that panorama is generated and the
+  // others get their real tiles back.
+  const SETTLE = 800;
+  const waitingPanos = new Map(); // panoId -> [{ rec, img, tw, th }]
+  let settleTimer = null, latestPano = null;
+  function waitFor(id, entry) {
+    if (!waitingPanos.has(id)) waitingPanos.set(id, []);
+    waitingPanos.get(id).push(entry);
+    if (id !== latestPano || !settleTimer) { latestPano = id; clearTimeout(settleTimer); settleTimer = setTimeout(settled, SETTLE); }
+  }
+  function settled() {
+    settleTimer = null;
+    const id = shownPano() ?? latestPano;
+    for (const [pid, entries] of [...waitingPanos]) {
+      waitingPanos.delete(pid);
+      if (pid === id && active) {
+        const g = generation(pid);
+        g.pending.push(...entries);
+        if (g.image || g.error) flush(g);
+      } else {
+        for (const { rec, img } of entries) { try { ggs.tiles.upload(rec, img); } catch {} }
+      }
+    }
+  }
 
   // ---- daily limits ----
   // The server counts per client id. A copy of its log ({ normal: [ms], hq: [ms] }, rolling
@@ -2807,7 +2865,7 @@ section.off .opts { display: none; }
     (log[mode] ??= []).push(t0); // counted when it starts; the server's log replaces it once it answers
     saveLog();
     g.promise = (async () => {
-      progressStart(eta[mode] ?? ETA_DEFAULT[mode]);
+      progressStart(eta[mode] ?? ETA_DEFAULT[mode], key);
       const m = await panoMeta(id);
       const r = await server({ pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode }, true);
       if (r.log) saveLog(r.log);
@@ -2821,11 +2879,11 @@ section.off .opts { display: none; }
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       eta[mode] = Math.round((Date.now() - t0) / 1000 * 0.7 + (eta[mode] ?? (Date.now() - t0) / 1000) * 0.3);
       ggs.store.set('ggs-minecraft-eta', eta);
-      progressDone();
+      progressDone(false, undefined, key);
     })().catch(err => {
       g.error = err;
       ggs.log('minecraft: generation failed', err);
-      progressDone(true);
+      progressDone(true, undefined, key);
       flush(g).then(() => ggs.tiles.repaint(id)); // put the real tiles back
     });
     return g;
@@ -2857,8 +2915,9 @@ section.off .opts { display: none; }
       }
       return img;
     }
-    const g = generation(id);
     const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
+    const g = gens.get(`${id}/${mode}`);
+    if (!g) { waitFor(id, { rec, img, tw, th }); return blank(tw, th); }
     const m = metaSync.get(id);
     if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
     if (g.error) return img;
@@ -2901,9 +2960,12 @@ section.off .opts { display: none; }
     .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
     .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19; transition: width .1s linear, background .3s; }
   `;
-  let progressTimer = null;
-  function progressStart(seconds) {
+  // The bar belongs to the latest generation started (`owner`); an older one finishing
+  // or failing later leaves it alone.
+  let progressTimer = null, owner = null;
+  function progressStart(seconds, key) {
     if (!overlay) return;
+    owner = key;
     clearInterval(progressTimer);
     const fill = overlay.fill, t0 = Date.now();
     overlay.text.textContent = 'Loading round…';
@@ -2916,8 +2978,9 @@ section.off .opts { display: none; }
       fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
     }, 100);
   }
-  function progressDone(failed, message) {
-    if (!overlay) return;
+  function progressDone(failed, message, key) {
+    if (!overlay || (key && key !== owner)) return;
+    owner = null;
     clearInterval(progressTimer);
     overlay.fill.style.width = '100%';
     if (failed) { overlay.fill.style.background = '#e03131'; overlay.text.textContent = message ?? 'Could not redraw this round'; }
@@ -2941,7 +3004,7 @@ section.off .opts { display: none; }
     overlay = { host, text: root.querySelector('.text'), bar: root.querySelector('.bar'), fill: root.querySelector('.fill') };
     loadQuota().finally(() => ggs.tiles.replay());
     return {
-      stop() { active = null; clearInterval(progressTimer); host.remove(); overlay = null; ggs.tiles.replay(); },
+      stop() { active = null; clearTimeout(settleTimer); settleTimer = null; waitingPanos.clear(); clearInterval(progressTimer); host.remove(); overlay = null; ggs.tiles.replay(); },
       update(c) {
         const codeChanged = c.code !== active?.code, hqChanged = !!c.hq !== !!active?.hq;
         active = c;

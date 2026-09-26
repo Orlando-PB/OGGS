@@ -22,7 +22,10 @@
     filters.push({ fn, order });
     filters.sort((a, b) => a.order - b.order);
   }
-  const live = rec => !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
+  // A record is live while its texture exists and nothing newer has gone into the same
+  // slot; a record replaced by a later upload is marked stale so a filter finishing late
+  // can't write an old tile over the one now on screen.
+  const live = rec => !rec.stale && !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
 
   function makeRecord(gl, name, args, img) {
     const url = img.currentSrc || img.src;
@@ -41,7 +44,7 @@
     const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
       && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
-    if (i >= 0) records.splice(i, 1);
+    if (i >= 0) records.splice(i, 1)[0].stale = true;
     records.push(rec);
     if (records.length > MAX) records.splice(0, records.length - MAX);
   }
@@ -134,6 +137,7 @@
       scheduled = null;
       const old = records.filter(live);
       records.length = 0;
+      for (const r of old) r.stale = true;      // the copies made below take their place
       let n = 0;
       await Promise.all(old.map(async r => {
         const img = new Image();
@@ -142,7 +146,7 @@
         img.src = r.url;
         try { await img.decode(); } catch { return; }
         try {
-          const rec = { ...r, img };
+          const rec = { ...r, img, stale: false };
           if (upload(rec, handle(rec))) n++;
         } catch (err) { ggs.log('tiles: replay failed', err); }
       }));

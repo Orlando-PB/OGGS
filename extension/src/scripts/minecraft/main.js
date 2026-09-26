@@ -7,6 +7,9 @@
 // Nothing but that id, the size, a random per-install client id and the optional code
 // leaves the page. Until the picture is back, tiles go up black; then every tile is
 // swapped for the matching crop, so looking around and zooming never generate again.
+// Generation waits until the panorama has stayed still for a moment, so walking through
+// several positions only redraws the one you stop at; the ones passed through get their
+// real tiles back.
 (() => {
   const ggs = globalThis.__ggs;
   const SERVER = 'https://oggs.orlandopb.com/minecraft.php'; // holds the prompt, models and daily limits
@@ -47,6 +50,38 @@
 
   const gens = new Map(); // `${panoId}/${mode}` -> { promise, image, pending: [uploads waiting], error }
   let active = null, overlay = null; // active: the cfg while the script is on
+  const panos = new Set();
+  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
+  function shownPano() {
+    for (const p of panos) { try { const id = p.getPano(); if (id) return id; } catch {} }
+    return null;
+  }
+
+  // Tiles of a panorama that has no generation yet wait here (black on screen) until the
+  // view has stayed on one panorama for SETTLE ms; then that panorama is generated and the
+  // others get their real tiles back.
+  const SETTLE = 800;
+  const waitingPanos = new Map(); // panoId -> [{ rec, img, tw, th }]
+  let settleTimer = null, latestPano = null;
+  function waitFor(id, entry) {
+    if (!waitingPanos.has(id)) waitingPanos.set(id, []);
+    waitingPanos.get(id).push(entry);
+    if (id !== latestPano || !settleTimer) { latestPano = id; clearTimeout(settleTimer); settleTimer = setTimeout(settled, SETTLE); }
+  }
+  function settled() {
+    settleTimer = null;
+    const id = shownPano() ?? latestPano;
+    for (const [pid, entries] of [...waitingPanos]) {
+      waitingPanos.delete(pid);
+      if (pid === id && active) {
+        const g = generation(pid);
+        g.pending.push(...entries);
+        if (g.image || g.error) flush(g);
+      } else {
+        for (const { rec, img } of entries) { try { ggs.tiles.upload(rec, img); } catch {} }
+      }
+    }
+  }
 
   // ---- daily limits ----
   // The server counts per client id. A copy of its log ({ normal: [ms], hq: [ms] }, rolling
@@ -104,7 +139,7 @@
     (log[mode] ??= []).push(t0); // counted when it starts; the server's log replaces it once it answers
     saveLog();
     g.promise = (async () => {
-      progressStart(eta[mode] ?? ETA_DEFAULT[mode]);
+      progressStart(eta[mode] ?? ETA_DEFAULT[mode], key);
       const m = await panoMeta(id);
       const r = await server({ pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode }, true);
       if (r.log) saveLog(r.log);
@@ -118,11 +153,11 @@
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       eta[mode] = Math.round((Date.now() - t0) / 1000 * 0.7 + (eta[mode] ?? (Date.now() - t0) / 1000) * 0.3);
       ggs.store.set('ggs-minecraft-eta', eta);
-      progressDone();
+      progressDone(false, undefined, key);
     })().catch(err => {
       g.error = err;
       ggs.log('minecraft: generation failed', err);
-      progressDone(true);
+      progressDone(true, undefined, key);
       flush(g).then(() => ggs.tiles.repaint(id)); // put the real tiles back
     });
     return g;
@@ -154,8 +189,9 @@
       }
       return img;
     }
-    const g = generation(id);
     const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
+    const g = gens.get(`${id}/${mode}`);
+    if (!g) { waitFor(id, { rec, img, tw, th }); return blank(tw, th); }
     const m = metaSync.get(id);
     if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
     if (g.error) return img;
@@ -198,9 +234,12 @@
     .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
     .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19; transition: width .1s linear, background .3s; }
   `;
-  let progressTimer = null;
-  function progressStart(seconds) {
+  // The bar belongs to the latest generation started (`owner`); an older one finishing
+  // or failing later leaves it alone.
+  let progressTimer = null, owner = null;
+  function progressStart(seconds, key) {
     if (!overlay) return;
+    owner = key;
     clearInterval(progressTimer);
     const fill = overlay.fill, t0 = Date.now();
     overlay.text.textContent = 'Loading round…';
@@ -213,8 +252,9 @@
       fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
     }, 100);
   }
-  function progressDone(failed, message) {
-    if (!overlay) return;
+  function progressDone(failed, message, key) {
+    if (!overlay || (key && key !== owner)) return;
+    owner = null;
     clearInterval(progressTimer);
     overlay.fill.style.width = '100%';
     if (failed) { overlay.fill.style.background = '#e03131'; overlay.text.textContent = message ?? 'Could not redraw this round'; }
@@ -238,7 +278,7 @@
     overlay = { host, text: root.querySelector('.text'), bar: root.querySelector('.bar'), fill: root.querySelector('.fill') };
     loadQuota().finally(() => ggs.tiles.replay());
     return {
-      stop() { active = null; clearInterval(progressTimer); host.remove(); overlay = null; ggs.tiles.replay(); },
+      stop() { active = null; clearTimeout(settleTimer); settleTimer = null; waitingPanos.clear(); clearInterval(progressTimer); host.remove(); overlay = null; ggs.tiles.replay(); },
       update(c) {
         const codeChanged = c.code !== active?.code, hqChanged = !!c.hq !== !!active?.hq;
         active = c;

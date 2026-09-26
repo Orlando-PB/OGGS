@@ -1,7 +1,7 @@
 (() => {
   globalThis.__ggs.registry.push({
     id: 'lying-signs',
-    name: 'Lying signs (experimental)',
+    name: 'Lying signs',
     description: 'Rewrites the text on signs.',
     defaultEnabled: false,
     options: [

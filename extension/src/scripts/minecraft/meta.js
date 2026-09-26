@@ -2,7 +2,7 @@
   const ggs = globalThis.__ggs;
   ggs.registry.push({
     id: 'minecraft',
-    name: 'Minecraft world (experimental)',
+    name: 'Minecraft world',
     description: 'The round is redrawn in Minecraft.',
     defaultEnabled: false,
     options: [

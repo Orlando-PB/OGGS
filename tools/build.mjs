@@ -18,6 +18,8 @@ mkdirSync(out, { recursive: true });
 
 // ---- userscript ----
 const SERVER = "https://oggs.orlandopb.com/";
+// Install/update address: the file in the repo, like other GeoGuessr userscripts (works once the repo is public).
+const RAW = "https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js";
 const pageScripts = manifest.content_scripts.find(c => c.world === "MAIN").js;
 const banner = f => `\n// ${"=".repeat(20)} ${f} ${"=".repeat(Math.max(3, 60 - f.length))}\n`;
 const file = f => readFileSync(join(src, f), "utf8").trimEnd() + "\n";
@@ -35,8 +37,8 @@ const userscript = `// ==UserScript==
 // @run-at       document-start
 // @grant        none
 // @noframes
-// @updateURL    ${SERVER}oggs.user.js
-// @downloadURL  ${SERVER}oggs.user.js
+// @updateURL    ${RAW}
+// @downloadURL  ${RAW}
 // ==/UserScript==
 
 // Built by tools/build.mjs from extension/ in https://github.com/Orlando-PB/OGGS: don't edit

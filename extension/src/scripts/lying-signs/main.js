@@ -163,14 +163,29 @@
     workerReady.catch(err => { ggs.log('lying-signs: text detector failed to load', err); workerReady = null; });
     return workerReady;
   }
-  // Detection queue: the tile nearest to where you're looking first; a queued tile whose
-  // textures are gone (pano changed) is dropped unrun.
+  // Detection queue: the tile nearest to where you're looking first. A queued tile whose
+  // textures are gone or overwritten (pano changed) is dropped unrun, tiles of panoramas
+  // no longer shown are dropped as soon as the panorama moves on, and the queue is capped
+  // so moving quickly never builds a backlog (a dropped tile is detected again if it is
+  // uploaded again).
   const queue = [];                           // [{ img, cfg, res, alive, url }]
   let inflight = 0;
-  const MAX_INFLIGHT = 2;
+  const MAX_INFLIGHT = 2, MAX_QUEUE = 300;
   ggs.lyingSigns.debug = () => ({ queue: queue.length, inflight, waiting: waiting.size, tiles: tiles.size });
   function detect(img, cfg, alive, url) {
-    return new Promise(res => { queue.push({ img, cfg, res, alive, url }); pump(); });
+    return new Promise(res => {
+      queue.push({ img, cfg, res, alive, url });
+      while (queue.length > MAX_QUEUE) { stats.skipped = (stats.skipped || 0) + 1; queue.shift().res(null); }
+      pump();
+    });
+  }
+  function pruneQueue() {
+    const shown = new Set();
+    for (const p of panos) { try { shown.add(p.getPano()); } catch {} }
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const id = ggs.tileKey(queue[i].url)?.pano;
+      if (id && !shown.has(id)) { stats.skipped = (stats.skipped || 0) + 1; queue.splice(i, 1)[0].res(null); }
+    }
   }
   function tileDistance(url) {
     const k = ggs.tileKey(url);
@@ -539,7 +554,11 @@
 
   // which way you're looking, for the queue order
   const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => { panos.add(p); if (active?.noZoom) lockZoom(p); });
+  ggs.maps.hook('StreetViewPanorama', p => {
+    panos.add(p);
+    if (active?.noZoom) lockZoom(p);
+    try { p.addListener('pano_changed', pruneQueue); } catch {}
+  });
 
   // "Disable zoom": the wheel and zoom buttons are switched off on every panorama and any zoom
   // that still gets through (GeoGuessr's own buttons and keys call setZoom) is put straight back
