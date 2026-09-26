@@ -559,6 +559,7 @@ section.off .opts { display: none; }
 
     const head = root.querySelector('.head');
     head.addEventListener('pointerdown', e => {
+      if (e.target.closest('button')) return;  // a button in the header (close) gets the click, not a drag
       const r = host.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
       head.setPointerCapture(e.pointerId);
       const move = ev => place(ev.clientX - dx, ev.clientY - dy);
