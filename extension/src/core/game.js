@@ -1,6 +1,5 @@
-// Which game is open and which map it's being played on. Best effort: each mode has
-// its own endpoint and response shape. First step towards auto-picking a country
-// pool from the map (e.g. a Europe map only suggests European countries).
+// Which game is open, on which map, and whether it's competitive. Reads geoguessr.com's
+// own game API with the player's session; nothing is sent anywhere else.
 (() => {
   const ggs = globalThis.__ggs;
 
@@ -18,31 +17,29 @@
     }
     return null;
   }
+  const fetchGame = async ctx => {
+    const r = await fetch(ctx.api, { credentials: 'include' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  };
 
-  // Standard games have { map: "<id>", mapName }, challenges { map: { name, ... } },
-  // duels { options: { map: { name, slug } } }.
+  // Standard games have { map: "<id>", mapName }, challenges { map: { name } }, duels { options: { map } }.
   function pickMap(j) {
     const m = j?.options?.map ?? j?.map;
     if (typeof m === 'string') return { id: m, name: j.mapName ?? m };
     if (m && typeof m === 'object') return { id: m.slug ?? m.id ?? m.mapId ?? null, name: m.name ?? j.mapName ?? null };
     return j?.mapName ? { id: null, name: j.mapName } : null;
   }
-
-  const cache = new Map(); // token -> Promise<{id, name} | null>
+  const mapCache = new Map(); // token -> Promise<{ id, name } | null>
   function mapInfo() {
     const ctx = context();
     if (!ctx) return Promise.resolve(null);
-    if (!cache.has(ctx.token)) {
-      cache.set(ctx.token, fetch(ctx.api, { credentials: 'include' })
-        .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then(pickMap));
-    }
-    return cache.get(ctx.token);
+    if (!mapCache.has(ctx.token)) mapCache.set(ctx.token, fetchGame(ctx).then(pickMap));
+    return mapCache.get(ctx.token);
   }
 
-  // Identifies the current round: game token + how often the guess map has appeared in
-  // this game. GeoGuessr's HUD markup changes (its round counter went in 2026), so the
-  // page isn't read for this at all.
+  // The current round is the game token plus how many times the guess map has appeared
+  // (GeoGuessr's round counter markup keeps changing, so the page isn't read).
   let entries = 0, entryToken = null, hadMap = false;
   setInterval(() => {
     const token = context()?.token ?? null, hasMap = !!ggs.maps.guessMapElement();
@@ -52,43 +49,35 @@
   }, 200);
   const roundKey = () => `${context()?.token}|${entries}`;
 
-  // The current round (standard games only): { n, total, lat, lng }. Scripts may use the
-  // location for gameplay (draw-guess's nudge, radio's station pick) but must never show,
-  // log or place it before the player has guessed.
+  // Standard games only: { n, total, lat, lng }. Scripts may use the location for
+  // gameplay (draw-guess's nudge, radio's station pick) but never show it before the guess.
   async function round() {
     const ctx = context();
     if (ctx?.mode !== 'standard') return null;
-    const r = await fetch(ctx.api, { credentials: 'include' });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const n = j.round ?? j.rounds?.length, cur = j?.rounds?.[n - 1];
+    const j = await fetchGame(ctx).catch(() => null);
+    const n = j?.round ?? j?.rounds?.length, cur = j?.rounds?.[n - 1];
     if (!(n > 0)) return null;
     return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
   }
   const roundLocation = () => round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
 
-  // Whether the game is over (standard games only): { finished, round, roundCount }.
   async function state() {
     const ctx = context();
     if (ctx?.mode !== 'standard') return null;
-    const r = await fetch(ctx.api, { credentials: 'include' });
-    if (!r.ok) return null;
-    const j = await r.json();
+    const j = await fetchGame(ctx).catch(() => null);
+    if (!j) return null;
     const finished = j.state === 'finished' || (j.roundCount > 0 && j.player?.guesses?.length >= j.roundCount);
     return { finished, round: j.round, roundCount: j.roundCount };
   }
 
   // ---- competitive guard ----
-  // Ranked/competitive games must never run scripts; friendly party games may. Party and
-  // ranked duels share /duels/<id> URLs, so two signals decide:
-  //   - the lobby you came through: /party or /join (friendly) vs matchmaking pages, and
-  //   - party/rated fields in the game-server response, where present.
+  // Party and ranked duels share /duels/<id> URLs, so two signals decide: the lobby you came
+  // through (/party or /join vs matchmaking pages) and party/rated fields in the game data.
   // Anything not clearly friendly counts as competitive.
   const COMPETITIVE_PAGES = /^\/(multiplayer|competitive|ranked|quick-play|matchmaking)(\/|$)/;
   const PARTY_PAGES = /^\/(party|join)(\/|$)/;
   const LOBBY_KEY = 'ggs-lobby';
 
-  // Called on every navigation, so we know which lobby led into the next game.
   function noteLobby(path = location.pathname) {
     const lobby = PARTY_PAGES.test(path) ? 'party' : COMPETITIVE_PAGES.test(path) ? 'competitive' : null;
     if (lobby) try { sessionStorage.setItem(LOBBY_KEY, lobby); } catch {}
@@ -105,11 +94,7 @@
     if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, (async () => {
       let lobby = null;
       try { lobby = sessionStorage.getItem(LOBBY_KEY); } catch {}
-      let j = null;
-      try {
-        const r = await fetch(ctx.api, { credentials: 'include' });
-        if (r.ok) j = await r.json();
-      } catch {}
+      const j = await fetchGame(ctx).catch(() => null);
       const o = j?.options ?? {};
       const rated = [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked].some(v => v === true)
         || [j?.gameContext?.type, o.gameContext?.type].some(t => /rank|competitive|matchmak/i.test(t ?? ''));

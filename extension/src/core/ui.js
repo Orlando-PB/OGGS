@@ -1,5 +1,5 @@
-// Floating, draggable panel inside a shadow root, so GeoGuessr's CSS can't reach it
-// (and ours can't leak out). Position is remembered per panel.
+// Floating, draggable panel in a shadow root (GeoGuessr's CSS can't reach it). Its
+// position is remembered per panel id.
 (() => {
   const ggs = globalThis.__ggs;
 
@@ -33,11 +33,8 @@
       host.style.left = `${Math.max(0, Math.min(x, innerWidth - host.offsetWidth))}px`;
       host.style.top = `${Math.max(0, Math.min(y, innerHeight - 30))}px`;
     };
-    place(pos.x, pos.y);
-    try {
-      const saved = JSON.parse(localStorage.getItem(posKey));
-      if (saved) place(saved.x, saved.y);
-    } catch {}
+    const saved = ggs.store.get(posKey, pos);
+    place(saved.x, saved.y);
 
     const head = root.querySelector('.head');
     head.addEventListener('pointerdown', e => {
@@ -47,10 +44,8 @@
       const up = () => {
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
-        try {
-          const b = host.getBoundingClientRect();
-          localStorage.setItem(posKey, JSON.stringify({ x: b.left, y: b.top }));
-        } catch {}
+        const b = host.getBoundingClientRect();
+        ggs.store.set(posKey, { x: b.left, y: b.top });
       };
       head.addEventListener('pointermove', move);
       head.addEventListener('pointerup', up);
@@ -62,8 +57,7 @@
       $: sel => root.querySelector(sel),
       show(visible) { host.hidden = !visible; },
       front,
-      // pull the panel back on screen (e.g. after it grew)
-      clamp() {
+      clamp() { // pull the panel back on screen (e.g. after it grew)
         const r = host.getBoundingClientRect();
         place(r.left, Math.min(r.top, innerHeight - host.offsetHeight - 8));
       },

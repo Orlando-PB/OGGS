@@ -9,6 +9,7 @@
       { key: 'script', label: 'Script to write in', type: 'select', default: 0,
         choices: ['Random', 'Thai', 'Georgian', 'Korean', 'Arabic', 'Cyrillic', 'Greek', 'Hebrew', 'Japanese', 'Hindi', 'Armenian',
           'English (wrong words)', 'German', 'Spanish', 'French', 'Minecraft'].map((label, value) => ({ value, label })) },
+      { key: 'noZoom', label: 'Disable zoom', type: 'checkbox', default: false },
     ],
   });
 })();

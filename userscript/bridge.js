@@ -1,8 +1,7 @@
-// Userscript stand-in for the extension's bridge.js and popup. Settings live in this
-// site's localStorage and reach the scripts through the same postMessage the extension
-// uses, so every file after this one is identical to the extension's. The board and the
-// text detector, which the extension carries as files, are loaded from BASE instead.
-// Alt+O (or the OGGS tab, bottom left) opens the settings panel.
+// Userscript only: stands in for the extension's bridge.js and popup. Settings live in
+// this site's localStorage ("ggs-settings") and reach the scripts through the same
+// postMessage the extension uses. The board and the text detector are loaded from BASE.
+// Alt+O, or the OGGS tab bottom left, opens the settings panel.
 (() => {
   const ggs = (globalThis.__ggs ??= {});
   const BASE = 'https://oggs.orlandopb.com/';
@@ -12,7 +11,6 @@
   const send = () => window.postMessage({ ggs: 'settings', settings, base: BASE }, location.origin);
   window.addEventListener('message', e => { if (e.source === window && e.data?.ggs === 'hello') send(); });
 
-  // ---- settings panel ----
   const CSS = `__POPUP_CSS__`;
   let panel = null, form = null;
   function open() {
@@ -33,7 +31,6 @@
     panel.clamp();
   }
 
-  // The tab and the hotkey wait for the page body and ggs.ui (core/ui.js runs after this file).
   const ready = () => {
     ggs.hotkey(e => e.altKey && e.code === 'KeyO', open);
     const tab = document.createElement('button');

@@ -2,8 +2,8 @@
 //   userscript/oggs.user.js              the Tampermonkey/Violentmonkey version: the same page
 //                                        scripts the extension runs, concatenated, behind
 //                                        userscript/bridge.js in place of bridge.js + popup
-//   store/vX.Y.Z/oggs-X.Y.Z-chrome.zip   Chrome Web Store and Edge Add-ons (same file)
-//   store/vX.Y.Z/oggs-X.Y.Z-firefox.zip  Firefox Add-ons (manifest gets Firefox's extra keys)
+//   dev/store/vX.Y.Z/oggs-X.Y.Z-chrome.zip   Chrome Web Store and Edge Add-ons (same file)
+//   dev/store/vX.Y.Z/oggs-X.Y.Z-firefox.zip  Firefox Add-ons (manifest gets Firefox's extra keys)
 // Usage: node tools/build.mjs
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const src = join(root, "extension");
 const manifest = JSON.parse(readFileSync(join(src, "manifest.json"), "utf8"));
-const out = join(root, "store", `v${manifest.version}`);
+const out = join(root, "dev", "store", `v${manifest.version}`);
 mkdirSync(out, { recursive: true });
 
 // ---- userscript ----

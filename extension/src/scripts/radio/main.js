@@ -1,25 +1,21 @@
 // Radio mode: Street View is hidden and a live station from near the round's location
-// plays instead (Radio Browser, radio-browser.info). Nothing about the station shows
-// until the round's guess is in; then the result screen reveals it, and once the game is
-// over it lists every round's station so you can go back to one.
+// plays instead (Radio Browser, radio-browser.info: the round's coordinates go there to
+// find stations, the audio streams from each station's own server). Nothing about the
+// station shows until the guess is in.
 (() => {
   const ggs = globalThis.__ggs;
 
   const API = 'https://de1.api.radio-browser.info/json/stations/search';
   const RADII_KM = [50, 250, 1000, 3000]; // widen until there are a few stations
-  // Street View container. Hashed CSS-module class names, so match on the prefix.
   const PANO_SELECTORS = ['[class*="game_panorama"]', '[data-qa="panorama"]'];
   const HIDE_PANO_CSS = `
     ${PANO_SELECTORS.join(', ')}, .widget-scene-canvas { visibility: hidden !important; }
     body { background: #0d0a2a !important; }`;
 
-  // Stream networks that insert ads (often a pre-roll before the station). The ad is inside
-  // the audio itself, so it can't be detected; these stations are tried last instead.
-  // AdsWizz shows up as aw_0_* query parameters on the stream URL.
+  // Stream networks that insert ads into the audio itself; tried last.
   const AD_STREAMS = /zeno\.fm|zenomedia|adswizz|streamtheworld\.com|tritondigital|[?&]aw_0_/i;
 
-  // Streamer mode: only talk stations (news, talk, sport...), going by Radio Browser's tags.
-  // Music is what Content ID claims, so this lowers the risk; jingles and the odd song remain.
+  // Streamer mode: talk stations only, by Radio Browser's tags.
   const TALK_TAGS = /\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|informa|notizie|public radio|comedy|debate|politics)/i;
   const MUSIC_TAGS = /\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|soul|funk|blues|folk|indie|christian|gospel)\b/i;
   const isTalk = s => TALK_TAGS.test(s.tags) && !MUSIC_TAGS.test(s.tags);
@@ -28,10 +24,8 @@
   const STALL_MS = 8000; // ...and so is one that has been buffering this long
 
   // ---- silence GeoGuessr's own music and sounds while radio mode is on ----
-  // Installed at document_start whether or not radio mode is on, before GeoGuessr's
-  // scripts, so every AudioContext and media element it makes is seen and switching the
-  // mode on later needs no refresh. Web Audio contexts are suspended (and kept
-  // suspended); <audio>/<video> elements other than ours are muted.
+  // Wrapped at document_start so every AudioContext and media element the page makes is
+  // seen: contexts are suspended and other <audio>/<video> elements muted while `muting`.
   const RealAudioContext = window.AudioContext;
   const contexts = new Set(), ours = new WeakSet();
   let muting = false;
@@ -66,7 +60,7 @@
     const q = new URLSearchParams({ is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params });
     const r = await fetch(`${API}?${q}`);
     if (!r.ok) return [];
-    // http streams are blocked on an https page; HLS needs a library Chrome doesn't have built in
+    // http streams are blocked on an https page; HLS needs a library
     return (await r.json()).filter(s => s.url_resolved?.startsWith('https://') && !s.hls);
   }
   const near = (lat, lng, dist, limit) => search({ geo_lat: lat, geo_long: lng, geo_distance: dist * 1000, limit });
@@ -79,9 +73,7 @@
         if (list.length >= 3) break;
       }
     } else {
-      // Talk stations are sparser, so the round's country (that of the nearest station) comes
-      // first: its talk stations near the spot, then the rest of it, then nearby ones across
-      // the border, then wider.
+      // Talk stations are sparser: the round's country first, then nearby, then wider.
       const close = await near(lat, lng, 250, 300);
       const pool = close.length ? close : await near(lat, lng, 1000, 300);
       const dist = s => km({ lat, lng }, { lat: s.geo_lat, lng: s.geo_long });
@@ -110,18 +102,14 @@
     const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
     return Math.round(12742 * Math.asin(Math.sqrt(h)));
   };
-  const esc = v => String(v ?? '').replace(/[&<>"]/g, ch => `&#${ch.charCodeAt(0)};`);
+  const esc = ggs.esc;
   const describe = (s, loc) => {
     const where = [s.state, s.country].filter(Boolean).join(', ');
     const dist = s.geo_lat != null && loc ? ` · ${km(loc, { lat: s.geo_lat, lng: s.geo_long })} km from the spot` : '';
     return where + dist;
   };
 
-  // ---- the player ----
-  // Two layouts. "stage": Street View is hidden, so the player takes its place, inside
-  // GeoGuessr's own layout (right after the panorama element), with GeoGuessr's HUD and
-  // guess map still on top. "mini": a small bar in the top-left, used when Street View is
-  // shown and on the result screens (where it also lists the game's stations).
+  // ---- the player: "stage" in Street View's place, or a "mini" bar top-left ----
   const ICON = {
     play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
     pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
@@ -187,24 +175,17 @@
     .hist .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .hist .where { font-size: 11px; color: rgba(255, 255, 255, .55); }`;
 
-  // ---- the visual ----
-  // A fluid shape that is always mid-blend from one random country outline to the next, so
-  // it only now and then settles near a real country (and never the round's). Its border
-  // ripples with the volume, so talk works as well as music, and faint echoes spread out
-  // behind it. While a station is loading it melts into a breathing circle with orbiting dots,
-  // and it briefly turns into a play, pause or skip sign when those happen.
+  // ---- the visual: a shape always blending between random country outlines (never the
+  // round's), rippling with the volume; a circle while loading, an icon on play/pause/skip ----
   const MORPH_MS = 3000;
-  const SPIN_STEP = (Math.PI * 3) / 8; // how far it turns during each blend (67.5°)
-  // Icons as outlines in the same format: -1..1, clockwise, starting top-left. Two-part icons
-  // (pause, skip) use each half of the points for one part.
+  const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
   const ICON_POLYS = {
     play: [[[-0.4, -0.55], [0.55, 0], [-0.4, 0.55]]],
     pause: [[[-0.45, -0.55], [-0.13, -0.55], [-0.13, 0.55], [-0.45, 0.55]], [[0.13, -0.55], [0.45, -0.55], [0.45, 0.55], [0.13, 0.55]]],
     skip: [[[-0.55, -0.5], [0.2, 0], [-0.55, 0.5]], [[0.25, -0.5], [0.5, -0.5], [0.5, 0.5], [0.25, 0.5]]],
     back: [[[-0.5, -0.5], [-0.25, -0.5], [-0.25, 0.5], [-0.5, 0.5]], [[0.55, -0.5], [0.55, 0.5], [-0.2, 0]]],
   };
-  // Round a polygon's corners to radius r (a curve across each corner), so icons blend
-  // smoothly with the outlines but keep their shape.
+  // rounds a polygon's corners
   function soften(poly, r = 0.06) {
     const out = [];
     poly.forEach((p, i) => {
@@ -234,7 +215,7 @@
   }
   function blob(canvas) {
     const g = canvas.getContext('2d');
-    const all = (ggs.radioShapes ?? []).map(a => Float32Array.from(a, v => v / 1000));
+    const all = (ggs.radioShapes ?? []).map(a => Float32Array.from(a, v => v / 100));
     const n = all[0]?.length ?? 0, K = n / 2;
     const circle = new Float32Array(n); // same start (top) and winding as the outlines
     for (let i = 0; i < K; i++) {
@@ -255,8 +236,6 @@
     };
     let from = pick(), to = pick(from), since = performance.now(), load = 1, level = 0;
 
-    // A closed, smooth path through the points (curves through the midpoints), in `parts`
-    // separate loops (for two-part icons).
     function trace(p, c, s, parts = 1) {
       g.beginPath();
       const per = K / parts;
@@ -270,22 +249,20 @@
         g.closePath();
       }
     }
-    // Outward unit normal at point i, from neighbours a few points away so small kinks don't flip it.
+    // outward normal at point i
     let nx = 0, ny = 0;
     function normal(p, i) {
       const a = ((i + K - 2) % K) * 2, b = ((i + 2) % K) * 2;
       const tx = p[b] - p[a], ty = p[b + 1] - p[a + 1], len = Math.hypot(tx, ty) || 1;
       nx = ty / len; ny = -tx / len;
     }
-    // A wave travelling round the border, -1..1.
     const wave = (i, t, ph) => {
       const th = (i / K) * Math.PI * 2;
       return Math.sin(3 * th + t * 1.3 + ph) * 0.5 + Math.sin(7 * th - t * 2.1 + ph) * 0.3
            + Math.sin(13 * th + t * 3.4 + ph * 2) * 0.2;
     };
 
-    // vol: 0..1 loudness right now; loading: finding or connecting to a station;
-    // hold: an icon to show for as long as it's passed (pause while paused)
+    // vol: 0..1 loudness; loading: finding/connecting; hold: an icon to keep showing
     function draw(now, { vol, loading, hold }) {
       const dpr = devicePixelRatio || 1, cw = canvas.clientWidth || 1, W = Math.round(cw * dpr);
       if (canvas.width !== W || canvas.height !== W) canvas.width = canvas.height = W;
@@ -298,9 +275,7 @@
       const m = p * p * (3 - 2 * p);
       load += ((loading ? 1 : 0) - load) * 0.05;
       level += (vol - level) * (vol > level ? 0.35 : 0.07);
-      // Always slowly spinning, at a steady SPIN_STEP per blend, and timed so each outline is
-      // exactly north up at the moment the blend reaches it: the current one turns away from
-      // upright as the next comes in from SPIN_STEP behind.
+      // slowly spinning, timed so each outline is north up when the blend reaches it
       const a0 = SPIN_STEP * p, a1 = SPIN_STEP * (p - 1);
       const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
       for (let i = 0; i < n; i += 2) {
@@ -310,8 +285,7 @@
         base[i] = x + (circle[i] - x) * load;
         base[i + 1] = y + (circle[i + 1] - y) * load;
       }
-      // icons: the one on show eases into the next (pause -> play), and the shape eases into
-      // and back out of it, so nothing snaps
+      // icons ease in and out
       const want = hold ?? (now < flashUntil ? flashName : null), target = icons[want];
       if (target) {
         if (iconMix < 0.01) iconCur.set(base); // start from the shape as it is
@@ -328,7 +302,6 @@
       const s = W * 0.34 * (1 + (level * 0.07 + load * 0.035 * breathe) * plain);
       const amp = (0.015 + level * 0.14 + load * 0.035 * (0.7 + 0.3 * breathe)) * plain;
 
-      // the shape: border pushed in and out along its normal
       for (let i = 0; i < K; i++) {
         normal(base, i);
         const d = amp * wave(i, t, 0);
@@ -336,7 +309,7 @@
         shape[2 * i + 1] = base[2 * i + 1] + ny * d;
       }
 
-      // echoes: always pushed outward from the shape, so they never cut inside it
+      // echoes, pushed outward
       g.lineJoin = 'round';
       for (const [k, alpha] of [[1, 0.14], [2, 0.07]]) {
         for (let i = 0; i < K; i++) {
@@ -364,7 +337,6 @@
       g.stroke();
       g.shadowBlur = 0;
 
-      // loading: dots orbiting the circle
       if (load * plain > 0.02) {
         for (let i = 0; i < 3; i++) {
           const a = t * 2.4 + (i * Math.PI * 2) / 3;
@@ -375,39 +347,29 @@
         }
       }
     }
-    // show an icon for a moment
     draw.flash = (name, ms) => { flashName = name; flashUntil = performance.now() + ms; };
     return draw;
   }
 
   // ---- streamer mode: skip music ----
-  // Music (drums, bass lines) puts a lot of its energy below 90 Hz, speech hardly any.
-  // Tuned on 31 real streams (recorded, then replayed offline): talk stations stayed under
-  // 0.2 of their energy there over 3 s stretches, while most pop and dance music sits at
-  // 0.2-0.6. A new station is first listened to silently for PRE_MS (3 s: shorter windows
-  // skipped more talk stations over a jingle or a deep voice). Then, for as long as it
-  // plays, the last BASS_MS (7 s, longer again so talk rarely gets cut off mid-show) are
-  // checked every quarter second, in case music starts later. Music light on bass (old
-  // recordings, acoustic) gets through. Only works on streams whose sound can be read
-  // (CORS; about 9 in 10).
+  // Music puts far more of its energy below 90 Hz than speech. A new station is listened
+  // to silently for PRE_MS first, then the last BASS_MS are checked every quarter second.
   const PRE_MS = 3000, BASS_MS = 7000, BASS_EVERY_MS = 250, BASS_SHARE = 0.2;
   function musicCheck() {
     let recent = [];
     return {
       reset() { recent = []; },
-      // how much sound it has heard so far (up to BASS_MS)
       span(now) { return recent.length ? now - recent[0][0] : 0; },
-      // feed it every frame: loudness, energy below 90 Hz, energy up to 10 kHz
+      // per frame: loudness, energy below 90 Hz, energy up to 10 kHz
       push(rms, low, all, now) {
         recent.push([now, rms, low, all]);
         while (now - recent[0][0] > BASS_MS) recent.shift();
       },
-      // whether the last `ms` sounded like music (false until it has heard that much)
       music(now, ms) {
         if (this.span(now) < ms * 0.95) return false;
         let r = 0, l = 0, a = 0, k = 0;
         for (const f of recent) if (now - f[0] <= ms) { r += f[1]; l += f[2]; a += f[3]; k++; }
-        return k > 0 && r / k >= 0.005 && a > 0 && l / a > BASS_SHARE; // silence is the watchdog's business
+        return k > 0 && r / k >= 0.005 && a > 0 && l / a > BASS_SHARE;
       },
     };
   }
@@ -420,13 +382,12 @@
 
     muteGame(true);
     let audio = null, node = null, ctx = null, analyser = null, gain = null, td = null, fd = null, tuning = false;
-    // preListen: streamer mode's silent first listen; allowMusic: the streamer chose to hear it anyway
     let preListen = false, allowMusic = false, lastCheck = 0;
     const music = musicCheck();
     let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0, blocked = false, userPaused = false, skipping = 0;
     let host = null, root = null, draw = null, raf = 0, lastT = 0, lastMove = 0, live = false;
     let round = null, loc = null, stations = [], idx = 0;
-    // This game's rounds: { n, loc, stations, idx }; `cur` is the one playing.
+    // history: this game's rounds { n, loc, stations, idx }; cur: the one playing
     let game = null, history = [], cur = null, histSig = '', finished = false, checked = null;
 
     const $ = sel => root.querySelector(sel);
@@ -434,7 +395,7 @@
 
     function create() {
       host = document.createElement('div');
-      host.setAttribute('data-ggs-ui', 'radio'); // keeps GeoGuessr's hotkeys out of it
+      host.setAttribute('data-ggs-ui', 'radio');
       root = host.attachShadow({ mode: 'open' });
       root.innerHTML = `<style>${CSS}</style>
         <div class="wrap">
@@ -458,11 +419,10 @@
           audio.play().catch(() => {});
           draw.flash('play', 700);
         } else {
-          userPaused = true; // the shape holds a pause sign until it plays again
+          userPaused = true;
           audio.pause();
         }
       };
-      // the play button, the shape, or the empty space around it
       $('.play').onclick = togglePlay;
       $('canvas').onclick = togglePlay;
       $('.wrap').onclick = e => { if (e.target === e.currentTarget) togglePlay(); };
@@ -482,10 +442,10 @@
         if (host.hidden) return;
         const t = audio?.currentTime ?? 0;
         if (t !== lastT) { lastT = t; lastMove = now; }
-        live = !!audio && !audio.paused && now - lastMove < 400; // sound is actually arriving
+        live = !!audio && !audio.paused && now - lastMove < 400; // sound is arriving
         const isPlaying = !!audio && !audio.paused;
         if (isPlaying !== playing) $('.play').innerHTML = (playing = isPlaying) ? ICON.pause : ICON.play;
-        // loudness: measured when the stream allows it, otherwise a talky made-up wobble
+        // loudness: measured when the stream allows it (CORS), otherwise a made-up wobble
         let vol = 0;
         if (node && live) {
           analyser.getByteTimeDomainData(td);
@@ -526,7 +486,6 @@
       raf = requestAnimationFrame(frame);
     }
 
-    // Stage in place of the (hidden) panorama, or the mini bar on top of everything.
     function place(inRound) {
       const pano = !cfg.showStreetView && inRound && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
       if (pano?.parentElement) {
@@ -538,19 +497,18 @@
       }
     }
 
-    // Our own AudioContext (the real constructor, so muteGame leaves it alone) for reading
-    // the sound of streams that allow it.
+    // Our own AudioContext (the real constructor, so muteGame leaves it alone), made only
+    // after a click or key press (Chrome's rule).
     function ensureCtx() {
-      // Only once the player has clicked or typed: before that Chrome refuses (and warns about) it.
       if (ctx || !RealAudioContext || navigator.userActivation?.hasBeenActive === false) return;
       ctx = new RealAudioContext();
       ours.add(ctx);
       analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0; // raw frames, as the music check was tuned on
+      analyser.smoothingTimeConstant = 0;
       td = new Uint8Array(analyser.fftSize);
       fd = new Float32Array(analyser.frequencyBinCount);
-      gain = ctx.createGain(); // silent while pre-listening
+      gain = ctx.createGain();
       analyser.connect(gain);
       gain.connect(ctx.destination);
     }
@@ -567,7 +525,7 @@
       node = null;
     }
 
-    // Try with CORS first (so the outline can follow it); if the stream refuses, again without.
+    // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
       const a = audio = new Audio();
@@ -580,15 +538,13 @@
         node = ctx.createMediaElementSource(a);
         node.connect(analyser);
       }
-      // streamer mode: hear nothing until the first check says it isn't music
       preListen = readable && !!cfg.streamerMode && !allowMusic;
       if (gain) { gain.gain.cancelScheduledValues(0); gain.gain.value = preListen ? 0 : 1; }
       let failed = false;
       const fail = () => {
         if (failed || a !== audio) return;
         failed = true;
-        // The stream won't let its sound be read (CORS), so streamer mode can't check it for
-        // music: try the stations it can check first, and only play this one if none are left.
+        // no CORS, so streamer mode can't check it: prefer stations it can
         if (readable && cfg.streamerMode && !allowMusic && !startPaused && tryCheckable()) return;
         if (readable) load(url, false, startPaused);
         else skip('stream failed');
@@ -610,8 +566,7 @@
       a.play().catch(err => {
         if (a !== audio) return;
         if (err.name !== 'NotAllowedError') return fail();
-        // Chrome won't play sound on a page nobody has clicked or typed in since it loaded.
-        // Start on the first click or key press anywhere instead.
+        // no click on the page yet: start on the first one
         blocked = true;
         clearTimeout(watchdog);
         setStatus('Click anywhere to start the radio');
@@ -631,13 +586,11 @@
       clearTimeout(watchdog); clearTimeout(stallTimer);
       blocked = false;
       if (cfg.streamerMode && !paused && navigator.userActivation?.hasBeenActive === false) {
-        // Streamer mode can only check for music once the page has had a click or key press
-        // (Chrome's rule for reading audio), so wait for one rather than play unchecked.
+        // the music check needs a click first, so wait rather than play unchecked
         blocked = true;
         waitingSince = 0;
         return setStatus('Click anywhere to start the radio');
       }
-      // a station already known to refuse CORS goes straight to plain playback
       const cors = !setFor(uncheckableFor).has(stations[idx]);
       if (paused) {
         waitingSince = 0;
@@ -653,16 +606,12 @@
       gain?.gain.setTargetAtTime(1, ctx.currentTime, 0.08);
     }
 
-    // Music in streamer mode: turn the shape into a skip sign, cut the sound, and move on to
-    // the next station not yet caught playing music. If they all have been, go back to the
-    // first of them, paused: the streamer can still press play and hear it anyway.
-    // Tracked per station (not per number), as uncheckable stations get moved to the back.
+    // Music in streamer mode: skip to the next station not yet caught playing music; if all
+    // have been, back to the first, paused.
     const flaggedFor = new WeakMap(); // station list -> stations caught playing music
     const uncheckableFor = new WeakMap(); // station list -> stations whose sound can't be read
     const setFor = map => { const set = map.get(stations) ?? new Set(); map.set(stations, set); return set; };
-    // A station that can't be checked for music: quietly move it to the back of the list, so
-    // the next checkable one takes its number and the count only ever goes forward. False if
-    // there's no checkable station left after it (then it plays unchecked).
+    // moves an uncheckable station to the back; false if no checkable one is left after it
     function tryCheckable() {
       const st = stations[idx], bad = setFor(uncheckableFor), music = setFor(flaggedFor);
       bad.add(st);
@@ -726,7 +675,7 @@
       tune(0);
     }
 
-    // Result screens: the guesses are in, so name the stations.
+    // Result screens: the guess is in, so name the stations.
     function reveal() {
       const s = stations[idx];
       if (s && !$('.reveal').innerHTML) {
@@ -738,7 +687,7 @@
       $('.hist').innerHTML = !finished || history.length < 2 ? '' : `<div class="label">Stations this game</div>` +
         history.map((h, i) => {
           const st = h.stations[h.idx];
-          const title = st ? ` title="${esc(new URL(st.url_resolved).hostname)}"` : ''; // which stream network, for ad hunting
+          const title = st ? ` title="${esc(new URL(st.url_resolved).hostname)}"` : '';
           return `<div class="row${h === cur ? ' on' : ''}" data-i="${i}"${title}><span class="n">${h.n}</span>
             <span class="name">${esc(st ? st.name.trim() : 'No station found')}</span>
             <span class="where">${esc(st ? describe(st, h.loc) : '')}</span></div>`;
@@ -757,7 +706,6 @@
       if (inRound && key !== round) newRound(key);
       if (inRound) { $('.hist').innerHTML = ''; histSig = ''; finished = false; checked = null; }
       else {
-        // Once per result screen: is the game over? Then list every round's station.
         if (checked !== key) {
           checked = key;
           ggs.game.state().then(st => { if (checked === key) finished = !!st?.finished; }).catch(() => {});
@@ -772,7 +720,7 @@
         const retune = !!next.streamerMode !== !!cfg.streamerMode;
         cfg = next;
         if (host) $('.label').textContent = cfg.streamerMode ? 'Talk radio' : 'Live radio';
-        if (retune) round = null; // the next tick finds this round's stations again
+        if (retune) round = null; // retune this round
       },
       stop() {
         clearInterval(tick);

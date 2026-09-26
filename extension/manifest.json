@@ -44,6 +44,7 @@
         "src/core/maps.js",
         "src/core/game.js",
         "src/core/ui.js",
+        "src/core/tiles.js",
         "src/scripts/draw-guess/meta.js",
         "src/scripts/draw-guess/summary.js",
         "src/scripts/draw-guess/main.js",
@@ -57,7 +58,6 @@
         "src/scripts/lying-signs/main.js",
         "src/scripts/minecraft/meta.js",
         "src/scripts/minecraft/main.js",
-        "src/core/tiles.js",
         "src/boot.js"
       ]
     }

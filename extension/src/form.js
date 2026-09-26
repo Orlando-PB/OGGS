@@ -1,12 +1,6 @@
-// Settings form: one card per script in ggs.registry (each src/scripts/<id>/meta.js).
-// The popup (popup/popup.js) renders it into its page and saves to chrome.storage.sync;
-// the userscript (userscript/bridge.js) renders it into an in-page panel and saves to
-// localStorage. Styled by popup/popup.css in both.
-//
+// Settings form: one card per script in ggs.registry. Rendered by the popup (saved to
+// chrome.storage.sync) and by the userscript's in-page panel (saved to localStorage).
 //   ggs.settingsForm(container, { settings, save(id, key, value) }) -> { setStatus(id, text) }
-//
-// settings: { "<id>": { enabled, <option>: value } } as stored; it's updated in place
-// before save is called.
 (() => {
   const ggs = (globalThis.__ggs ??= {});
 
@@ -31,7 +25,6 @@
       const card = document.createElement('section');
       card.dataset.id = meta.id;
       card.classList.toggle('off', !cfg.enabled);
-      // options with hidden: true sit inside a collapsed "More" block
       card.innerHTML = `
         <label class="row">
           <span class="text"><span class="name">${meta.name}</span><span class="desc">${meta.description}</span></span>

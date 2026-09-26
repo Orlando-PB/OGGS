@@ -1,16 +1,12 @@
-// Draw your country: replaces GeoGuessr's guess map with a drawing board. Sketch the
-// country you think you're in, pin your spot, and the drawing snaps onto the closest
-// real country. The pin becomes the marker on the (now invisible) guess map, and a few
-// seconds after the animation the script presses GeoGuessr's own (hidden) Guess button.
-// The board is the country-matcher app running in an extension iframe (app/, generated
-// by tools/sync_draw.py).
+// Draw your country: a drawing board (app/, in an iframe) over GeoGuessr's guess map.
+// Sketch the country, pin your spot, and the board snaps the drawing onto the closest
+// real country; the pin becomes the guess on the (invisible) map, and a few seconds after
+// the animation the script presses GeoGuessr's own hidden Guess button.
 (() => {
   const ggs = globalThis.__ggs;
 
-  // The real map stays in the page (placing the guess goes through it), just invisible,
-  // along with its controls (zoom +/-, size arrows), which would show through the faded
-  // board. GeoGuessr's Guess button is hidden too (the board takes its space); it still
-  // works, so the auto-guess and the Space key can press it.
+  // The real map stays in the page (the guess goes through it), just invisible, as does
+  // its Guess button (the auto-guess and Space still press it).
   const HIDE_MAP_CSS = `
     [class*="guess-map_canvas"] { opacity: 0 !important; pointer-events: none !important; }
     [class*="guess-map_guessMap"] > :not(:has([data-qa="perform-guess"])):not([data-qa="perform-guess"]),
@@ -27,10 +23,7 @@
               font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; background: #c92a2a; }
     .status:empty { display: none; }`;
   const MAX_H = 640, MARGIN = 16;
-  // Like GeoGuessr's own map: a small thumbnail until the mouse is over it. It's scaled
-  // rather than resized, so the drawing stays exactly as it is.
-  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600;
-  // After the snap-to-map animation, press GeoGuessr's own Guess button this much later.
+  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600; // small until hovered, like GeoGuessr's map
   const AUTO_GUESS_MS = 3000;
 
   function start(cfg) {
@@ -38,8 +31,7 @@
     let host = null, frame, status;
     let ready = false, queued = [], placed = false, wasInRound = false, lastRound, lastToken;
     let expanded = false, collapseTimer = 0, answerRound;
-    let boardH = 0; // the board's own height, reported by the frame
-    let guessTimer = 0;
+    let boardH = 0, guessTimer = 0;
     let spot = null, spotKey = ''; // where the board sits; measured once per round and window size
 
     const hideMap = document.createElement('style');
@@ -73,23 +65,18 @@
       if (host.style.width) layout();
     }
 
-    // Sit where the guess map is: right-aligned with it, down to the bottom of GeoGuessr's
-    // (hidden) Guess button, so the board takes that space too. Measured once per round and
-    // window size: GeoGuessr's map grows when hovered, which moves its button, and following
-    // it made the board jump around.
+    // Right-aligned with the guess map, down to the bottom of its hidden Guess button.
     function layout() {
       const key = `${innerWidth}x${innerHeight}|${lastRound}`;
       if (!spot || key !== spotKey) {
         const anchor = (ggs.maps.guessButton() ?? ggs.maps.guessMapElement()).getBoundingClientRect();
         const right = Math.max(MARGIN, innerWidth - anchor.right);
         const bottom = Math.max(MARGIN, innerHeight - anchor.bottom);
-        // The board is a square stage plus a toolbar: 52px taller than wide (see app/embed.css).
-        const h = Math.min(MAX_H, innerHeight - bottom - MARGIN), w = Math.min(h - 52, innerWidth - right - MARGIN);
+        const h = Math.min(MAX_H, innerHeight - bottom - MARGIN), w = Math.min(h - 52, innerWidth - right - MARGIN); // board is 52px taller than wide
         spot = { right, bottom, w, h };
         spotKey = key;
       }
       const { right, bottom, w } = spot;
-      // Fit the frame to the board once it has reported its height; until then, the estimate.
       const h = boardH ? Math.min(boardH, innerHeight - bottom - MARGIN) : spot.h;
       const scale = expanded ? 1 : Math.min(1, COLLAPSED_W / w);
       Object.assign(host.style, { right: `${right}px`, bottom: `${bottom}px`, width: `${w}px`, height: `${h}px`,
@@ -107,7 +94,7 @@
         if (host.style.width) layout();
       } else if (d.ggs === 'pool') {
         ggs.debug(`draw-guess: map "${d.map}" -> ${d.pool} (${d.how}): ${d.count} countries possible`);
-      } else if (d.ggs === 'guess') { // sent the moment our Guess is pressed, before the animation
+      } else if (d.ggs === 'guess') { // the moment Guess is pressed, before the animation
         try {
           ggs.maps.placeGuess(d.guess.lat, d.guess.lng);
         } catch (err) {
@@ -118,12 +105,11 @@
         placed = true;
         status.textContent = '';
         ggs.drawSummary.record(d.drawing);
-      } else if (d.ggs === 'done' && placed) { // animation finished: press Guess shortly after
+      } else if (d.ggs === 'done' && placed) { // animation finished
         clearTimeout(guessTimer);
         const round = ggs.game.roundKey();
         guessTimer = setTimeout(() => {
-          // skip if the player already pressed Guess or the round moved on
-          if (ggs.game.roundKey() !== round || !ggs.maps.guessMapElement()) return;
+          if (ggs.game.roundKey() !== round || !ggs.maps.guessMapElement()) return; // already guessed or moved on
           if (!ggs.maps.submitGuess()) status.textContent = "Guess placed, but couldn't press Guess";
         }, AUTO_GUESS_MS);
       }
@@ -142,7 +128,7 @@
         placed = false;
         status.textContent = '';
       }
-      if (inRound && round !== answerRound) { // new round: tell the board its country, for the nudge
+      if (inRound && round !== answerRound) { // tell the board the round's country, for the nudge
         answerRound = round;
         post({ ggs: 'answer', lat: null });
         ggs.game.roundLocation()
@@ -155,7 +141,7 @@
       if (!inRound) return;
       layout();
       const token = ggs.game.context()?.token;
-      if (token !== lastToken) { // new game: preselect the matching map pool
+      if (token !== lastToken) { // new game: pick the country pool from the map name
         lastToken = token;
         ggs.game.mapInfo()
           .then(m => (m?.name ? post({ ggs: 'map', name: m.name }) : ggs.debug('draw-guess: no map name, using world coverage')))

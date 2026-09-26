@@ -1,49 +1,26 @@
-// Ghana black tape, stuck to the car so it turns with the view like the real thing.
-//
-// Old (Gen 3) Ghana coverage has black tape on the car; the new Gen 4
-// coverage doesn't. On Gen 4 panoramas inside Ghana, a strip of tape is painted in.
-// Generation comes from the panorama's tile size (Gen 4 is 16384 px wide, Gen 3 13312).
+// Ghana black tape: old (Gen 3) Ghana coverage has tape on the car's roof bar, Gen 4
+// doesn't. On Gen 4 panoramas inside Ghana (tile width 16384) the tape is drawn on a
+// canvas over Street View, projected so it turns and zooms with the view.
 (() => {
   const ggs = globalThis.__ggs;
 
-  // The car, in its own frame: x right, y forward, z up, with the camera at the origin
-  // (units don't matter, only the ratios). Seen looking down: the four ends of two roof
-  // bars poking out from under the (blurred) car, and the black tape on the tip of the
-  // front-left one.
+  // The car in its own frame: x right, y forward, z up, camera at the origin. Two roof
+  // bars with four ends poking out from under the blurred car; tape on the front-left tip.
   const CAR = {
-    bars: { ys: [-0.85, 0.85], inner: 1.0, outer: 1.5, w: 0.07, z: -1 }, // y of each bar; where the ends start/stop; half width
-    tape: { bar: 1, side: 1, len: 0.22, w: 0.085 },                      // front bar, right side; how far along the tip
+    bars: { ys: [-0.85, 0.85], inner: 1.0, outer: 1.5, w: 0.07, z: -1 },
+    tape: { bar: 1, side: 1, len: 0.22, w: 0.085 },
   };
   const GEN4_WIDTH = 16384;
+  const NEAR_DEG = 0.05; // ~5 km leeway at Ghana's coarse outline
 
-  // ---- catch GeoGuessr's Street View ----
-  // Installed at document_start whether or not the script is on, so the panorama is
-  // seen even if the script is switched on mid-game.
-  // StreetViewPanorama has no getDiv(), so remember the container it was built in.
-  const panos = new Map(); // pano -> container div
-  const hookTimer = setInterval(() => {
-    const gm = window.google?.maps;
-    if (!gm?.StreetViewPanorama) return;
-    clearInterval(hookTimer);
-    try {
-      const Orig = gm.StreetViewPanorama;
-      gm.StreetViewPanorama = class extends Orig {
-        constructor(...args) {
-          super(...args);
-          if (!(args[0] instanceof HTMLElement)) return;
-          panos.set(this, args[0]);
-          // never let an overlay bug break GeoGuessr's Street View
-          try { active?.attach(this); } catch (err) { ggs.log('ghana-tape attach failed', err); }
-        }
-      };
-    } catch (err) {
-      ggs.log('could not hook google.maps.StreetViewPanorama', err);
-    }
-  }, 10);
+  const panos = new Map(); // pano -> container div (StreetViewPanorama has no getDiv())
+  let active = null;
+  ggs.maps.hook('StreetViewPanorama', (p, args) => {
+    if (!(args[0] instanceof HTMLElement)) return;
+    panos.set(p, args[0]);
+    active?.attach(p);
+  });
 
-  // Ghana's outline is coarse and coastal spots can fall just outside it, so a point
-  // within ~5 km of the edge counts too (the land borders get the same leeway).
-  const NEAR_DEG = 0.05;
   function nearEdge([x, y], poly) {
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
       const [xi, yi] = poly[i], [xj, yj] = poly[j];
@@ -53,9 +30,6 @@
     }
     return false;
   }
-  function inPolygon(pt, poly) {
-    return insidePolygon(pt, poly) || nearEdge(pt, poly);
-  }
   function insidePolygon([x, y], poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -64,8 +38,9 @@
     }
     return inside;
   }
+  const inGhana = pt => insidePolygon(pt, ggs.GHANA) || nearEdge(pt, ggs.GHANA);
 
-  // pano id -> Promise<{ width, centerHeading } | null>
+  // pano id -> Promise<{ width, centerHeading } | null>, from the page's own Maps API
   const tileCache = new Map();
   function tiles(id) {
     if (!tileCache.has(id)) {
@@ -77,16 +52,12 @@
   }
 
   const rad = d => (d * Math.PI) / 180;
-
-  // Camera-frame coords of a point in the car's frame: [right, up, depth].
   function toCamera([x, y, z], pov) {
     const a = rad(pov.heading), t = rad(pov.pitch);
     const cx = x * Math.cos(a) - y * Math.sin(a), cy = z, cz = x * Math.sin(a) + y * Math.cos(a);
     return [cx, cy * Math.cos(t) - cz * Math.sin(t), cy * Math.sin(t) + cz * Math.cos(t)];
   }
-
-  // Projects a polygon onto the screen, clipping away the part behind the camera
-  // (so a bar that's half behind you still shows its front half).
+  // Projects a polygon onto the screen, clipping the part behind the camera.
   const NEAR = 0.05;
   function project(pts, pov, fov, w, h) {
     const cam = pts.map(p => toCamera(p, pov));
@@ -105,10 +76,8 @@
     return clipped.map(([x, y, z]) => [w / 2 + (f * x) / z, h / 2 - (f * y) / z]);
   }
 
-  let active = null;
-
   function start(cfg) {
-    const attached = new Map(); // pano -> { canvas, listeners, info }
+    const attached = new Map(); // pano -> { canvas, listeners, resize, info }
 
     function draw(pano) {
       const st = attached.get(pano);
@@ -126,8 +95,7 @@
       if (!st.info || !pano.getVisible()) return;
 
       const pov = pano.getPov();
-      // Heading relative to the car. centerHeading points at the back of the car, hence the 180.
-      const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch };
+      const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch }; // centerHeading points at the back of the car
       const fov = Math.min(127, 180 / 2 ** (pano.getZoom() ?? 1));
       const P = pts => project(pts, rel, fov, w, h);
       const rect = (x0, x1, y0, y1, z) => P([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]);
@@ -136,8 +104,7 @@
         pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
         ctx.closePath();
       };
-      // stroked in the same colour so adjacent strips don't show a seam
-      const fill = (pts, color) => {
+      const fill = (pts, color) => { // stroked in the same colour so adjacent strips don't show a seam
         if (!pts) return;
         path(pts);
         ctx.fillStyle = ctx.strokeStyle = color;
@@ -145,21 +112,18 @@
         ctx.fill();
         ctx.stroke();
       };
-      // Half-disc on the end of a bar, in the roof plane.
       const cap = (cx, cy, r, side, z) => P(Array.from({ length: 9 }, (_, i) => {
         const a = ((i / 8) - 0.5) * Math.PI;
         return [cx + side * r * Math.cos(a), cy + r * Math.sin(a), z];
       }));
-      // Strips across a bar's width, lit from above: bright ridge in the middle, darker sides.
+      // strips across a bar's width, lit from above
       const shade = (x0, x1, y, hw, z, colors) => {
         const n = colors.length;
         colors.forEach((c, i) => fill(rect(x0, x1, y - hw + (2 * hw * i) / n, y - hw + (2 * hw * (i + 1)) / n, z), c));
       };
-      // Fades the inner end of a bar into the blurred car it comes out of.
+      // fades the inner end of a bar into the blurred car
       const fade = (x0, x1, y, hw, z) => {
         const r = rect(x0, x1, y - hw, y + hw, z);
-        // gradient runs from the inner end to the outer end (a clipped rect may have
-        // more or fewer than 4 corners, so project the two midpoints separately)
         const ends = P([[x0, y, z], [x1, y, z], [x1, y + 0.001, z]]);
         if (!r || !ends || ends.length < 2) return;
         const g = ctx.createLinearGradient(ends[0][0], ends[0][1], ends[1][0], ends[1][1]);
@@ -175,16 +139,13 @@
       bars.ys.forEach((y, i) => {
         for (const side of [-1, 1]) {
           const x0 = side * bars.inner, x1 = side * bars.outer, hw = bars.w;
-          const outline = rect(x0, x1, y - hw, y + hw, bars.z);
-          if (!outline) continue;
+          if (!rect(x0, x1, y - hw, y + hw, bars.z)) continue;
 
-          // soft shadow on the roof
           ctx.save();
           ctx.filter = 'blur(3px)';
           fill(rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01), 'rgba(0,0,0,.28)');
           ctx.restore();
 
-          // aluminium tube with a groove down the middle
           shade(x0, x1, y, hw, bars.z, ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384']);
           fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
           fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
@@ -195,7 +156,6 @@
             const tx0 = side * (bars.outer - tape.len), tx1 = x1 + side * 0.015, tw = tape.w;
             shade(tx0, tx1, y, tw, bars.z + 0.002, ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111']);
             fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
-            // wrap edges of the tape
             for (const k of [0.3, 0.62]) {
               const x = side * (bars.outer - tape.len * k);
               fill(rect(x, x + side * 0.006, y - tw, y + tw, bars.z + 0.003), 'rgba(255,255,255,.07)');
@@ -212,7 +172,7 @@
       if (!st) return;
       st.info = null;
       const pos = pano.getPosition(), id = pano.getPano();
-      if (pos && id && inPolygon([pos.lng(), pos.lat()], ggs.GHANA)) {
+      if (pos && id && inGhana([pos.lng(), pos.lat()])) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;
         if (t && t.width >= GEN4_WIDTH) st.info = t;

@@ -1,23 +1,14 @@
-// Lying signs: every Street View tile is caught on its way into WebGL, text on it is
-// found, painted over, and new text in a different script is written on top.
-//
-// How the tiles get caught: the Maps API loads each tile as an <img> and uploads it with
-// texImage2D/texSubImage2D. That call is wrapped. The tile can't be edited on the spot
-// (finding text takes a few hundred ms in a worker), so a blurred copy goes up first
-// (nothing legible ever shows), the texture and call arguments are remembered, and once
-// the boxes come back the edited tile is uploaded to that same texture. Tiles seen
-// before are served edited straight away. Tiles already on screen when the script is
-// switched on or off are replayed through the hook by ggs.tiles (core/tiles.js).
-//
-// Text finding: PP-OCRv4's DBNet text detector on onnxruntime-web, in worker.js.
+// Lying signs: every Street View tile (via ggs.tiles, core/tiles.js) has its text found
+// by a detector in a worker (worker.js, PP-OCRv4 on onnxruntime-web, loaded from
+// ggs.extBase), painted over, and new text in another script written on top. A blurred
+// copy goes up while the detector works, then the edited tile replaces it in the same
+// texture.
 (() => {
   const ggs = globalThis.__ggs;
-  const TILE = /streetviewpixels-pa\.googleapis\.com\/v1\/tile|cbk\d*\.google\.com\/cbk\?/;
-  const DET_SIZE = 768;                       // model input; 512-px tiles are upscaled so small text is found
-  const MIN_CONTRAST = 45;                    // summed RGB difference text must have from its sign; below it the box is ignored
+  const DET_SIZE = 768;                       // detector input; 512-px tiles are upscaled so small text is found
+  const MIN_CONTRAST = 45;                    // below this text-vs-sign RGB difference a box is ignored
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
-  // Indexed by the "script" option; 0 is "random" (one script per panorama, picked from its id).
   const ENGLISH = [
     'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Jack Massey Welsh', 'JackSucksAtGuessing', 'JackSucksAtClips',
     'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'turd boi420',
@@ -38,7 +29,7 @@
     'Kai Cenat', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
     'Wrong Way', 'Mild Peril', 'Beware Of Jack', 'Oscar Crossing', 'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
-  // Indexed by the "script" option; 0 is "random" (one script per panorama, picked from its id).
+  // Indexed by the "script" option; 0 is random (one script per panorama).
   const WORDS = [
     null,
     ['สวัสดี', 'ถนน', 'ตลาด', 'โรงเรียน', 'วัด', 'ร้านอาหาร', 'ทางออก', 'ระวัง', 'หยุด', 'กรุงเทพ', 'เชียงใหม่', 'ภูเก็ต', 'ห้ามจอด', 'โรงแรม', 'ธนาคาร', 'สถานี', 'ตำรวจ', 'ยินดีต้อนรับ', 'ก๋วยเตี๋ยว', 'ชายหาด',
@@ -72,9 +63,7 @@
   ];
   const GALACTIC_INDEX = WORDS.length - 1;
 
-  // Standard Galactic Alphabet (Minecraft's enchanting table letters), as strokes on a
-  // 10x10 grid: each glyph is a list of polylines, a single point being a dot. The
-  // "Minecraft" script draws random runs of these instead of words.
+  // Minecraft's enchanting-table letters as strokes on a 10x10 grid (a single point is a dot).
   const GALACTIC = [
     [[[1,3],[9,3]],[[1,3],[1,6]],[[9,3],[9,9]]],          // ᔑ
     [[[3,1],[3,9],[7,9],[7,6]]],                          // ʖ
@@ -121,8 +110,7 @@
     }
   }
 
-  // Deterministic randomness keyed on a sign's place in the panorama, so the same sign
-  // gets the same script and word on every tile and zoom level it appears in.
+  // Randomness seeded on a sign's place in the panorama, so it reads the same at every zoom.
   function hash(str) {
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -132,7 +120,6 @@
     let a = seed >>> 0;
     return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   }
-  // seed for a box: pano + its centre in whole-panorama units (same at every zoom)
   function boxSeed(k, raw, W) {
     if (!k) return hash(`${raw.cx | 0},${raw.cy | 0}`);
     const scale = 1 / (W * 2 ** k.z) * 4096;
@@ -176,10 +163,8 @@
     workerReady.catch(err => { ggs.log('lying-signs: text detector failed to load', err); workerReady = null; });
     return workerReady;
   }
-  // Detection queue. The tile nearest to where you're looking goes first (tile grid
-  // position vs the panorama's current heading/pitch; newest first when that's unknown).
-  // Two in flight so the worker's CPU prep overlaps the GPU. A queued tile whose
-  // textures have all gone (pano changed) is dropped unrun.
+  // Detection queue: the tile nearest to where you're looking first; a queued tile whose
+  // textures are gone (pano changed) is dropped unrun.
   const queue = [];                           // [{ img, cfg, res, alive, url }]
   let inflight = 0;
   const MAX_INFLIGHT = 2;
@@ -187,12 +172,10 @@
   function detect(img, cfg, alive, url) {
     return new Promise(res => { queue.push({ img, cfg, res, alive, url }); pump(); });
   }
-  const TILE_XY = /panoid=([^&]+).*?[&?]x=(\d+)&y=(\d+)&zoom=(\d+)/;
-  // Angular distance from the tile's centre to the current view, or null if unknown.
   function tileDistance(url) {
-    const m = TILE_XY.exec(url);
-    if (!m) return null;
-    const [, id, x, y, z] = m;
+    const k = ggs.tileKey(url);
+    if (!k) return null;
+    const { pano: id, x, y, z } = k;
     for (const p of panos) {
       let pov, centre;
       try { if (p.getPano() !== id) continue; pov = p.getPov(); centre = p.getPhotographerPov?.()?.heading; } catch { continue; }
@@ -237,16 +220,12 @@
     }
   }
 
-  // ---- tile hook, installed at document_start whether or not the script is on ----
+  // ---- tiles ----
   const tiles = new Map();                    // url -> { boxes, cfg, canvas, pending: [upload records] }
   const grid = new Map();                     // "pano/zoom/x/y" -> same entry, for finding a tile's children
-  const TILE_KEY = /panoid=([^&]+).*?[&?]x=(\d+)&y=(\d+)&zoom=(\d+)/;
-  const gridKey = url => { const m = TILE_KEY.exec(url); return m && { pano: m[1], x: +m[2], y: +m[3], z: +m[4] }; };
+  const gridKey = ggs.tileKey;
 
-  // Zooming out: a tile's four children one zoom level in are the same picture at
-  // twice the detail. Where they've already been edited, the parent is assembled from
-  // them (scaled down) instead of being detected again, so the sharper edit and the
-  // same words carry over. Grandchildren are used when a child is missing.
+  // Zooming out: a parent tile is assembled from its four edited children (or grandchildren).
   function childCanvas(k, depth) {
     const t = grid.get(`${k.pano}/${k.z}/${k.x}/${k.y}`);
     if (t?.canvas) return t.canvas;
@@ -262,9 +241,7 @@
     for (const [dx, dy, src] of parts) g.drawImage(src, (dx * c.width) / 2, (dy * c.height) / 2, c.width / 2, c.height / 2);
     return c;
   }
-  // Zooming in: if the tile one zoom level out (or two) has been detected, its boxes
-  // are scaled into this tile instead of detecting again, so what's changed stays the
-  // same as you zoom. The seeded word picks then match too.
+  // Zooming in: a detected parent's boxes, scaled into this tile.
   function inheritedBoxes(k, W, H) {
     for (let up = 1; up <= 2; up++) {
       const f = 2 ** up, px = Math.floor(k.x / f), py = Math.floor(k.y / f);
@@ -296,20 +273,11 @@
     }
     return n === 4;
   }
-  const mipTex = new WeakSet();               // textures the API calls generateMipmap on
-  const origFetch = globalThis.fetch;
-  const orig = {};
-
-  function bindingFor(gl, target) {
-    return target === gl.TEXTURE_2D ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D] : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
-  }
-
-  // Called for every texImage2D/texSubImage2D whose source is an <img>. Returns the
-  // source to upload now.
-  function onUpload(gl, name, args, img) {
-    if (!active) return img;
-    const url = img.currentSrc || img.src;
-    if (!TILE.test(url)) return img;
+  // What goes into WebGL now for this tile: the edit if known, otherwise a blur while the
+  // detector works. Skips tiles another script already swapped for a canvas.
+  ggs.tiles.filter((rec, img) => {
+    if (!active || !(img instanceof HTMLImageElement)) return img;
+    const url = rec.url;
     stats.paths.gl = (stats.paths.gl || 0) + 1;
     let t = tiles.get(url);
     if (t && t.cfg !== active) { t.canvas = null; t.cfg = active; if (t.boxes) t.canvas = editSync(img, t.boxes, active, t.key); }
@@ -324,31 +292,24 @@
       // all four children already edited: assemble, no detection needed
       const fromKids = k && childCanvas(k, 2);
       if (fromKids && fromKids !== t.canvas) { t.canvas = fromKids; t.boxes = []; stats.assembled = (stats.assembled || 0) + 1; return t.canvas; }
-      // parent already detected: same boxes, scaled, no detection
+      // parent already detected: its boxes now, and this zoom's detection adds small text
       const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-      // parent already detected: use its boxes now (same words, nothing pops), and
-      // still detect at this zoom to add small text the parent couldn't see
       const inherited = k && inheritedBoxes(k, W, H);
       if (inherited) { t.inherited = inherited; t.boxes = inherited; t.canvas = editSync(img, inherited, active, k); stats.inherited = (stats.inherited || 0) + 1; }
-      const alive = () => t.pending.some(r => !r.gl.isContextLost() && r.gl.isTexture(r.tex));
+      const alive = () => t.pending.some(ggs.tiles.live);
       detect(img, active, alive, url).then(boxes => {
-        if (!boxes) { if (!t.inherited) tiles.delete(url); t.pending = []; return; } // skipped or failed: the blurred/original stays; a later upload retries
+        if (!boxes) { if (!t.inherited) tiles.delete(url); t.pending = []; return; } // skipped or failed; a later upload retries
         t.boxes = t.inherited ? merge(t.inherited, boxes) : boxes;
         stats.boxes += boxes.length;
         flush(t, img);
       });
     }
-    // remember where this went so the edited tile can replace it later
-    const [bindTarget, bindParam] = bindingFor(gl, args[0]);
-    t.pending.push({
-      gl, name, args, bindTarget, tex: gl.getParameter(bindParam),
-      flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
-    });
-    if (t.canvas) return t.canvas;            // the inherited edit, while this zoom's detection runs
+    t.pending.push(rec);
+    if (t.canvas) return t.canvas;
     const ph = blurred(img);
     overlayChildren(ph, k);
     return ph;
-  }
+  }, 1);
   // Inherited boxes win; a detected box is added only if it isn't over one of them.
   function merge(inherited, detected) {
     const out = inherited.slice();
@@ -366,68 +327,15 @@
     t.canvas = editSync(img, t.boxes, active, t.key);
     overlayChildren(t.canvas, t.key);
     for (const r of t.pending) {
-      const { gl } = r;
-      try {
-        if (gl.isContextLost() || !gl.isTexture(r.tex)) continue;
-        const [, bindParam] = bindingFor(gl, r.args[0]);
-        const prevTex = gl.getParameter(bindParam);
-        const prevFlip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
-        gl.bindTexture(r.bindTarget, r.tex);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, r.flip);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, r.premul);
-        orig[r.name].call(gl, ...r.args, t.canvas);
-        if (mipTex.has(r.tex)) gl.generateMipmap(r.bindTarget);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, prevPremul);
-        gl.bindTexture(r.bindTarget, prevTex);
-        stats.edited++;
-      } catch (err) {
-        stats.failed++;
-        if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err);
-      }
+      try { if (ggs.tiles.upload(r, t.canvas)) stats.edited++; }
+      catch (err) { stats.failed++; if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err); }
     }
     t.pending = [];
   }
 
-  function install() {
-    for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
-      for (const name of ['texImage2D', 'texSubImage2D']) {
-        const fn = P[name];
-        orig[name] = orig[name] || fn;
-        P[name] = function (...a) {
-          const i = a.length - 1;
-          if (a[i] instanceof HTMLImageElement) {
-            try { a[i] = onUpload(this, name, a.slice(0, i), a[i]); } catch (err) { stats.failed++; }
-          }
-          return fn.apply(this, a);
-        };
-      }
-      const gen = P.generateMipmap;
-      P.generateMipmap = function (target) {
-        try { mipTex.add(this.getParameter(bindingFor(this, target)[1])); } catch {}
-        return gen.call(this, target);
-      };
-    }
-    // in case tiles ever arrive as blobs instead of <img>s
-    globalThis.fetch = async function (input, init) {
-      const url = typeof input === 'string' ? input : input?.url;
-      if (!active || !TILE.test(String(url))) return origFetch.call(this, input, init);
-      stats.seen++; stats.paths.fetch = (stats.paths.fetch || 0) + 1;
-      const r = await origFetch.call(this, input, init);
-      try {
-        const bmp = await createImageBitmap(await r.blob());
-        const boxes = (await detect(bmp, active, () => true, url)) || [];
-        const b = await editSync(bmp, boxes, active, gridKey(url)).convertToBlob({ type: 'image/jpeg', quality: 0.9 });
-        stats.edited++;
-        return new Response(b, { status: 200, headers: { 'content-type': b.type } });
-      } catch (err) { stats.failed++; return r; }
-    };
-  }
-  try { install(); } catch (err) { ggs.log('lying-signs: hook failed', err); }
 
   // ---- the edits ----
-  // Placeholder while the detector works: the tile at 1/10 size, scaled back up, so
-  // nothing is legible however far you zoom in.
+  // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
   function blurred(img) {
     const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
     const small = new OffscreenCanvas(Math.max(1, W / 10 | 0), Math.max(1, H / 10 | 0));
@@ -438,11 +346,7 @@
     return c;
   }
 
-  // Edits any drawable source (img, ImageBitmap) with the detector's boxes; returns an
-  // OffscreenCanvas. Each box is handled in its own frame, rotated so the text runs
-  // level: the source is drawn into a small canvas with the inverse rotation, the patch
-  // and the new text are made there, and the result is rotated back onto the tile
-  // through a soft mask shaped like the old and new text (not a rectangle).
+  // Edits a tile with the detector's boxes; returns an OffscreenCanvas.
   function editSync(src, boxes, cfg, key) {
     const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
     const c = new OffscreenCanvas(W, H);
@@ -462,10 +366,8 @@
     return c;
   }
 
-  // The bottom of the panorama (the car, or the logo disc unofficial coverage puts
-  // there) is stretched into a wide arc in these tiles, so the detector can't read text
-  // in it. It's smeared unconditionally instead: everything below NADIR_PITCH goes to a
-  // coarse mosaic, fading in over a few px.
+  // The bottom of the panorama (the car) is stretched too much for the detector, so
+  // everything below NADIR_PITCH is smeared into a coarse mosaic instead.
   const NADIR_PITCH = -68;
   function nadir(g, k, W, H) {
     if (!k) return;
@@ -563,12 +465,9 @@
     g.restore();
   }
 
-  // A fill for the box (and the zone around it) built from the pixels just outside it:
-  // every pixel is the distance-weighted mix of the smoothed left/right/top/bottom
-  // border colours at its row/column, so lighting gradients carry across and none of
-  // the old text bleeds in. Border pixels that aren't the sign's colour (sky past its
-  // edge, its frame) are ignored, so the fill falls back to the sign colour there. The
-  // border's own noise is added back as grain.
+  // Fill for the box from the pixels just outside it: each pixel a distance-weighted mix
+  // of the smoothed border colours, so lighting gradients carry across; the border's own
+  // noise is added back as grain.
   function edgeFill(t, b, bg, w, h, gap, ring, feather) {
     const d = t.getImageData(0, 0, w, h).data;
     const sample = (xa, xb, ya, yb) => {
@@ -610,9 +509,7 @@
     return layer;
   }
 
-  // Sign colour = the dominant colour inside the box (text is the minority of its
-  // pixels, and what's outside the box may be a different surface altogether). Text
-  // colour = average of the inside pixels that differ most from it.
+  // Sign colour: the dominant colour inside the box. Text colour: the pixels that differ most from it.
   function colours(g, b, W, H) {
     const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y), x1 = Math.min(W, b.x + b.w), y1 = Math.min(H, b.y + b.h);
     const w = x1 - x0, h = y1 - y0, d = g.getImageData(x0, y0, w, h).data;
@@ -640,28 +537,39 @@
   }
   function dist(d, i, c) { return Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]); }
 
-  // ---- which way you're looking: read-only hook on StreetViewPanorama ----
+  // which way you're looking, for the queue order
   const panos = new Set();
-  const hookTimer = setInterval(() => {
-    const gm = window.google?.maps;
-    if (!gm?.StreetViewPanorama) return;
-    clearInterval(hookTimer);
-    try {
-      const Orig = gm.StreetViewPanorama;
-      gm.StreetViewPanorama = class extends Orig {
-        constructor(...args) { super(...args); panos.add(this); }
-      };
-    } catch (err) { ggs.log('lying-signs: could not hook StreetViewPanorama', err); }
-  }, 10);
+  ggs.maps.hook('StreetViewPanorama', p => { panos.add(p); if (active?.noZoom) lockZoom(p); });
+
+  // "Disable zoom": the wheel and zoom buttons are switched off on every panorama and any zoom
+  // that still gets through (GeoGuessr's own buttons and keys call setZoom) is put straight back
+  // to the level it was at, so signs are only ever read at the zoom the tiles were drawn for.
+  const locks = new Map(); // pano -> { listener, options to restore }
+  function lockZoom(p) {
+    if (locks.has(p)) return;
+    const ev = window.google?.maps?.event;
+    if (!ev) return;
+    const was = { scrollwheel: p.get('scrollwheel'), zoomControl: p.get('zoomControl') };
+    const zoom = p.getZoom();
+    const listener = ev.addListener(p, 'zoom_changed', () => { if (p.getZoom() !== zoom) p.setZoom(zoom); });
+    p.setOptions({ scrollwheel: false, zoomControl: false });
+    locks.set(p, { listener, was });
+  }
+  function unlockZoom() {
+    for (const [p, { listener, was }] of locks) { listener.remove(); p.setOptions(was); }
+    locks.clear();
+  }
+  function applyZoom() { if (active?.noZoom) panos.forEach(lockZoom); else unlockZoom(); }
 
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
     detector();
-    ggs.tiles.replay(); // tiles already on screen go through the hook now
+    ggs.tiles.replay();
+    applyZoom();
     return {
-      stop() { active = null; ggs.tiles.replay(); },
-      update(next) { const changed = next.script !== active.script; active = next; if (changed) ggs.tiles.replay(); },
+      stop() { active = null; unlockZoom(); ggs.tiles.replay(); },
+      update(next) { const changed = next.script !== active.script; active = next; applyZoom(); if (changed) ggs.tiles.replay(); },
     };
   }
   ggs.scripts['lying-signs'] = { start };

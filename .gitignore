@@ -1,7 +1,7 @@
-# Tracked: extension/ (what ships), server/ (what runs on oggs.orlandopb.com),
-# userscript/ (the Tampermonkey build), tools/build.mjs and tools/deploy_server.sh.
-# Everything below stays local: notes, secrets, store listing assets, and the tooling and
-# training data behind the drawing board's generated files (see README).
+# Tracked: extension/ (what ships), server/ (what runs on oggs.orlandopb.com), userscript/
+# (the Tampermonkey build) and tools/. Everything local-only (store listing assets, the
+# tooling and training data behind the drawing board's generated files, old snapshots) is
+# under dev/, plus notes and secrets.
 .DS_Store
 __pycache__/
 .venv/
@@ -10,10 +10,4 @@ server.log
 .env
 CLAUDE.md
 .mcp.json
-OGGS-dev/
-store/
-training/
-country-matcher/
-tools/*
-!tools/build.mjs
-!tools/deploy_server.sh
+dev/

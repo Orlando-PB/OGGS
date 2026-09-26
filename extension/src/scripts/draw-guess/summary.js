@@ -1,9 +1,6 @@
-// Drawing summaries for Draw your country, shown on GeoGuessr's result screens (which
-// reveal the answer anyway, so the correct country can be shown here):
-//   - after each round: that round's drawing, what it matched and the correct country,
-//   - after the last round: every round's drawing plus the average match with the
-//     correct country.
-// Kept in sessionStorage per game, so it survives a refresh.
+// Drawing summaries on GeoGuessr's result screens (which reveal the answer anyway):
+// after each round that round's drawing and the correct country, after the last round
+// every round's. Kept in sessionStorage per game, so it survives a refresh.
 (() => {
   const ggs = globalThis.__ggs;
   const KEY = 'ggs-drawings';
@@ -30,7 +27,7 @@
     .none { width: 118px; height: 118px; border-radius: 8px; display: grid; place-items: center;
             background: rgba(255, 255, 255, .06); color: rgba(255, 255, 255, .45); }`;
 
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = ggs.esc;
   const grade = score => (score >= 70 ? 'good' : score >= 50 ? 'ok' : 'bad');
 
   function load() {
@@ -39,7 +36,6 @@
   function save(data) {
     try { sessionStorage.setItem(KEY, JSON.stringify(data)); } catch {}
   }
-  // This game's record, started fresh when the game changes.
   function game() {
     const token = ggs.game.context()?.token;
     if (!token) return null;
@@ -60,8 +56,7 @@
   };
   const pathD = rings => rings.map(r => 'M' + r.map(p => p.join(',')).join('L') + 'Z').join('');
 
-  // The drawing (green, with its pin) and, dashed on top, the correct country's outline
-  // scaled and centred onto the drawing so the two shapes can be compared.
+  // The drawing with its pin, and the correct country's outline dashed over it.
   function thumb({ rings, pin, answer }) {
     let over = null;
     if (answer?.outline?.length) {
@@ -86,7 +81,6 @@
 
   const isHit = d => !!d.answer && (d.answer.code === d.code || d.answer.name === d.country);
 
-  // One round: what the drawing matched, and the correct country's match if it was a different one.
   function card(n, d, big = false) {
     if (!d) return `<div class="card"><div class="r">Round ${n}</div><div class="none">no drawing</div></div>`;
     const a = d.answer, hit = isHit(d);
@@ -120,8 +114,7 @@
     shown = '';
   }
 
-  // Called from the draw-guess tick. In a round: ask the game API once which round it is.
-  // On a result screen: that round's card, or the whole game after the last round.
+  // Called from the draw-guess tick.
   let asked = '';
   function sync(inRound) {
     const g = game();

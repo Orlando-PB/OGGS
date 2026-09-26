@@ -1,6 +1,5 @@
-// Starts and stops each script to match the popup settings. Changes apply live.
-// On competitive games (see ggs.game.competitive) every script is stopped, whatever the
-// settings say, and starts again once you're out.
+// Starts and stops each script to match the settings, live. In competitive games
+// (ggs.game.competitive) every script is stopped, whatever the settings say.
 (() => {
   const ggs = globalThis.__ggs;
   const running = new Map(); // id -> { stop, update? }
@@ -10,10 +9,7 @@
     if (!settings) return;
     for (const meta of ggs.registry) {
       const impl = ggs.scripts[meta.id];
-      if (!impl) {
-        ggs.log(`no implementation loaded for "${meta.id}" (missing from manifest.json?)`);
-        continue;
-      }
+      if (!impl) { ggs.log(`no implementation loaded for "${meta.id}"`); continue; }
       const cfg = ggs.config(meta, settings);
       const on = cfg.enabled && !blocked;
       const inst = running.get(meta.id);
@@ -34,8 +30,8 @@
     }
   }
 
-  // GeoGuessr is a single-page app, so watch the path. Games that might be competitive
-  // are blocked straight away and only unblocked once the check says they're friendly.
+  // Single-page app, so watch the path. A game that might be competitive is blocked at
+  // once and only unblocked when the check says it's friendly.
   function onPath() {
     if (location.pathname === path) return;
     path = location.pathname;

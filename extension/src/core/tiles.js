@@ -1,76 +1,110 @@
-// Street View tile ledger, shared by the scripts that repaint tiles (lying-signs,
-// minecraft). Those scripts wrap texImage2D/texSubImage2D and edit tiles as the Maps API
-// uploads them, but the API never re-uploads a tile that's already on screen, so a
-// script switched on or off mid-round would do nothing until the next panorama. This
-// file's wrapper is listed after the scripts in manifest.json, so it's the outermost and
-// sees the original <img> even while a script is swapping it for a canvas; it only
-// records which texture each tile went into and with what arguments. ggs.tiles.replay()
-// then loads those tiles again (from the browser cache) and uploads them through the
-// same prototype methods, so every script's wrapper sees them as if they'd just arrived:
-// scripts that are on edit them, and scripts that are off let the originals through.
+// The one WebGL hook. The Maps API uploads every Street View tile with
+// texImage2D/texSubImage2D from an <img>; this wraps those two methods (and
+// generateMipmap, to know which textures need it again after a re-upload).
+//
+// For each tile upload a record is made ({ gl, name, args, url, key, img, tex, ... }) and
+// the registered filters (minecraft, lying-signs) get a turn, in order, to swap the source
+// for a canvas. A filter that needs time can keep the record and later push a new source
+// into the same texture with upload(rec, source). Uploads of anything else pass straight
+// through. The API never re-uploads a tile already on screen, so replay() loads every
+// remembered tile again (browser cache) and runs it through the same path: that's how
+// switching a script on or off mid-round takes effect.
 (() => {
   const ggs = globalThis.__ggs;
-  const TILE = /streetviewpixels-pa\.googleapis\.com\/v1\/tile|cbk\d*\.google\.com\/cbk\?/;
   const MAX = 1200;                           // records kept (zoom 4 is 512 tiles per panorama)
-  const records = [];                         // { gl, name, args, url, crossOrigin, referrerPolicy, target, tex, flip, premul }
+  const records = [];
   const mipTex = new WeakSet();
-  const bindingParam = (gl, target) => target === gl.TEXTURE_2D ? gl.TEXTURE_BINDING_2D : gl.TEXTURE_BINDING_CUBE_MAP;
-  const bindTarget = (gl, target) => target === gl.TEXTURE_2D ? gl.TEXTURE_2D : gl.TEXTURE_CUBE_MAP;
+  const filters = [];                         // [{ fn, order }], lowest order first
+  const orig = {};                            // prototype -> { texImage2D, texSubImage2D }
 
-  function record(gl, name, args, img) {
+  // filter((rec, source) => source, order): source is the <img> or what an earlier filter returned
+  function filter(fn, order = 0) {
+    filters.push({ fn, order });
+    filters.sort((a, b) => a.order - b.order);
+  }
+  const live = rec => !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
+
+  function makeRecord(gl, name, args, img) {
     const url = img.currentSrc || img.src;
-    if (!TILE.test(url)) return;
-    const tex = gl.getParameter(bindingParam(gl, args[0]));
-    if (!tex) return;
+    if (!ggs.TILE.test(url)) return null;
+    const [target, param] = ggs.glBinding(gl, args[0]);
+    const tex = gl.getParameter(param);
+    if (!tex) return null;
+    return {
+      gl, name, args, url, img, tex, target, key: ggs.tileKey(url),
+      crossOrigin: img.crossOrigin, referrerPolicy: img.referrerPolicy,
+      flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
+    };
+  }
+  function remember(rec) {
     // one record per (texture, face, level, offset): a re-upload replaces the older one
-    const same = r => r.gl === gl && r.tex === tex && r.name === name && r.args[0] === args[0] && r.args[1] === args[1]
-      && (name !== 'texSubImage2D' || (r.args[2] === args[2] && r.args[3] === args[3]));
+    const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
+      && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
     if (i >= 0) records.splice(i, 1);
-    records.push({
-      gl, name, args, url, tex, target: args[0], crossOrigin: img.crossOrigin, referrerPolicy: img.referrerPolicy,
-      flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
-    });
+    records.push(rec);
     if (records.length > MAX) records.splice(0, records.length - MAX);
+  }
+  // What goes into WebGL right now for this upload.
+  function handle(rec) {
+    remember(rec);
+    let source = rec.img;
+    for (const f of filters) {
+      try { source = f.fn(rec, source) ?? source; } catch (err) { ggs.log('tiles: filter failed', err); }
+    }
+    return source;
+  }
+
+  // Later upload of `source` into the texture a record went to, with the same arguments.
+  function upload(rec, source) {
+    const { gl } = rec;
+    if (!live(rec)) return false;
+    const [, param] = ggs.glBinding(gl, rec.target);
+    const prevTex = gl.getParameter(param);
+    const prevFlip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+    gl.bindTexture(rec.target, rec.tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
+    try {
+      orig[rec.name].call(gl, ...rec.args, source);
+      if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
+    } finally {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, prevPremul);
+      gl.bindTexture(rec.target, prevTex);
+    }
+    return true;
   }
 
   function install() {
     for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
       for (const name of ['texImage2D', 'texSubImage2D']) {
         const fn = P[name];
+        orig[name] ??= fn;
         P[name] = function (...a) {
           const i = a.length - 1;
           if (a[i] instanceof HTMLImageElement) {
-            try { record(this, name, a.slice(0, i), a[i]); } catch {}
+            try {
+              const rec = makeRecord(this, name, a.slice(0, i), a[i]);
+              if (rec) a[i] = handle(rec);
+            } catch (err) { ggs.log('tiles: hook failed', err); }
           }
           return fn.apply(this, a);
         };
       }
       const gen = P.generateMipmap;
       P.generateMipmap = function (target) {
-        try { mipTex.add(this.getParameter(bindingParam(this, target))); } catch {}
+        try { mipTex.add(this.getParameter(ggs.glBinding(this, target)[1])); } catch {}
         return gen.call(this, target);
       };
     }
   }
   try { install(); } catch (err) { ggs.log('tiles: hook failed', err); }
 
-  // ---- GeoGuessr's Street View instances, so the view can be nudged into repainting ----
-  // The renderer only redraws on a view change, so freshly uploaded tiles would sit
-  // unseen until the mouse moved. Two nudges, since either alone can be swallowed: a
-  // heading change held for a frame, and a mouse move over the canvas.
+  // The renderer only redraws on a view change, so nudge it after an upload: a heading
+  // change held for a frame, and a mouse move over the canvas (either alone can be swallowed).
   const panos = new Set();
-  const hookTimer = setInterval(() => {
-    const gm = window.google?.maps;
-    if (!gm?.StreetViewPanorama) return;
-    clearInterval(hookTimer);
-    try {
-      const Orig = gm.StreetViewPanorama;
-      gm.StreetViewPanorama = class extends Orig {
-        constructor(...args) { super(...args); panos.add(this); }
-      };
-    } catch (err) { ggs.log('tiles: could not hook StreetViewPanorama', err); }
-  }, 10);
+  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
   async function repaint(panoId) {
     const nudged = [];
     for (const p of panos) {
@@ -92,46 +126,32 @@
     }
   }
 
-  // ---- replay ----
-  // Uploads every remembered tile again, through whatever the prototype methods are now
-  // (every script's wrapper). Calls made in the same tick are merged into one replay.
+  // Calls made in the same tick are merged into one replay.
   let scheduled = null;
   function replay() {
     if (scheduled) return scheduled;
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
-      const live = records.filter(r => !r.gl.isContextLost() && r.gl.isTexture(r.tex));
-      records.length = 0; // each upload below records itself again
+      const old = records.filter(live);
+      records.length = 0;
       let n = 0;
-      await Promise.all(live.map(async r => {
+      await Promise.all(old.map(async r => {
         const img = new Image();
         if (r.crossOrigin != null) img.crossOrigin = r.crossOrigin;
         if (r.referrerPolicy) img.referrerPolicy = r.referrerPolicy;
         img.src = r.url;
         try { await img.decode(); } catch { return; }
-        const { gl } = r;
         try {
-          if (gl.isContextLost() || !gl.isTexture(r.tex)) return;
-          const param = bindingParam(gl, r.target), target = bindTarget(gl, r.target);
-          const prevTex = gl.getParameter(param);
-          const prevFlip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
-          gl.bindTexture(target, r.tex);
-          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, r.flip);
-          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, r.premul);
-          gl[r.name](...r.args, img);
-          if (mipTex.has(r.tex)) gl.generateMipmap(target);
-          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
-          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, prevPremul);
-          gl.bindTexture(target, prevTex);
-          n++;
+          const rec = { ...r, img };
+          if (upload(rec, handle(rec))) n++;
         } catch (err) { ggs.log('tiles: replay failed', err); }
       }));
-      if (n) ggs.debug(`tiles: replayed ${n} of ${live.length}`);
+      if (n) ggs.debug(`tiles: replayed ${n} of ${old.length}`);
       await repaint();
       return n;
     });
     return scheduled;
   }
 
-  ggs.tiles = { replay, repaint, count: () => records.length };
+  ggs.tiles = { filter, upload, live, replay, repaint, count: () => records.length };
 })();
