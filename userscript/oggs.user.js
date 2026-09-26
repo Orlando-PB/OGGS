@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OGGS - Orlando's GeoGuessr Scripts
 // @namespace    https://github.com/Orlando-PB/OGGS
-// @version      1.4.0
+// @version      1.4.1
 // @description  A collection of fun GeoGuessr extension scripts. Made by Orlando with love.
 // @author       Orlando
 // @homepageURL  https://github.com/Orlando-PB/OGGS
