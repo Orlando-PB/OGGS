@@ -1,7 +1,8 @@
 // Userscript only: stands in for the extension's bridge.js and popup. Settings live in
 // this site's localStorage ("ggs-settings") and reach the scripts through the same
 // postMessage the extension uses. The board and the text detector are loaded from BASE.
-// Alt+O, or the OGGS tab bottom left, opens the settings panel.
+// Alt+O (Option+O on a Mac), or the OGGS tab bottom left, opens the settings panel; the tab
+// can be hidden from the panel ("ggs-hide-tab" in localStorage) for recording.
 (() => {
   const ggs = (globalThis.__ggs ??= {});
   const BASE = 'https://oggs.orlandopb.com/';
@@ -12,7 +13,9 @@
   window.addEventListener('message', e => { if (e.source === window && e.data?.ggs === 'hello') send(); });
 
   const CSS = `__POPUP_CSS__`;
-  let panel = null, form = null;
+  const HIDE = 'ggs-hide-tab';
+  let panel = null, form = null, tab = null;
+  const showTab = () => { if (tab) tab.style.display = localStorage.getItem(HIDE) === '1' ? 'none' : ''; }; // inline `all: initial` would beat the hidden attribute
   function open() {
     if (panel) { panel.show(!panel.visible); return; }
     panel = ggs.ui.panel({ id: 'settings', title: "Orlando's GeoGuessr Scripts", css: `
@@ -28,19 +31,27 @@
       send();
     } });
     ggs.onStatus((id, text) => form.setStatus(id, text));
+    panel.$('.body').insertAdjacentHTML('beforeend', `
+      <label class="hide-tab" style="display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0, 0, 0, .12); font-size: 12px; cursor: pointer;">
+        <input type="checkbox"> Hide the OGGS tab (open with Alt+O, Option+O on a Mac)</label>`);
+    const box = panel.$('.hide-tab input');
+    box.checked = localStorage.getItem(HIDE) === '1';
+    box.addEventListener('change', () => { try { localStorage.setItem(HIDE, box.checked ? '1' : '0'); } catch {} showTab(); });
     panel.clamp();
   }
 
   const ready = () => {
     ggs.hotkey(e => e.altKey && e.code === 'KeyO', open);
-    const tab = document.createElement('button');
+    tab = document.createElement('button');
     tab.setAttribute('data-ggs-ui', 'tab');
     tab.textContent = 'OGGS';
-    tab.title = 'OGGS settings (Alt+O)';
-    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 96px; z-index: 2147483000; padding: 6px 10px 6px 8px;' +
+    tab.title = 'OGGS settings (Alt+O, Option+O on a Mac)';
+    // bottom-left corner, over the Street View "Google" mark
+    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000; padding: 6px 10px 6px 8px;' +
       ' border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e; font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;' +
       ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
     tab.addEventListener('click', open);
+    showTab();
     document.body.append(tab);
   };
   if (document.body) queueMicrotask(ready); else document.addEventListener('DOMContentLoaded', ready);

@@ -18,7 +18,7 @@ Click the OGGS icon in the toolbar to switch scripts on and off, then start a Ge
 
 1. Install Tampermonkey (or Violentmonkey).
 2. Open [oggs.user.js](https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js) and click **Install**.
-3. On geoguessr.com, settings are behind the yellow **OGGS** tab at the bottom left, or **Alt+O**.
+3. On geoguessr.com, settings are behind the yellow **OGGS** tab at the bottom left, or **Alt+O** (Option+O on a Mac). Recording? Tick *Hide the OGGS tab* in the panel and use the shortcut.
 
 Updates come automatically in both cases.
 
