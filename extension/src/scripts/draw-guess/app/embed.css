@@ -1,0 +1,30 @@
+/* Fits the country-matcher page into the in-game overlay iframe: just the board, no side panel. */
+/* The stage follows the frame's width; the frame's height follows the board (shim.js
+   reports it to main.js), so there's no blank space under it. */
+:root { --stage: calc(100vw - 40px); }
+.toolbar:not(:has(> :not([hidden]))) { display: none; } /* after a guess there are no buttons */
+/* Guess looks like GeoGuessr's own (green, bold italic capitals), since that one is hidden. */
+#guessBtn { background: linear-gradient(180deg, #8fd33c 0%, #6cb928 55%, #58a31d 100%); border: 0; color: #fff;
+            font-weight: 800; font-style: italic; text-transform: uppercase; letter-spacing: .04em; padding: 9px 26px;
+            box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), 0 2px 6px -2px rgba(62, 120, 20, .6);
+            text-shadow: 0 1px 1px rgba(0, 0, 0, .25); }
+#guessBtn:hover:not(:disabled) { filter: brightness(1.07); }
+#guessBtn:disabled { filter: saturate(.55); opacity: .55; }
+/* Result card: right or wrong (shim.js), instead of "Your guess is in..." */
+.kicker.ok { color: #2b8a3e; font-weight: 800; }
+.kicker.bad { color: #c92a2a; font-weight: 800; }
+.kicker b { color: var(--ink); }
+html, body { height: 100%; overflow: hidden; }
+.wrap { max-width: none; height: 100%; padding: 10px; }
+.wrap > h1, .wrap > .sub, .hint, .side { display: none !important; }
+.grid { grid-template-columns: auto !important; justify-content: end; height: 100%; }
+.board { padding: 10px; }
+.stage { width: var(--stage); height: var(--stage); }
+.stage > canvas { background: radial-gradient(circle, rgba(255, 255, 255, .55) 1px, transparent 1.2px) 0 0 / 22px 22px, #cfe7f5; }
+.runners ol { list-style: none; margin: 0 0 2px; padding: 0; }
+.runners li { display: grid; grid-template-columns: minmax(0, 1fr) 70px 34px; gap: 8px; align-items: center;
+              font-size: 13px; line-height: 1.5; }
+.runners i { font-style: normal; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.runners em { height: 4px; background: #efe9dc; border-radius: 2px; overflow: hidden; }
+.runners em b { display: block; height: 100%; background: var(--match); }
+.runners u { text-decoration: none; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }

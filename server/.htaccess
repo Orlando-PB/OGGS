@@ -1,0 +1,20 @@
+Options -Indexes
+<FilesMatch "\.(sqlite|ini|md)$">
+  Require all denied
+</FilesMatch>
+
+# The board (src/scripts/draw-guess/app/) and the text detector (src/scripts/lying-signs/)
+# are served from here for the userscript; the extension carries its own copies. They're
+# fetched from geoguessr.com, so they need CORS, and they're big, so they're cached.
+AddType application/wasm .wasm
+AddType text/javascript .mjs
+AddType application/octet-stream .onnx .bin
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|mjs|wasm|onnx|json|bin|html|css)$">
+    Header set Access-Control-Allow-Origin "*"
+    Header set Cache-Control "public, max-age=86400"
+  </FilesMatch>
+  <FilesMatch "\.user\.js$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
