@@ -24,15 +24,27 @@ Updates come automatically in both cases.
 
 ## Scripts
 
-**Draw your country.** A drawing board replaces the guess map. Draw the country you think you're in, click where you think you are and press Guess. The drawing snaps onto the closest real country and the result screen shows how well it matched. *Hard mode* matches against all 193 UN members.
+**Minecraft world.** Redraws the world in Minecraft.
 
-**Minecraft world.** Each location is redrawn as Minecraft and wrapped back over the Street View sphere. Only a new location generates, so it works best in *no move*. There's a daily limit of rounds per person; the popup shows what's left. *High quality* is slower and much cleaner.
+![Minecraft world](docs/screenshots/screenshot-1-minecraft.png)
 
-**Radio mode.** Street View is hidden and a live radio station from near the round's location plays instead. The station is revealed after you guess. *Streamer / YouTube mode* sticks to talk stations and skips music.
+**Lying signs.** Replaces Street View text with a set of options: another language, another script, or scrambled.
 
-**Lying signs.** Text on signs is rewritten in another script or language, so language clues lie to you. Pick a script in the popup, or leave it on *Random* for one per location.
+![Lying signs](docs/screenshots/screenshot-5-lying-signs.png)
 
-**Add new Ghana black tape.** Puts the black roof-bar tape from old Ghana coverage onto the new Gen 4 coverage.
+**Ghana black tape.** Adds the Ghana black tape overlay to new Ghana coverage.
+
+![Ghana black tape](docs/screenshots/screenshot-4-ghana-tape.png)
+
+**Draw your country.** Replaces the guess map with a drawing board. Draw the country you think you're in.
+
+![Draw your country](docs/screenshots/screenshot-2-draw-ingame.png)
+
+**Radio mode.** You hear a live local radio station from near the round's location to guess from.
+
+![Radio mode](docs/screenshots/screenshot-3-radio-ingame.png)
+
+All scripts switch off automatically in competitive modes. These modifiers are designed for fun and do not endorse cheating.
 
 ## Privacy
 
