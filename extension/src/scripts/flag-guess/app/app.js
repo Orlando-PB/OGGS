@@ -117,6 +117,8 @@
   });
   paper.addEventListener('pointermove', e => {
     if (!drawing) return;
+    // Released outside the iframe: no pointerup arrives, so stop on the first buttonless move.
+    if (!(e.buttons & 1)) { drawing = null; return; }
     const p = paperPos(e);
     line(drawing, p, WIDTHS[tool], pots[color]);
     drawing = p;
@@ -149,7 +151,7 @@
   $('clear').addEventListener('click', () => { saveUndo(); px.fill(pots[0]); show(); });
 
   // ---------- matching ----------
-  // A grid plus its half-size version (for drawings a little off) and colour shares.
+  // A grid plus its half-size version (for drawings a little off), colour shares and stripes.
   function prep(grid) {
     const { w, h } = data, n = pots.length;
     const half = new Uint8Array((w / 2) * (h / 2));
@@ -162,7 +164,32 @@
     }
     const share = new Array(n).fill(0), fam = new Array(n).fill(0);
     for (const c of grid) { share[c] += 1 / grid.length; fam[FAMILY[c]] += 1 / grid.length; }
-    return { grid, half, share, fam };
+    return { grid, half, share, fam, stripes: changes(grid, w, h, 1) };
+  }
+
+  // How often the colour changes going down a column and along a row, averaged over 20 of
+  // each. Runs shorter than minRun don't count, so a wobbly edge isn't a stripe. This keeps
+  // thin painted stripes that the cell grid loses: the US with red lines on white is still
+  // striped, not white with a blue corner (Israel, South Korea).
+  function changes(img, w, h, minRun) {
+    const count = (get, len) => {
+      let n = 0, cur = get(0), next = -1, run = 0;
+      for (let i = 1; i < len; i++) {
+        const v = get(i);
+        if (v === cur) { next = -1; run = 0; continue; }
+        run = v === next ? run + 1 : 1;
+        next = v;
+        if (run >= minRun) { n++; cur = v; next = -1; run = 0; }
+      }
+      return n;
+    };
+    let down = 0, across = 0;
+    for (let k = 0; k < 20; k++) {
+      const x = Math.floor((k + 0.5) * w / 20), y = Math.floor((k + 0.5) * h / 20);
+      down += count(i => img[i * w + x], h);
+      across += count(i => img[y * w + i], w);
+    }
+    return [down / 20, across / 20];
   }
 
   // The painting cut into the same grid as the flags: each cell takes its most common colour.
@@ -171,6 +198,7 @@
   // space round it as white), so the paper is the only shape there is.
   function paperGrid() {
     const { w, h } = data, n = pots.length, grid = new Uint8Array(w * h);
+    const ink = Uint8Array.from(px, c => potIndex.get(c));
     const span = (size, k, of) => [Math.floor(size * k / of), Math.floor(size * (k + 1) / of)];
     for (let gy = 0; gy < h; gy++) {
       const [ya, yb] = span(PH, gy, h);
@@ -179,17 +207,42 @@
         const v = new Array(n).fill(0);
         for (let y = ya; y < yb; y++) {
           for (let x = xa; x < xb; x++) {
-            const i = potIndex.get(px[y * PW + x]);
+            const i = ink[y * PW + x];
             v[i] += data.palette[i].name === 'Black' ? 0.5 : 1;
           }
         }
         grid[gy * w + gx] = v.indexOf(Math.max(...v));
       }
     }
-    return prep(grid);
+    // Shares and stripes from the paint itself, which thin lines survive.
+    const u = prep(grid), share = new Array(n).fill(0), fam = new Array(n).fill(0);
+    let total = 0;
+    for (const i of ink) {
+      const k = data.palette[i].name === 'Black' ? 0.5 : 1;
+      share[i] += k; fam[FAMILY[i]] += k; total += k;
+    }
+    u.share = share.map(v => v / total);
+    u.fam = fam.map(v => v / total);
+    u.stripes = changes(ink, PW, PH, 8);
+    return u;
   }
 
   const cellScore = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += SIM[a[i]][b[i]]; return s / a.length; };
+  // The same on the full grid, also with the flag moved a row up or down (counting 10% less),
+  // so stripes a row out of step, or red and white swapped, still line up.
+  function slidScore(a, b) {
+    const { w, h } = data;
+    let best = 0;
+    for (const dy of [0, -1, 1]) {
+      let s = 0;
+      for (let y = 0; y < h; y++) {
+        const fy = Math.min(h - 1, Math.max(0, y + dy));
+        for (let x = 0; x < w; x++) s += SIM[a[y * w + x]][b[fy * w + x]];
+      }
+      best = Math.max(best, s / a.length * (dy ? 0.9 : 1));
+    }
+    return best;
+  }
   const overlap = (a, b) => a.reduce((s, v, i) => s + Math.min(v, b[i]), 0);
   // Which colours are used at all (2%+ of the flag), however much of each: a small red
   // circle on white is still Japan's colours, not Cyprus's white, orange and green.
@@ -198,19 +251,54 @@
     const found = (x, y) => x.reduce((s, c) => s + Math.max(...y.map(d => SIM[c][d])), 0);
     return (found(a, b) + found(b, a)) / (a.length + b.length);
   }
+  const near = (a, b) => 1 - Math.abs(a - b) / Math.max(a, b, 1);
+  const sameStripes = (a, b) => (near(a[0], b[0]) + near(a[1], b[1])) / 2;
   function score(u, f) {
     const amounts = 0.5 * overlap(u.share, f.share) + 0.5 * overlap(u.fam, f.fam);
-    return 0.35 * cellScore(u.grid, f.grid) + 0.2 * cellScore(u.half, f.half) + 0.15 * amounts
-      + 0.3 * sameColours(present(u.share), present(f.share));
+    return 0.85 * (0.35 * slidScore(u.grid, f.grid) + 0.2 * cellScore(u.half, f.half) + 0.15 * amounts
+      + 0.3 * sameColours(present(u.share), present(f.share))) + 0.15 * sameStripes(u.stripes, f.stripes);
+  }
+
+  // A slight, hidden lift for the round's real country (OWN points) and countries near it
+  // (up to NEAR points: all of it within 200 km of their border, fading to nothing at
+  // 800 km), like the outline board's. It only settles close calls such as a rough US flag
+  // against Liberia's; a clearly different flag still wins. The % shown stays the real one.
+  const OWN = 2, NEAR = 1.5, NEAR_FULL = 200, NEAR_ZERO = 800;
+  const inside = ([x, y], ring) => {
+    let c = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  function lift({ lat, lng }) {
+    const out = {}, p = [lng, lat], k = Math.cos(lat * Math.PI / 180), KM = 111.2;
+    for (const [code, polys] of Object.entries(geo)) {
+      if (polys.some(([outer, ...holes]) => inside(p, outer) && !holes.some(h => inside(p, h)))) {
+        out[code] = OWN / 100;
+        continue;
+      }
+      let d2 = Infinity;
+      for (const [outer] of polys) {
+        for (const [x, y] of outer) {
+          let dx = Math.abs(x - lng); if (dx > 180) dx = 360 - dx;
+          d2 = Math.min(d2, (dx * k) ** 2 + (y - lat) ** 2);
+        }
+      }
+      const w = 1 - (Math.sqrt(d2) * KM - NEAR_FULL) / (NEAR_ZERO - NEAR_FULL);
+      if (w > 0) out[code] = Math.min(1, w) * NEAR / 100;
+    }
+    return out;
   }
 
   // The country whose flag is closest to the painting.
   function bestMatch() {
-    const u = paperGrid();
+    const u = paperGrid(), near = answerLL ? lift(answerLL) : {};
     let best = null;
     data.flags.forEach((f, i) => {
-      const s = score(u, flagGrids[i]);
-      if (!best || s > best.s) best = { ...f, s };
+      const s = score(u, flagGrids[i]), lifted = s + (near[f.country ?? f.code] ?? 0);
+      if (!best || lifted > best.lifted) best = { ...f, s, lifted };
     });
     return { ...best, score: Math.round(best.s * 100) };
   }

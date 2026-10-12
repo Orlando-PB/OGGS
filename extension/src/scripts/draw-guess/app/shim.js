@@ -254,6 +254,12 @@
       if (shapes().length) { pinXY = p; pinShape = pinLoop(p); }
     }, true);
 
+    // A button released outside the iframe never sends pointerup here, so a move with no
+    // button held ends the stroke instead of carrying on drawing.
+    cv.addEventListener('pointermove', e => {
+      if (current && !(e.buttons & 1)) { e.stopImmediatePropagation(); endStroke(); }
+    }, true);
+
     // Enter guesses straight away instead of moving to the app's pin step.
     window.addEventListener('keydown', e => {
       if (e.key !== 'Enter' || stage !== 'draw' || e.target.tagName === 'SELECT') return;
