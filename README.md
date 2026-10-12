@@ -40,7 +40,7 @@ Updates come automatically in both cases.
 
 **Add new Ghana black tape.** Paints Ghana's black tape on new Gen 4 coverage, which doesn't have it.
 
-![Ghana black tape](docs/screenshots/screenshot-4-ghana-tape.png)
+![Ghana black tape](docs/screenshots/ghana-tape.png)
 
 **Draw your country.** Replaces the guess map with a drawing board. Sketch the country you think you're in and pin your spot; it snaps to the closest real country, then zooms out to where you really were.
 
@@ -48,9 +48,11 @@ Updates come automatically in both cases.
 
 **Draw the flag.** Replaces the guess map with a paint board. Paint the flag of the country you think you're in, then click your spot in the outline of the country whose flag it matched (by default the guess has to go inside it), and it zooms out to where you really were. Only one of the two drawing boards runs at a time.
 
+![Draw the flag](docs/screenshots/screenshot-3-flag.png)
+
 **Radio mode.** Hides Street View; you guess from a live radio station near the round's location.
 
-![Radio mode](docs/screenshots/screenshot-3-radio-ingame.png)
+![Radio mode](docs/screenshots/screenshot-4-radio-ingame.png)
 
 All scripts switch off in competitive modes. They're for fun, not for cheating.
 

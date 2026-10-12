@@ -300,7 +300,7 @@
     const box = bounds(all.map(proj));
     const back = ([X, Y]) => ({ lat: (2 * Math.atan(Math.exp(-Y * DEG)) - Math.PI / 2) / DEG, lng: ((X + 540) % WORLD) - 180 });
     return { mine: lands.filter(l => l.code === code), others: lands.filter(l => l.code !== code),
-             box, wrapX, proj, fit, back, at: fit(box, 0.5) };
+             box, wrapX, proj, fit, back, start: fit(box, 0.5) };
   }
   const toScreen = ([X, Y], at = view.at) => [at.x + X * at.s, at.y + Y * at.s];
   const fromScreen = ([x, y], at = view.at) => [(x - at.x) / at.s, (y - at.y) / at.s];
@@ -320,10 +320,11 @@
   }
 
   // In a country made of specks (Maldives, Tuvalu), each speck gets a ring round it: their
-  // centres in canvas pixels.
+  // centres in canvas pixels. Specks are judged at the starting zoom, so zooming out after the
+  // guess doesn't ring a big country's small islands.
   const SPECK_R = 12;
   function specks() {
-    const span = l => Math.max(l.box[2] - l.box[0], l.box[3] - l.box[1]) * view.at.s;
+    const span = l => Math.max(l.box[2] - l.box[0], l.box[3] - l.box[1]) * view.start.s;
     if (Math.max(...view.mine.map(span)) >= 60) return [];
     return view.mine.filter(l => span(l) < 8).map(l => toScreen([view.wrapX(l.first[0]), l.first[1]]));
   }
@@ -408,6 +409,7 @@
     chosen = r;
     pin = answerAt = null;
     view = makeView(r.country ?? r.code); // England, Scotland, Wales: the UK outline
+    view.at = view.start;
     showMini(r);
     $('guess').disabled = true;
     setStage('pick');
@@ -534,6 +536,7 @@
   // The scene fades in with the painted flag already at the top of the pole; it starts
   // still, picks up the wind, then turns into the matched country's flag.
   function raise(best) {
+    octx.clearRect(0, 0, pole.width, pole.height); // last round's flag would show for a frame
     setStage('raise');
     pole.classList.remove('out');
     skipRaise = false;
