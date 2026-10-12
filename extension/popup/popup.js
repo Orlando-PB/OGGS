@@ -9,8 +9,13 @@ Promise.all(metaFiles.map(p => new Promise((res, rej) => {
   document.head.append(s);
 }))).then(() => Promise.all([chrome.storage.sync.get('settings'), chrome.storage.local.get('status')]))
   .then(([{ settings = {} }, { status = {} }]) => {
-    const form = globalThis.__ggs.settingsForm(list, { settings, save: () => chrome.storage.sync.set({ settings }) });
+    // `current` is the object the form edits; changes made elsewhere (the in-page panel) replace it
+    let current = settings;
+    const form = globalThis.__ggs.settingsForm(list, { settings, save: () => chrome.storage.sync.set({ settings: current }) });
     const show = s => { for (const [id, text] of Object.entries(s ?? {})) form.setStatus(id, text); };
     show(status);
-    chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.status) show(changes.status.newValue); });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.status) show(changes.status.newValue);
+      if (area === 'sync' && changes.settings) form.update(current = changes.settings.newValue ?? {});
+    });
   });

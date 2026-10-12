@@ -1,5 +1,7 @@
 // Starts and stops each script to match the settings, live. In competitive games
-// (ggs.game.competitive) every script is stopped, whatever the settings say.
+// (ggs.game.competitive) every script is stopped, whatever the settings say. Scripts that
+// can't run together (a meta's `excludes`, either way round) never do: the first one in the
+// registry wins, whatever the stored settings say.
 (() => {
   const ggs = globalThis.__ggs;
   const running = new Map(); // id -> { stop, update? }
@@ -7,17 +9,21 @@
 
   function apply() {
     if (!settings) return;
+    const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
+      if (meta.ui) continue; // a settings-only entry, no script behind it
       const impl = ggs.scripts[meta.id];
       if (!impl) { ggs.log(`no implementation loaded for "${meta.id}"`); continue; }
       const cfg = ggs.config(meta, settings);
-      const on = cfg.enabled && !blocked;
+      const clash = [...on.values()].some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+      const wanted = cfg.enabled && !blocked && !clash;
+      if (wanted) on.set(meta.id, meta);
       const inst = running.get(meta.id);
       try {
-        if (on && !inst) {
+        if (wanted && !inst) {
           running.set(meta.id, impl.start(cfg));
           ggs.debug(`started ${meta.id}`);
-        } else if (!on && inst) {
+        } else if (!wanted && inst) {
           inst.stop();
           running.delete(meta.id);
           ggs.debug(`stopped ${meta.id}`);
@@ -46,7 +52,14 @@
       if (competitive !== blocked) { blocked = competitive; apply(); }
     });
   }
-  setInterval(onPath, 500);
+  // The game mode goes out like a status line ('_mode'), so the settings form can hide
+  // options that do nothing in it (an option's hideIn).
+  let mode = null;
+  setInterval(() => {
+    onPath();
+    const now = ggs.game.context()?.mode ?? '';
+    if (now !== mode) ggs.status('_mode', mode = now);
+  }, 500);
 
   ggs.onSettings(all => {
     settings = all;

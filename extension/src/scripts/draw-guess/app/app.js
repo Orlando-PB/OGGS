@@ -1,4 +1,4 @@
-// Copied from country-matcher/static/index.html by tools/sync_draw.py - edit it there.
+// Copied from country-matcher/static/index.html by dev/tools/sync_draw.py - edit it there.
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -244,16 +244,34 @@ function nearestOnRing(p, ring) {
 
 // targets: full-detail country rings in canvas coords. Returns the pin's final canvas position.
 function startMorph(targets) {
-  const bySize = arr => arr.map((p, idx) => ({ pts: resample(p), full: p, idx }))
-    .sort((x, y) => Math.abs(signedArea(y.pts)) - Math.abs(signedArea(x.pts)));
-  const from = bySize(shapes()), to = bySize(targets);
-  // the loop holding the pin must map onto a real country ring
-  const pinned = from.findIndex(f => f.idx === pinShape);
-  if (pinned >= to.length) [from[pinned], from[to.length - 1]] = [from[to.length - 1], from[pinned]];
+  const prep = arr => arr.map((p, idx) => {
+    const pts = resample(p);
+    return { pts, full: p, idx, c: centroid(pts), area: Math.abs(signedArea(pts)) };
+  });
+  const loops = prep(shapes()), rings = prep(targets);
+  // The country sits over the drawing (same box), so each drawn loop goes to the country
+  // part nearest to where it was drawn, of a similar size: drawing North Island above
+  // South Island morphs each onto its own island, whichever is bigger. Greedy on a cost of
+  // distance (in drawing sizes) plus size mismatch; the loop holding the pin goes first, so
+  // it always gets a real part. Parts left over fade in, loops left over fade out.
+  const [x0, y0, x1, y1] = bbox(shapes()), size = Math.hypot(x1 - x0, y1 - y0) || 1;
+  const cost = (f, g) => Math.hypot(f.c[0] - g.c[0], f.c[1] - g.c[1]) / size + 0.25 * Math.abs(Math.log((f.area + 1) / (g.area + 1)));
+  const match = new Map(), used = new Set();
+  const pick = f => {
+    let best = null;
+    for (const g of rings) if (!used.has(g) && (!best || cost(f, g) < cost(f, best))) best = g;
+    if (best) { match.set(f, best); used.add(best); }
+  };
+  const pinned = loops.find(f => f.idx === pinShape);
+  if (pinned) pick(pinned);
+  const rest = loops.filter(f => f !== pinned).flatMap(f => rings.map(g => [cost(f, g), f, g])).sort((p, q) => p[0] - q[0]);
+  for (const [, f, g] of rest) if (!match.has(f) && !used.has(g)) { match.set(f, g); used.add(g); }
+  const from = loops.slice(), to = loops.map(f => match.get(f));
+  for (const g of rings) if (!used.has(g)) { from.push(undefined); to.push(g); }
 
   const pairs = [];
   let pin = null;
-  for (let i = 0; i < Math.max(from.length, to.length); i++) {
+  for (let i = 0; i < from.length; i++) {
     const f = from[i], g = to[i];
     if (f && g) {
       const pair = { a: f.pts, b: align(f.pts, g.pts) };

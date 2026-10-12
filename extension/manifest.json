@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OGGS - Orlando's GeoGuessr Scripts",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "A collection of fun GeoGuessr extension scripts. Made by Orlando with love.",
   "permissions": [
     "storage"
@@ -42,12 +42,22 @@
         "src/registry.js",
         "src/core/base.js",
         "src/core/maps.js",
+        "src/core/lock.js",
         "src/core/game.js",
         "src/core/ui.js",
         "src/core/tiles.js",
+        "src/core/redraw.js",
+        "src/core/board.js",
+        "src/form.js",
+        "src/panel.js",
+        "src/scripts/nmpz/meta.js",
+        "src/scripts/clean/meta.js",
+        "src/scripts/panel/meta.js",
+        "src/scripts/nmpz/main.js",
         "src/scripts/draw-guess/meta.js",
-        "src/scripts/draw-guess/summary.js",
         "src/scripts/draw-guess/main.js",
+        "src/scripts/flag-guess/meta.js",
+        "src/scripts/flag-guess/main.js",
         "src/scripts/radio/meta.js",
         "src/scripts/radio/shapes.js",
         "src/scripts/radio/main.js",
@@ -58,6 +68,9 @@
         "src/scripts/lying-signs/main.js",
         "src/scripts/minecraft/meta.js",
         "src/scripts/minecraft/main.js",
+        "src/scripts/gradient/meta.js",
+        "src/scripts/gradient/main.js",
+        "src/scripts/clean/main.js",
         "src/boot.js"
       ]
     }
@@ -68,7 +81,10 @@
         "https://www.geoguessr.com/*"
       ],
       "resources": [
+        "popup/popup.css",
+        "icons/icon-128.png",
         "src/scripts/draw-guess/app/*",
+        "src/scripts/flag-guess/app/*",
         "src/scripts/lying-signs/worker.js",
         "src/scripts/lying-signs/vendor/*"
       ]

@@ -1,12 +1,13 @@
 <?php
 // OGGS Minecraft world. The page names a Street View panorama; this fetches its tiles from
-// Google, stitches them into one picture, sends that to OpenAI's image edit API with the
-// key it holds, and returns the redrawn picture. Runs on the IONOS webspace (~/oggs is the
-// web root; secrets and the usage database live in ~/oggs_private).
+// Google, stitches them into one picture, sends that to OpenAI's image edit API with the key
+// it holds, and returns the redrawn picture. Runs on the IONOS webspace (~/oggs is the web
+// root; secrets and the usage database live in ~/oggs_private).
 //
 //   GET  ?caps=1&client=<id>&code=<code>
 //        -> { normal, hq, codeOk, log: { normal: [ms timestamps], hq: [...] } }
-//   POST pano=<panorama id> worldWidth=<px> tileWidth=<px> mode=normal|hq client=<id> code=<code>
+//   POST pano=<panorama id> worldWidth=<px> tileWidth=<px> mode=normal|hq
+//        style=minecraft client=<id> code=<code>
 //        -> { image: "data:image/jpeg;base64,...", usage, ms, log } or { error }
 //
 // What comes in: a panorama id (public; the same string Google's own tile URLs carry), the
@@ -15,8 +16,8 @@
 // out: the generated JPEG plus the day's usage count for that client id. The usage database
 // keeps (time, client id, IP address, mode) for two days, for the daily limits only.
 //
-// Limits are per client id over a rolling 24 h, same shape as the page's own log so both
-// sides can merge them. Per-IP and global daily caps sit behind that so fresh client ids
+// Limits are per client id over a rolling 24 h, in the same shape as the page's own log so
+// the two can be merged. Per-IP and global daily caps sit behind that so fresh client ids
 // can't run up the bill.
 declare(strict_types=1);
 header('Content-Type: application/json');
@@ -34,9 +35,14 @@ const MODES = [
   'normal' => ['model' => 'gpt-image-2.5-flare', 'quality' => 'low', 'size' => '2048x1024', 'input' => 1024],
   'hq' => ['model' => 'gpt-image-2.5-sunburst', 'quality' => 'high', 'size' => '3840x1920', 'input' => 0], // 0: as stitched
 ];
-const CAPS = ['normal' => 100, 'hq' => 10, 'hqWithCode' => 50]; // per client, per rolling 24 h
-const IP_CAPS = ['normal' => 200, 'hq' => 60];                    // per IP address
-const GLOBAL_CAPS = ['normal' => 1000, 'hq' => 150];              // everyone together
+const CAPS = ['normal' => 100, 'hq' => 10];                        // per client, per rolling 24 h
+// With the code the limit is a spend instead: CODE_BUDGET a day per client, at these per-round
+// costs, under a ceiling per mode so a bad estimate can't run away.
+const COST = ['normal' => 0.008, 'hq' => 0.09];                    // USD, roughly
+const CODE_BUDGET = 6.5;                                           // USD per client per rolling 24 h
+const CODE_CAPS = ['normal' => 800, 'hq' => 70];
+const IP_CAPS = ['normal' => 900, 'hq' => 100];                    // per IP address
+const GLOBAL_CAPS = ['normal' => 1500, 'hq' => 200];               // everyone together
 const DAY = 86400;
 const ZOOM = 2;      // tile zoom to stitch: 2048x1024 on Gen 4, a bit less on older coverage
 const MAX_TILES = 64;
@@ -44,14 +50,18 @@ const TILE_HOSTS = [
   'https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=apiv3&nbt=1&fover=2&panoid=%s&x=%d&y=%d&zoom=%d',
   'https://cbk0.google.com/cbk?output=tile&panoid=%s&x=%d&y=%d&zoom=%d',
 ];
-const PROMPT = 'Redraw this equirectangular 360° panorama as an in-game screenshot from Minecraft. '
+const PROMPTS = ['minecraft' => 'Redraw this equirectangular 360° panorama as an in-game screenshot from Minecraft. '
   . 'Everything is built from whole blocks on one strict cubic grid, all the same size, with clean hard edges; the only '
   . 'exceptions are stairs, slabs, fences, doors, trapdoors and glass panes. No curves, no slopes, no tilted or '
   . 'half-merged blocks, and nothing at a finer scale than one block. Use the default 16x16 pixel textures exactly as '
   . 'they look in the game: sharp pixels, no blur, no smoothing, no painterly detail; block faces are flat with the '
   . 'normal Minecraft lighting. Feel free to use blocks from the newer updates and the level of detail and style of '
   . 'really impressive builds; it does not need to look bare-bones or like old Minecraft. Keep the same layout and '
-  . 'camera, still equirectangular edge to edge. Simplify the scene where needed so every block reads clearly.';
+  . 'camera, still equirectangular edge to edge. Simplify the scene where needed so every block reads clearly.'];
+
+function promptFor(): string {
+  return PROMPTS['minecraft'];
+}
 
 function fail(int $status, string $msg): never {
   http_response_code($status);
@@ -63,7 +73,6 @@ $client = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($_REQUEST['client'] ?? '
 if (strlen($client) < 8 || strlen($client) > 64) fail(400, 'bad client id');
 $code = trim((string)($_REQUEST['code'] ?? ''));
 $codeOk = $code !== '' && !empty($config['HQ_CODE']) && hash_equals((string)$config['HQ_CODE'], $code);
-$caps = ['normal' => CAPS['normal'], 'hq' => $codeOk ? CAPS['hqWithCode'] : CAPS['hq']];
 $ip = $_SERVER['REMOTE_ADDR'] ?? '?';
 
 // ---- usage database ----
@@ -87,6 +96,15 @@ function countWhere(PDO $db, string $where, array $args): int {
   return (int)$q->fetchColumn();
 }
 
+// The page works out what's left as cap minus its count, so with the code each mode's cap
+// is "used so far plus what the remaining budget buys", never above the ceiling.
+$used = ['normal' => countWhere($db, 'client = ? AND mode = ?', [$client, 'normal']), 'hq' => countWhere($db, 'client = ? AND mode = ?', [$client, 'hq'])];
+$spent = $used['normal'] * COST['normal'] + $used['hq'] * COST['hq'];
+$caps = [];
+foreach (['normal', 'hq'] as $m) {
+  $caps[$m] = $codeOk ? min(CODE_CAPS[$m], $used[$m] + (int)floor(max(0, CODE_BUDGET - $spent) / COST[$m])) : CAPS[$m];
+}
+
 if (isset($_GET['caps']) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
   echo json_encode($caps + ['codeOk' => $codeOk, 'log' => logFor($db, $client)]);
   exit;
@@ -95,15 +113,17 @@ if (isset($_GET['caps']) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
 // ---- generate ----
 $mode = (string)($_POST['mode'] ?? 'normal');
 if (!isset(MODES[$mode])) fail(400, 'unknown mode');
+$style = (string)($_POST['style'] ?? 'minecraft');
+if ($style !== 'minecraft') fail(400, 'unknown style');
 $pano = (string)($_POST['pano'] ?? '');
 if (!preg_match('/^[A-Za-z0-9_=-]{8,128}$/', $pano)) fail(400, 'bad panorama id');
 $worldWidth = (int)($_POST['worldWidth'] ?? 0);
 $tileWidth = (int)($_POST['tileWidth'] ?? 0);
 if ($tileWidth < 128 || $tileWidth > 2048 || $worldWidth < $tileWidth || $worldWidth > 65536) fail(400, 'bad panorama size');
 
-if (countWhere($db, 'client = ? AND mode = ?', [$client, $mode]) >= $caps[$mode]) fail(429, 'limit reached for today');
+if ($used[$mode] >= $caps[$mode]) fail(429, 'limit reached for today');
 if (countWhere($db, 'ip = ? AND mode = ?', [$ip, $mode]) >= IP_CAPS[$mode]) fail(429, 'limit reached for today');
-if (countWhere($db, 'mode = ?', [$mode]) >= GLOBAL_CAPS[$mode]) fail(503, 'Minecraft is fully booked today, try again tomorrow');
+if (countWhere($db, 'mode = ?', [$mode]) >= GLOBAL_CAPS[$mode]) fail(503, 'Fully booked today, try again tomorrow');
 
 set_time_limit(300);
 $t0 = microtime(true);
@@ -122,7 +142,7 @@ curl_setopt_array($ch, [
   CURLOPT_TIMEOUT => 280,
   CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $config['OPENAI_API_KEY']],
   CURLOPT_POSTFIELDS => [
-    'model' => $m['model'], 'prompt' => PROMPT, 'size' => $m['size'], 'quality' => $m['quality'],
+    'model' => $m['model'], 'prompt' => promptFor(), 'size' => $m['size'], 'quality' => $m['quality'],
     'n' => '1', 'output_format' => 'jpeg',
     'image' => new CURLFile($jpeg, 'image/jpeg', 'pano.jpg'),
   ],
@@ -136,8 +156,8 @@ $b64 = $j['data'][0]['b64_json'] ?? null;
 if ($status !== 200 || !$b64) {
   $db->prepare('UPDATE usage_log SET ok = 0 WHERE rowid = ?')->execute([$rowId]);
   $msg = $j['error']['message'] ?? ($curlErr ?: "OpenAI HTTP $status");
-  error_log("oggs minecraft: $msg");
-  fail(502, 'Minecraft isn\'t available right now, try again later');
+  error_log("oggs $style: $msg");
+  fail(502, 'Not available right now, try again later');
 }
 echo json_encode([
   'image' => 'data:image/jpeg;base64,' . $b64,

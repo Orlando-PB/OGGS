@@ -1,8 +1,8 @@
 // JS port of country-matcher's /api/match (app.py), so the extension needs no server.
 // Country masks, outlines, geography and tuning constants are exported from app.py by
-// tools/sync_draw.py; only the drawing side (rasterise + score) is re-implemented here.
-// Keep it in step with app.py's rasterize(), drawing_masks() and match() —
-// `node tools/check_parity.mjs` compares the two.
+// dev/tools/sync_draw.py; only the drawing side (rasterise + score) is re-implemented here.
+// Mirrors app.py's rasterize(), drawing_masks() and match(); `node dev/tools/check_parity.mjs`
+// compares the two.
 const DrawMatcher = (() => {
   // Separable Gaussian blur on an n*n image, edges clamped, rounded like PIL's 8-bit output.
   function gaussian(src, n, sigma) {
@@ -70,6 +70,7 @@ const DrawMatcher = (() => {
   function create(meta, masksU8, geo, prior = null) {
     const { grid: G, fill: FILL, smoothSigma, sizeWeight, sizeTol, sizeSpan, rotations, stretches, entries } = meta;
     const G2 = G * G, N = entries.length;
+    const dataOnly = new Set(meta.dataOnly ?? []);
     const masks = new Float32Array(masksU8.length);
     for (let i = 0; i < masks.length; i++) masks[i] = masksU8[i] / 255;
 
@@ -139,10 +140,37 @@ const DrawMatcher = (() => {
     const leewayPenalty = (th, s) => 1 - 0.05 * Math.abs(Math.log(s)) - 0.04 * Math.abs(th);
     const ringArea = r => Math.abs(r.reduce((a, [x1, y1], i) => { const [x2, y2] = r[(i + 1) % r.length]; return a + x1 * y2 - x2 * y1; }, 0) / 2);
 
+    // How near each country is to a lon/lat, 0..1: 1 within NEAR_FULL km of its border,
+    // fading to 0 at NEAR_ZERO km. Cached for the last point asked about (one per round).
+    const NEAR_FULL = 200, NEAR_ZERO = 800;
+    let nearCache = { key: '', near: null };
+    function nearness(lat, lng) {
+      const key = `${lat},${lng}`;
+      if (nearCache.key === key) return nearCache.near;
+      const near = {}, k = Math.cos(lat * Math.PI / 180), KM = 111.2;
+      for (const [code, polys] of Object.entries(geo)) {
+        let d2 = Infinity;
+        for (const [outer] of polys) {
+          for (const [x, y] of outer) {
+            let dx = Math.abs(x - lng); if (dx > 180) dx = 360 - dx;
+            const d = (dx * k) ** 2 + (y - lat) ** 2;
+            if (d < d2) d2 = d;
+          }
+        }
+        const w = 1 - (Math.sqrt(d2) * KM - NEAR_FULL) / (NEAR_ZERO - NEAR_FULL);
+        if (w > 0) near[code] = Math.min(1, w);
+      }
+      nearCache = { key, near };
+      return near;
+    }
+
     // bonus: { code, points } - extension only, not in app.py: makes sure that country is
     // in the pool, gives it the leeway above, and then, if it's behind the leader by no more
-    // than `points` percentage points, lifts it past the leader: by about 1 point if it was
-    // nearly `points` behind, up to about 5 if it was just behind (see below).
+    // than `points` percentage points, lifts it past the leader (see below).
+    // bonus.lat/lng/near (optional): the round's location. Countries near it then get up to
+    // `near` percentage points added (scaled by nearness), so a drawing of an easier neighbour
+    // lands next door rather than on a far-off lookalike. It never overtakes the round's
+    // country when that one leads.
     // limit: how many results to return (default 8; tools pass more).
     // target: a country code - extension only: also report that country's score (as
     // `target`), whether or not it made the top 8 or the pool.
@@ -153,6 +181,11 @@ const DrawMatcher = (() => {
       if (!pool) return { error: `Unknown map '${map}'` };
       const allowed = new Set(pool.codes);
       if (bonus) allowed.add(bonus.code);
+      // with the round's location known, countries near it may win too, in the map's pool or not
+      // (a drawing of Namibia in an Angola round, when the pool only has GeoGuessr's coverage).
+      // meta.dataOnly (tiny territories such as the Vatican) only ever win as the round's country.
+      const near = bonus && typeof bonus.lat === 'number' && bonus.near > 0 ? nearness(bonus.lat, bonus.lng) : null;
+      if (near) for (const c in near) if (!dataOnly.has(c)) allowed.add(c);
 
       const best = new Float64Array(N).fill(-1);
       for (const [th, s, mask] of drawingMasks(rings)) {
@@ -220,9 +253,16 @@ const DrawMatcher = (() => {
           else if (allowed.has(en.code) && best[i] > top) top = best[i];
         });
         // Lifted past the leader by a lead that depends on how close it was: 0.8 points plus
-        // 0.3 of the unused bonus (with 15: just behind -> ~5 points ahead; nearly 15 behind -> ~1).
-        const gap = top - best[mine], room = bonus.points / 100 - gap;
-        if (mine >= 0 && gap > 0 && room >= 0) best[mine] = Math.min(1, top + 0.008 + 0.3 * room);
+        // 0.3 of the unused bonus (just behind -> 0.8 + 0.3 * points; nearly `points` behind -> 0.8).
+        const gap = mine >= 0 ? top - best[mine] : 0, room = bonus.points / 100 - gap;
+        if (gap > 0 && room >= 0) best[mine] = Math.min(1, top + 0.008 + 0.3 * room);
+        if (near) {
+          const leads = mine >= 0 && best[mine] >= top, ceil = leads ? best[mine] - 0.001 : 1;
+          entries.forEach((en, i) => {
+            const w = near[en.code];
+            if (w && en.code !== bonus.code) best[i] = Math.max(best[i], Math.min(ceil, best[i] + w * bonus.near / 100));
+          });
+        }
       }
 
       const perCountry = new Map();
@@ -245,8 +285,7 @@ const DrawMatcher = (() => {
       if (targetCode) {
         let ti = -1;
         entries.forEach((en, i) => { if (en.code === targetCode && (ti < 0 || best[i] > best[ti])) ti = i; });
-        if (ti >= 0) target = { code: targetCode, name: entries[ti].name, score: Math.round(best[ti] * 1000) / 10,
-                                outline: entries[ti].outline };
+        if (ti >= 0) target = { code: targetCode, name: entries[ti].name, score: Math.round(best[ti] * 1000) / 10 };
       }
       return { grid: G, results, total: perCountry.size, target };
     }

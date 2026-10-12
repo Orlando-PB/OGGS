@@ -54,7 +54,6 @@
     window.addEventListener(type, e => {
       const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
       if (!host) return;
-      host.onGgsKey?.(e);
       e.stopImmediatePropagation();
     }, true);
   }

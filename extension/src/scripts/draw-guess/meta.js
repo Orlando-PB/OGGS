@@ -4,11 +4,10 @@
     name: 'Draw your country',
     description: 'Replaces the guess map with a drawing board. Sketch the country, pin your spot, and it snaps to the closest real country as your guess.',
     defaultEnabled: false,
+    excludes: ['flag-guess'], // one board over the guess map at a time
+    turnsOn: [{ id: 'clean', key: 'google' }], // the guess map is hidden, so its leftover Google bits go too
     options: [
-      // percentage points the round's real country may trail the best match by and still win; 0 = no help
-      { key: 'nudge', label: 'Correct country sensitivity', type: 'slider', min: 0, max: 20, default: 7,
-        marks: ['Off', 'Medium', 'Easier'] },
-      { key: 'hardMode', label: 'Hard mode: matches against all 193 countries', type: 'checkbox', default: false },
+      { key: 'hardMode', label: 'Hard mode: matches against every country and territory (199)', type: 'checkbox', default: false },
     ],
   });
 })();

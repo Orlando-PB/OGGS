@@ -11,7 +11,11 @@
   const GUESS_BUTTON_SELECTORS = ['[data-qa="perform-guess"]', 'button[class*="guess-map_guessButton"]'];
   const first = sels => sels.map(s => document.querySelector(s)).find(Boolean) ?? null;
   const guessMapElement = () => first(GUESS_MAP_SELECTORS);
-  const guessButton = () => first(GUESS_BUTTON_SELECTORS);
+  // Fallback for layouts whose button lost those markers: a button labelled Guess next to the map.
+  const GUESS_AREA = '[class*="guess-map_guessMap"], [class*="guess-map_container"], [class*="guess-map_root"]';
+  const labelledGuess = () => [...(guessMapElement()?.closest(GUESS_AREA) ?? document).querySelectorAll('button')]
+    .find(b => /^\s*guess\s*$/i.test(b.textContent)) ?? null;
+  const guessButton = () => first(GUESS_BUTTON_SELECTORS) ?? labelledGuess();
 
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists;
@@ -85,6 +89,13 @@
     return true;
   }
 
+  // Space is GeoGuessr's own "guess" key; used when the button can't be found.
+  function pressSpace() {
+    for (const type of ['keydown', 'keyup']) {
+      document.body.dispatchEvent(new KeyboardEvent(type, { key: ' ', code: 'Space', keyCode: 32, which: 32, bubbles: true }));
+    }
+  }
+
   // __ggs.maps.debug() in the console shows what was found.
   function debug() {
     const el = guessMapElement();
@@ -94,10 +105,13 @@
       mapViaFiber: el && mapFromFiber(el),
       mapsSeenByHook: created.length,
       guessButton: guessButton(),
+      buttonsNearMap: [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
+        .map(b => `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`).join(' | ') || null,
+      path: location.pathname,
     };
     console.table(Object.fromEntries(Object.entries(info).map(([k, v]) => [k, v ? (v instanceof Element ? v.className || v.tagName : String(v)) : v])));
     return info;
   }
 
-  ggs.maps = { guessMapElement, findGuessMap, placeGuess, submitGuess, guessButton, hook, debug };
+  ggs.maps = { guessMapElement, findGuessMap, placeGuess, submitGuess, pressSpace, guessButton, hook, debug };
 })();

@@ -3,7 +3,7 @@
 // generateMipmap, to know which textures need it again after a re-upload).
 //
 // For each tile upload a record is made ({ gl, name, args, url, key, img, tex, ... }) and
-// the registered filters (minecraft, lying-signs) get a turn, in order, to swap the source
+// the registered filters (redraw, lying-signs, gradient) get a turn, in order, to swap the source
 // for a canvas. A filter that needs time can keep the record and later push a new source
 // into the same texture with upload(rec, source). Uploads of anything else pass straight
 // through. The API never re-uploads a tile already on screen, so replay() loads every
@@ -15,7 +15,7 @@
   const records = [];
   const mipTex = new WeakSet();
   const filters = [];                         // [{ fn, order }], lowest order first
-  const orig = {};                            // prototype -> { texImage2D, texSubImage2D }
+  const orig = new Map();                     // prototype -> { texImage2D, texSubImage2D }, unwrapped
 
   // filter((rec, source) => source, order): source is the <img> or what an earlier filter returned
   function filter(fn, order = 0) {
@@ -69,7 +69,8 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
     try {
-      orig[rec.name].call(gl, ...rec.args, source);
+      orig.get(gl instanceof WebGL2RenderingContext ? WebGL2RenderingContext.prototype : WebGLRenderingContext.prototype)[rec.name]
+        .call(gl, ...rec.args, source);
       if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
     } finally {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
@@ -83,7 +84,8 @@
     for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
       for (const name of ['texImage2D', 'texSubImage2D']) {
         const fn = P[name];
-        orig[name] ??= fn;
+        if (!orig.has(P)) orig.set(P, {});
+        orig.get(P)[name] ??= fn;
         P[name] = function (...a) {
           const i = a.length - 1;
           if (a[i] instanceof HTMLImageElement) {
@@ -108,6 +110,7 @@
   // change held for a frame, and a mouse move over the canvas (either alone can be swallowed).
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
+
   async function repaint(panoId) {
     const nudged = [];
     for (const p of panos) {

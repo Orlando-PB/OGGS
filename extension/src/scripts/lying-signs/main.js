@@ -1,8 +1,8 @@
 // Lying signs: every Street View tile (via ggs.tiles, core/tiles.js) has its text found
 // by a detector in a worker (worker.js, PP-OCRv4 on onnxruntime-web, loaded from
-// ggs.extBase), painted over, and new text in another script written on top. A blurred
-// copy goes up while the detector works, then the edited tile replaces it in the same
-// texture.
+// ggs.extBase), painted over, and new text (another script, language or Minecraft glyphs)
+// written on top. A blurred copy goes up while the detector works, then the edited tile
+// replaces it in the same texture.
 (() => {
   const ggs = globalThis.__ggs;
   const DET_SIZE = 768;                       // detector input; 512-px tiles are upscaled so small text is found
@@ -10,23 +10,23 @@
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
   const ENGLISH = [
-    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Jack Massey Welsh', 'JackSucksAtGuessing', 'JackSucksAtClips',
-    'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'turd boi420',
-    'SamSmellsOfApricots', 'SamSmellsOfApricot', 'ejsafc', 'Fufik', 'pretty woman kitchen', 'Geography Stuff', 'Jack & Oscar',
+    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing', 'JackSucksAtClips',
+    'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'Sock Outlet 42',
+    'ShopSmellsOfApricots', 'Apricot Outlet', 'qwerty', 'Fudge', 'pretty decent kitchen', 'Geography Stuff', 'Jack & Oscar',
     'Minecraft', 'Becky', 'Rick', 'Kai', 'Kong', 'Flossy', 'Kazoo', 'Toothbrush', 'Spudger', 'Rhombus', 'Unicycle', 'Beanie',
-    'Lovely', 'Guinness', 'Playbutton', 'PewDiePie', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg',
+    'Lovely', 'Guinness', 'Playbutton', 'Pie Shop', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg',
     'Seychelles', 'Car Bar', 'Black tape', 'Vatican', 'Australia', 'Nottinghamshire', 'Welsh', 'Spanish', 'Español', 'Reddit',
-    'Jackoffs', 'Diddle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday', 'Piglin', 'Skyblock',
-    'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Urinate', 'Weel', 'Toilet', 'zi8gzag',
-    'Oscar', 'zi8gzag Was Here', 'Oscar Sucks At Life', 'Jack Was Here', 'Sucks At Life', 'Sucks At Geography', 'Not Luxembourg',
+    'Knick-Knacks', 'Doodle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday', 'Piglin', 'Skyblock',
+    'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Ukulele', 'Weel', 'Toilet', 'Zigzag',
+    'Oscar', 'Zigzag Road', 'Oscar Was Here', 'Jack Was Here', 'Sucks At Life', 'Sucks At Geography', 'Not Luxembourg',
     'Definitely Kyrgyzstan', 'Probably Ohio', 'Bolivia?', 'Wrong Country', 'Trust The Bollard', 'Follow The Tape', 'Guess Again',
     'Plonk Here', '5000 Points', '4,999', 'Zero Points', 'Round 5', 'Gen 4', 'Trekker', 'Snow Cam', 'Rifts', 'Google Car',
-    'Kiwicraft', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch', 'Silver Playbutton', 'Diamond Playbutton',
-    'Jack Massey Welch', 'Jaxsucksatlife', 'Sucks', 'Massey', 'Apricots', 'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby',
+    'Socks For Sale', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch', 'Silver Playbutton', 'Diamond Playbutton',
+    'Mossy Bench', 'Jaxsucksatlife', 'Sucks', 'Mossy', 'Apricots', 'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby',
     'Rhombus Road', 'Unicycle Lane', 'Spudger Street', 'Flossy Avenue', 'Guinness Bar', 'Vampire Weekend', 'Piglin Bank',
     'Skyblock Island', 'Harmony Hollow Hotel', 'Misprint Museum', 'Briefcase Depot', 'Wig Emporium', 'Recycling Centre',
-    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', 'Becky Lynch', 'Kong King', 'Rick Roll',
-    'Kai Cenat', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
+    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', "Becky's Lunch", 'Kong King', 'Rick Roll',
+    'Kale Salad', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
     'Wrong Way', 'Mild Peril', 'Beware Of Jack', 'Oscar Crossing', 'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
   // Indexed by the "script" option; 0 is random (one script per panorama).
@@ -218,6 +218,7 @@
     try {
       await detector();
       const job = pickJob();
+      if (!job) return; // another pump took the last one while the detector loaded
       if (!job.alive()) { stats.skipped = (stats.skipped || 0) + 1; job.res(null); return; }
       const bitmap = await createImageBitmap(job.img);
       const boxes = await new Promise(r => {
@@ -347,7 +348,6 @@
     }
     t.pending = [];
   }
-
 
   // ---- the edits ----
   // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
@@ -556,39 +556,16 @@
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
     panos.add(p);
-    if (active?.noZoom) lockZoom(p);
     try { p.addListener('pano_changed', pruneQueue); } catch {}
   });
-
-  // "Disable zoom": the wheel and zoom buttons are switched off on every panorama and any zoom
-  // that still gets through (GeoGuessr's own buttons and keys call setZoom) is put straight back
-  // to the level it was at, so signs are only ever read at the zoom the tiles were drawn for.
-  const locks = new Map(); // pano -> { listener, options to restore }
-  function lockZoom(p) {
-    if (locks.has(p)) return;
-    const ev = window.google?.maps?.event;
-    if (!ev) return;
-    const was = { scrollwheel: p.get('scrollwheel'), zoomControl: p.get('zoomControl') };
-    const zoom = p.getZoom();
-    const listener = ev.addListener(p, 'zoom_changed', () => { if (p.getZoom() !== zoom) p.setZoom(zoom); });
-    p.setOptions({ scrollwheel: false, zoomControl: false });
-    locks.set(p, { listener, was });
-  }
-  function unlockZoom() {
-    for (const [p, { listener, was }] of locks) { listener.remove(); p.setOptions(was); }
-    locks.clear();
-  }
-  function applyZoom() { if (active?.noZoom) panos.forEach(lockZoom); else unlockZoom(); }
-
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
     detector();
     ggs.tiles.replay();
-    applyZoom();
     return {
-      stop() { active = null; unlockZoom(); ggs.tiles.replay(); },
-      update(next) { const changed = next.script !== active.script; active = next; applyZoom(); if (changed) ggs.tiles.replay(); },
+      stop() { active = null; ggs.tiles.replay(); },
+      update(next) { const changed = next.script !== active.script; active = next; if (changed) ggs.tiles.replay(); },
     };
   }
   ggs.scripts['lying-signs'] = { start };

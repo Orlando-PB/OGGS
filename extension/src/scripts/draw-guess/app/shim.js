@@ -14,22 +14,28 @@
     realFetch('data/prior.json').then(r => r.json()).catch(() => null), // attractor table; optional
   ]).then(([m, masks, g, prior]) => DrawMatcher.create(meta = m, new Uint8Array(masks), geo = g, prior));
 
-  // Nudge: if the round's real country is within NUDGE percentage points of the best match,
-  // it's lifted past it (further the closer it was), so a nearly-right drawing lands on it.
-  // A clearly different drawing still wins, and a right one keeps its own score. NUDGE comes
-  // from the popup's sensitivity slider (0-20, default 7); at 0 the real country gets no help
-  // at all: no lift and no rotation/stretch leeway (the attractor prior still applies).
-  let NUDGE = 7;
-  // The same slider sets how far the real country's outline may be stretched to fit the
-  // drawing (rotation leeway is always on): none at 0, 1.1x at the default 10, 1.15x at 20.
-  const leewayStretch = () => (NUDGE <= 10 ? 1 + 0.01 * NUDGE : 1.1 + 0.005 * (NUDGE - 10));
+  // A small, fixed lift for the round's real country. If it's within
+  // BOOST percentage points of the best match it's lifted past it (further the closer it
+  // was), its outline may be stretched up to BOOST_STRETCH to fit, and countries near the
+  // round's location get up to NEAR points: all of it within 200 km of their border, fading
+  // to nothing at 800 km (matcher.js). A clearly different drawing still wins, so a drawing
+  // of an easier neighbour lands on that neighbour rather than on a far-off lookalike.
+  const BOOST = 3, BOOST_STRETCH = 1.03, NEAR = 6;
   let geo, answerCode = null, answerLL = null; // the round's real country, and its location
 
   // Which country a lon/lat is in: inside one of its polygons (and not in a hole), or
   // failing that (coastal roads vs simplified coastlines) the one with the nearest vertex
-  // within ~1.5 degrees.
+  // within ~1.5 degrees. The tiny territories (meta.dataOnly: the Vatican, Jersey...) are a
+  // few rough vertices in the data, so a spot within ~5 km of one counts as in it, ahead of
+  // the country around it.
+  const TINY = 0.05 ** 2;
   function countryAt(lat, lng) {
     const p = [lng, lat], k = Math.cos(lat * Math.PI / 180);
+    for (const code of meta.dataOnly ?? []) {
+      for (const [outer] of geo[code] ?? []) {
+        if (inside(p, outer) || outer.some(([x, y]) => ((x - lng) * k) ** 2 + (y - lat) ** 2 < TINY)) return code;
+      }
+    }
     let near = null, nearD = 1.5 ** 2;
     for (const [code, polys] of Object.entries(geo)) {
       for (const [outer, ...holes] of polys) {
@@ -49,20 +55,44 @@
       case '/api/maps': return json((await matcher).maps());
       case '/api/match': {
         const m = await matcher, body = JSON.parse(opts.body);
-        if (answerCode && NUDGE > 0) body.bonus = { code: answerCode, points: NUDGE, stretch: leewayStretch() };
-        if (answerCode) body.target = answerCode; // its score, for the round-end summary only
-        return json(m.match(body));
+        if (answerCode) body.bonus = { code: answerCode, points: BOOST, stretch: BOOST_STRETCH, near: NEAR, ...answerLL };
+        if (answerCode) body.target = answerCode; // for the right/wrong line on the result card
+        const res = m.match(body);
+        morphParts(res, body.strokes);
+        return json(res);
       }
       default: return realFetch(url, opts);
     }
   };
+
+  // The matcher compares whole silhouettes, so two blobs drawn for New Zealand can win as its
+  // "mainland" variant (South Island + the tiny Stewart Island), and the reveal would morph
+  // the North Island blob onto Stewart Island. When the drawing has more sizeable loops than
+  // the matched variant has sizeable parts, the morph uses the parts of whichever of the
+  // winner's variants comes closest; the score and ranking stay as matched.
+  const SIZEABLE = 0.1; // of the biggest loop or part
+  const countSizeable = areas => areas.filter(a => a >= SIZEABLE * Math.max(...areas)).length;
+  const lonLatArea = r => Math.abs(signedArea(r)) * Math.cos(r[0][1] * Math.PI / 180);
+  function morphParts(res, strokes) {
+    const top = res.results?.[0];
+    if (!top?.geo_match) return;
+    const loops = countSizeable(strokes.map(r => Math.abs(signedArea(r))));
+    const off = rings => Math.abs(countSizeable(rings.map(lonLatArea)) - loops);
+    if (countSizeable(top.geo_match.map(lonLatArea)) >= loops) return;
+    let best = { d: off(top.geo_match), rings: top.geo_match };
+    for (const e of meta.entries) {
+      if (e.code !== top.code) continue;
+      const rings = e.parts.map(i => geo[e.code][i][0]), d = off(rings);
+      if (d < best.d) best = { d, rings }; // variants run smallest first (mainland, major parts, ...)
+    }
+    top.geo_match = best.rings;
+  }
 
   const toParent = msg => { if (parent !== window) parent.postMessage(msg, '*'); };
 
   // The guess itself goes up the moment Guess is pressed (see oneStep); this fires once the
   // snap-to-map animation has finished, and the page presses GeoGuessr's Guess soon after.
   window.addEventListener('drawguess:guess', () => toParent({ ggs: 'done' }));
-
 
   // Which countries the drawing can snap to, worked out from the game's map name only:
   //   1. a region pool with that name ("Europe" -> europe),
@@ -104,9 +134,8 @@
     const g = gamePool ?? { id: meta.maps.world ? 'world' : sel.options[0].value, how: 'map not known yet', map: '?' };
     const id = hard && meta.maps.all ? 'all' : g.id;
     sel.value = id;
-    const pool = meta.maps[id], names = new Map(meta.entries.map(e => [e.code, e.name]));
-    toParent({ ggs: 'pool', map: g.map, pool: pool.label, how: id === g.id ? g.how : 'hard mode', count: pool.codes.length,
-               countries: pool.codes.map(c => names.get(c) ?? c) });
+    const pool = meta.maps[id];
+    toParent({ ggs: 'pool', map: g.map, pool: pool.label, how: id === g.id ? g.how : 'hard mode', count: pool.codes.length });
   }
 
   async function selectMap(name) {
@@ -134,7 +163,6 @@
     if (d.ggs === 'reset') window.backToDraw?.(true);
     else if (d.ggs === 'map' && d.name) selectMap(d.name);
     else if (d.ggs === 'hard') { hard = !!d.on; applyPool(); }
-    else if (d.ggs === 'nudge') { if (Number.isFinite(d.points)) NUDGE = Math.min(20, Math.max(0, d.points)); }
     else if (d.ggs === 'answer') { // this round's location, or null while it's being fetched
       answerCode = null;
       answerLL = typeof d.lat === 'number' ? { lat: d.lat, lng: d.lng } : null;
@@ -210,6 +238,12 @@
     };
     window.addEventListener('resize', () => redraw()); // app.js registered the unwrapped one
 
+    // Only the main button draws. A right/middle click does nothing: no stroke, no pin, no menu.
+    window.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) { e.stopImmediatePropagation(); e.preventDefault(); }
+    }, true);
+    window.addEventListener('contextmenu', e => e.preventDefault());
+
     const stageEl = document.getElementById('stage');
     stageEl.addEventListener('pointerup', e => {
       if (stage !== 'draw' || !current) return;
@@ -250,7 +284,7 @@
     reveal = function () {
       answerLayer.setAttribute('visibility', 'hidden');
       const run = baseReveal();
-      if (guess) toParent({ ggs: 'guess', guess, drawing: drawingSummary() });
+      if (guess) toParent({ ggs: 'guess', guess });
       return run;
     };
 
@@ -258,18 +292,11 @@
     // from the pin. By then the guess is on GeoGuessr's (hidden) map and can't change.
     const answerLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     answerLayer.setAttribute('visibility', 'hidden');
-    answerLayer.innerHTML = `
-      <line stroke="#1f2a44" stroke-width="2.5" stroke-dasharray="7 6" stroke-linecap="round" opacity=".75"/>
-      <g class="flag"><circle r="13" fill="#2b8a3e" stroke="#fff" stroke-width="3"/>
-        <path d="M-3.5,7 V-7.5 M-3.5,-7.5 L7,-4 L-3.5,-0.5 Z" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></g>`;
+    answerLayer.innerHTML = marks.answerSvg; // marks.js
     document.getElementById('map').append(answerLayer);
     const placeAnswer = () => {
       if (!answerLL || !guess || answerLayer.getAttribute('visibility') === 'hidden') return;
-      const [ax, ay] = T.apply(projection([answerLL.lng, answerLL.lat]));
-      const [gx, gy] = T.apply(projection([guess.lng, guess.lat]));
-      answerLayer.querySelector('.flag').setAttribute('transform', `translate(${ax},${ay})`);
-      const line = answerLayer.querySelector('line');
-      Object.entries({ x1: gx, y1: gy, x2: ax, y2: ay }).forEach(([k, v]) => line.setAttribute(k, v));
+      marks.setAnswer(answerLayer, T.apply(projection([guess.lng, guess.lat])), T.apply(projection([answerLL.lng, answerLL.lat])));
     };
     zoom.on('zoom.answer', placeAnswer); // app.js's own 'zoom' listener updates T first
 
@@ -307,27 +334,6 @@
       answerLayer.setAttribute('visibility', 'hidden');
       return baseBackToDraw(...args);
     };
-    // The drawing as the end-of-game summary shows it: loops thinned to <= 80 points
-    // (900x900 canvas units), the pin, and how it matched.
-    const drawingSummary = () => ({
-      rings: shapes().map(r => r.filter((_, i) => i % Math.ceil(r.length / 80) === 0).map(p => p.map(Math.round))),
-      pin: pinXY.map(Math.round),
-      code: guess.code,
-      country: guess.country,
-      score: guess.shapeScore,
-      // The round's real country, its score and outline, for summary.js's review panels.
-      answer: matchData.target ? { ...matchData.target, outline: thinOutline(matchData.target.outline) } : null,
-      runners: matchData.results.slice(1, 4).map(r => ({ name: r.name, score: r.score })),
-    });
-    // The correct country's outline for the summary thumbnails: its bigger rings, <= 100
-    // points each, 1 decimal (grid units).
-    const thinOutline = rings => {
-      if (!rings?.length) return null;
-      const area = r => Math.abs(signedArea(r)), biggest = Math.max(...rings.map(area));
-      return rings.filter(r => area(r) >= 0.02 * biggest)
-        .map(r => r.filter((_, i) => i % Math.ceil(r.length / 100) === 0).map(p => p.map(v => Math.round(v * 10) / 10)));
-    };
-
     // Tell the page how tall the board is (plus .wrap's 10px padding top and bottom), so
     // the frame fits it exactly.
     const board = document.querySelector('.board');

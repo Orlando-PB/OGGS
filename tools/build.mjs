@@ -18,7 +18,7 @@ mkdirSync(out, { recursive: true });
 
 // ---- userscript ----
 const SERVER = "https://oggs.orlandopb.com/";
-// Install/update address: the file in the repo, like other GeoGuessr userscripts (works once the repo is public).
+// Install/update address: the file in the repo, like other GeoGuessr userscripts.
 const RAW = "https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js";
 const pageScripts = manifest.content_scripts.find(c => c.world === "MAIN").js;
 const banner = f => `\n// ${"=".repeat(20)} ${f} ${"=".repeat(Math.max(3, 60 - f.length))}\n`;
@@ -43,17 +43,19 @@ const userscript = `// ==UserScript==
 
 // Built by tools/build.mjs from extension/ in https://github.com/Orlando-PB/OGGS: don't edit
 // this file, edit those. Each section below is one file from there, unchanged, except
-// userscript/bridge.js, which stands in for the extension's bridge.js and popup.
+// userscript/bridge.js, which stands in for the extension's bridge.js.
 //
 // What talks to the network, and with what:
 //   core/game.js          geoguessr.com's own game API (your session), to read the game's mode
-//                         and map, and the round's location for the drawing board's nudge
-//   userscript/bridge.js  loads the drawing board and the sign-text detector from ${SERVER}
+//                         and map, and the round's location for the drawing board's boost
+//   userscript/bridge.js  loads the drawing and flag boards, the panel icon and the sign-text
+//                         detector from ${SERVER}
 //   scripts/radio         radio-browser.info (station search) and the station streams
-//   scripts/minecraft     ${SERVER}minecraft.php: a Street View panorama id, its size, a random
-//                         per-install id and the optional code; gets the redrawn picture back
+//   core/redraw.js        ${SERVER}minecraft.php (Minecraft world): a Street View panorama
+//                         id, its size, the style, a random per-install id and the optional code;
+//                         gets the redrawn picture back
 // Nothing else leaves the page. Settings stay in geoguessr.com's localStorage ("ggs-settings").
-${banner("userscript/bridge.js")}${bridge}${["src/form.js", ...pageScripts].map(f => banner(f) + file(f)).join("")}`;
+${banner("userscript/bridge.js")}${bridge}${pageScripts.map(f => banner(f) + file(f)).join("")}`;
 mkdirSync(join(root, "userscript"), { recursive: true });
 writeFileSync(join(root, "userscript", "oggs.user.js"), userscript);
 console.log(join(root, "userscript", "oggs.user.js"));

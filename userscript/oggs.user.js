@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OGGS - Orlando's GeoGuessr Scripts
 // @namespace    https://github.com/Orlando-PB/OGGS
-// @version      1.4.1
+// @version      1.5.0
 // @description  A collection of fun GeoGuessr extension scripts. Made by Orlando with love.
 // @author       Orlando
 // @homepageURL  https://github.com/Orlando-PB/OGGS
@@ -16,33 +16,42 @@
 
 // Built by tools/build.mjs from extension/ in https://github.com/Orlando-PB/OGGS: don't edit
 // this file, edit those. Each section below is one file from there, unchanged, except
-// userscript/bridge.js, which stands in for the extension's bridge.js and popup.
+// userscript/bridge.js, which stands in for the extension's bridge.js.
 //
 // What talks to the network, and with what:
 //   core/game.js          geoguessr.com's own game API (your session), to read the game's mode
-//                         and map, and the round's location for the drawing board's nudge
-//   userscript/bridge.js  loads the drawing board and the sign-text detector from https://oggs.orlandopb.com/
+//                         and map, and the round's location for the drawing board's boost
+//   userscript/bridge.js  loads the drawing and flag boards, the panel icon and the sign-text
+//                         detector from https://oggs.orlandopb.com/
 //   scripts/radio         radio-browser.info (station search) and the station streams
-//   scripts/minecraft     https://oggs.orlandopb.com/minecraft.php: a Street View panorama id, its size, a random
-//                         per-install id and the optional code; gets the redrawn picture back
+//   core/redraw.js        https://oggs.orlandopb.com/minecraft.php (Minecraft world): a Street View panorama
+//                         id, its size, the style, a random per-install id and the optional code;
+//                         gets the redrawn picture back
 // Nothing else leaves the page. Settings stay in geoguessr.com's localStorage ("ggs-settings").
 
 // ==================== userscript/bridge.js ========================================
-// Userscript only: stands in for the extension's bridge.js and popup. Settings live in
-// this site's localStorage ("ggs-settings") and reach the scripts through the same
-// postMessage the extension uses. The board and the text detector are loaded from BASE.
-// Alt+O (Option+O on a Mac), or the OGGS tab bottom left, opens the settings panel; the tab
-// can be hidden from the panel ("ggs-hide-tab" in localStorage) for recording.
+// Userscript only: stands in for the extension's bridge.js. Settings live in this site's
+// localStorage ("ggs-settings") and reach the scripts through the same postMessage the
+// extension uses; src/panel.js (the OGGS tab and Alt+O) sends saves back the same way. The
+// board and the text detector are loaded from BASE.
 (() => {
   const ggs = (globalThis.__ggs ??= {});
   const BASE = 'https://oggs.orlandopb.com/';
   const KEY = 'ggs-settings';
   const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) ?? {}; } catch { return {}; } };
   let settings = read();
+  try { if (localStorage.getItem('ggs-hide-tab') === '1' && !settings.panel) settings.panel = { hideTab: true }; } catch {} // 1.4.1's separate key
   const send = () => window.postMessage({ ggs: 'settings', settings, base: BASE }, location.origin);
-  window.addEventListener('message', e => { if (e.source === window && e.data?.ggs === 'hello') send(); });
-
-  const CSS = `/* Same look as the store images: cream paper with a faint dot grid, dark ink, one flat accent
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    if (e.data?.ggs === 'hello') send();
+    if (e.data?.ggs === 'save') {
+      settings = e.data.settings ?? {};
+      try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch {}
+      send();
+    }
+  });
+  ggs.panelCss = `/* Same look as the store images: cream paper with a faint dot grid, dark ink, one flat accent
    per script, hard offset shadows, no glows. */
 body { width: 320px; margin: 0; padding: 14px; font: 13px/1.4 "Avenir Next", Avenir, -apple-system, system-ui, "Segoe UI", sans-serif;
        color: #1c1a2e; background-color: #f5f1e8;
@@ -77,6 +86,20 @@ section[data-id="minecraft"] { --accent: #4a8f2a; }
              font-size: 12px; color: rgba(28, 26, 46, .85); }
 .opts .row:hover { background: rgba(28, 26, 46, .04); }
 section.off .opts { display: none; }
+/* the controls strip (NMPZ, clean-screen and panel boxes): full width at the top, never
+   faded, since the boxes show what's on */
+section[data-id="controls"], section[data-id="controls"].off { --accent: #1c1a2e; margin: -2px -14px 0; padding: 0 14px 6px;
+  background: none; border: 0; border-bottom: 2px solid #1c1a2e; border-radius: 0; box-shadow: none; }
+section[data-id="controls"] .status:empty { display: none; }
+section[data-id="controls"] .status { padding: 0 0 4px; font-size: 11px; color: rgba(28, 26, 46, .5); }
+.boxes { gap: 6px; padding: 0 0 6px; cursor: default; }
+.boxes .tog { flex: 1 1 auto; white-space: nowrap; }
+section.flat .row { gap: 6px; cursor: default; }
+section.flat .status:empty { display: none; }
+.tog { flex: none; padding: 4px 7px; border-radius: 5px; border: 1.5px solid rgba(28, 26, 46, .55); background: #ebe5d6; color: #1c1a2e;
+       font: inherit; font-size: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; }
+.tog[aria-pressed="true"] { background: #e6d6a3; border-color: #1c1a2e; }
+.tog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .opts .more summary { padding: 4px 10px; font-size: 11px; color: rgba(28, 26, 46, .45); cursor: pointer; list-style: none; }
 .opts .more summary::before { content: '▸ '; }
 .opts .more[open] summary::before { content: '▾ '; }
@@ -112,104 +135,6 @@ section.off .opts { display: none; }
 .opts .status { padding: 2px 4px 6px 10px; font-size: 11px; color: rgba(28, 26, 46, .5); }
 .opts .status:empty { display: none; }
 `;
-  const HIDE = 'ggs-hide-tab';
-  let panel = null, form = null, tab = null;
-  const showTab = () => { if (tab) tab.style.display = localStorage.getItem(HIDE) === '1' ? 'none' : ''; }; // inline `all: initial` would beat the hidden attribute
-  function open() {
-    if (panel) { panel.show(!panel.visible); return; }
-    panel = ggs.ui.panel({ id: 'settings', title: "Orlando's GeoGuessr Scripts", css: `
-      ${CSS.replace(/\bbody\b/g, '.body').replace(/\bmain\b/g, '.body')}
-      .panel { width: 348px; background: none; border: 0; box-shadow: none; backdrop-filter: none; }
-      .head { color: #1c1a2e; background: #fecd19; border: 2px solid #1c1a2e; border-radius: 10px 10px 0 0; }
-      .body { border: 2px solid #1c1a2e; border-top: 0; border-radius: 0 0 10px 10px; max-height: 80vh; overflow: auto; }
-      .close { float: right; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }` });
-    panel.$('.head').insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
-    panel.$('.close').addEventListener('click', () => panel.show(false));
-    form = ggs.settingsForm(panel.$('.body'), { settings, save: () => {
-      try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch {}
-      send();
-    } });
-    ggs.onStatus((id, text) => form.setStatus(id, text));
-    panel.$('.body').insertAdjacentHTML('beforeend', `
-      <label class="hide-tab" style="display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0, 0, 0, .12); font-size: 12px; cursor: pointer;">
-        <input type="checkbox"> Hide the OGGS tab (open with Alt+O, Option+O on a Mac)</label>`);
-    const box = panel.$('.hide-tab input');
-    box.checked = localStorage.getItem(HIDE) === '1';
-    box.addEventListener('change', () => { try { localStorage.setItem(HIDE, box.checked ? '1' : '0'); } catch {} showTab(); });
-    panel.clamp();
-  }
-
-  const ready = () => {
-    ggs.hotkey(e => e.altKey && e.code === 'KeyO', open);
-    tab = document.createElement('button');
-    tab.setAttribute('data-ggs-ui', 'tab');
-    tab.textContent = 'OGGS';
-    tab.title = 'OGGS settings (Alt+O, Option+O on a Mac)';
-    // bottom-left corner, over the Street View "Google" mark
-    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000; padding: 6px 10px 6px 8px;' +
-      ' border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e; font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;' +
-      ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
-    tab.addEventListener('click', open);
-    showTab();
-    document.body.append(tab);
-  };
-  if (document.body) queueMicrotask(ready); else document.addEventListener('DOMContentLoaded', ready);
-})();
-
-// ==================== src/form.js =================================================
-// Settings form: one card per script in ggs.registry. Rendered by the popup (saved to
-// chrome.storage.sync) and by the userscript's in-page panel (saved to localStorage).
-//   ggs.settingsForm(container, { settings, save(id, key, value) }) -> { setStatus(id, text) }
-(() => {
-  const ggs = (globalThis.__ggs ??= {});
-
-  ggs.settingsForm = (container, { settings, save }) => {
-    const { registry, config } = ggs;
-    const statusEls = {};
-
-    function option(o) { return o.type === 'text'
-        ? `<label class="row"><span class="text">${o.label}</span>
-             <input type="${o.secret ? 'password' : 'text'}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}" autocomplete="off"></label>`
-        : o.type === 'select'
-        ? `<label class="row"><span class="text">${o.label}</span>
-             <select data-key="${o.key}">${o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}</select></label>`
-        : o.type === 'slider'
-        ? `<label class="row slider"><span class="text">${o.label}</span>
-             <input type="range" data-key="${o.key}" min="${o.min}" max="${o.max}" step="1">
-             <span class="marks">${o.marks.map(m => `<span>${m}</span>`).join('')}</span></label>`
-        : `<label class="row"><span class="text">${o.label}</span><input type="checkbox" class="switch" data-key="${o.key}"></label>`; }
-
-    for (const meta of registry) {
-      const cfg = config(meta, settings);
-      const card = document.createElement('section');
-      card.dataset.id = meta.id;
-      card.classList.toggle('off', !cfg.enabled);
-      card.innerHTML = `
-        <label class="row">
-          <span class="text"><span class="name">${meta.name}</span><span class="desc">${meta.description}</span></span>
-          <input type="checkbox" class="switch" data-key="enabled">
-        </label>
-        <div class="opts">${meta.options.map(o => o.hidden ? '' : option(o)).join('')}${meta.options.some(o => o.hidden)
-          ? `<details class="more"><summary>More</summary>${meta.options.filter(o => o.hidden).map(option).join('')}</details>` : ''}<div class="status"></div></div>`;
-      statusEls[meta.id] = card.querySelector('.status');
-      for (const box of card.querySelectorAll('input[data-key], select[data-key]')) {
-        const key = box.dataset.key, range = box.type === 'range', select = box.tagName === 'SELECT';
-        const text = box.type === 'text' || box.type === 'password';
-        if (range || select || text) box.value = cfg[key]; else box.checked = !!cfg[key];
-        box.addEventListener('change', () => {
-          const value = range ? Number(box.value) : select || text ? box.value : box.checked;
-          settings[meta.id] = { ...settings[meta.id], [key]: value };
-          save(meta.id, key, value);
-          if (key === 'enabled') card.classList.toggle('off', !box.checked);
-        });
-      }
-      container.append(card);
-    }
-
-    return {
-      setStatus(id, text) { if (statusEls[id]) statusEls[id].textContent = text ?? ''; },
-    };
-  };
 })();
 
 // ==================== src/registry.js =============================================
@@ -284,7 +209,6 @@ section.off .opts { display: none; }
     window.addEventListener(type, e => {
       const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
       if (!host) return;
-      host.onGgsKey?.(e);
       e.stopImmediatePropagation();
     }, true);
   }
@@ -325,7 +249,11 @@ section.off .opts { display: none; }
   const GUESS_BUTTON_SELECTORS = ['[data-qa="perform-guess"]', 'button[class*="guess-map_guessButton"]'];
   const first = sels => sels.map(s => document.querySelector(s)).find(Boolean) ?? null;
   const guessMapElement = () => first(GUESS_MAP_SELECTORS);
-  const guessButton = () => first(GUESS_BUTTON_SELECTORS);
+  // Fallback for layouts whose button lost those markers: a button labelled Guess next to the map.
+  const GUESS_AREA = '[class*="guess-map_guessMap"], [class*="guess-map_container"], [class*="guess-map_root"]';
+  const labelledGuess = () => [...(guessMapElement()?.closest(GUESS_AREA) ?? document).querySelectorAll('button')]
+    .find(b => /^\s*guess\s*$/i.test(b.textContent)) ?? null;
+  const guessButton = () => first(GUESS_BUTTON_SELECTORS) ?? labelledGuess();
 
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists;
@@ -399,6 +327,13 @@ section.off .opts { display: none; }
     return true;
   }
 
+  // Space is GeoGuessr's own "guess" key; used when the button can't be found.
+  function pressSpace() {
+    for (const type of ['keydown', 'keyup']) {
+      document.body.dispatchEvent(new KeyboardEvent(type, { key: ' ', code: 'Space', keyCode: 32, which: 32, bubbles: true }));
+    }
+  }
+
   // __ggs.maps.debug() in the console shows what was found.
   function debug() {
     const el = guessMapElement();
@@ -408,12 +343,116 @@ section.off .opts { display: none; }
       mapViaFiber: el && mapFromFiber(el),
       mapsSeenByHook: created.length,
       guessButton: guessButton(),
+      buttonsNearMap: [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
+        .map(b => `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`).join(' | ') || null,
+      path: location.pathname,
     };
     console.table(Object.fromEntries(Object.entries(info).map(([k, v]) => [k, v ? (v instanceof Element ? v.className || v.tagName : String(v)) : v])));
     return info;
   }
 
-  ggs.maps = { guessMapElement, findGuessMap, placeGuess, submitGuess, guessButton, hook, debug };
+  ggs.maps = { guessMapElement, findGuessMap, placeGuess, submitGuess, pressSpace, guessButton, hook, debug };
+})();
+
+// ==================== src/core/lock.js ============================================
+// Locks on the Street View panorama, shared by the scripts: ggs.lock.zoom / pan / move
+// (owner, on). A lock holds while any owner asks for it, on every panorama, including ones
+// made later. Each one both blocks the input (wheel, drag, keys, the arrows) before the
+// Maps API or GeoGuessr see it and puts the view back if a change still gets through, and
+// setOptions is wrapped so GeoGuessr can't switch the controls back on underneath.
+(() => {
+  const ggs = globalThis.__ggs;
+  const KEYS = {
+    zoom: ['+', '-', '=', '_', 'z', 'x', 'Z', 'X'],
+    pan: ['ArrowLeft', 'ArrowRight', 'a', 'd', 'A', 'D'],
+    move: ['ArrowUp', 'ArrowDown', 'w', 's', 'W', 'S', 'Backspace'],
+  };
+  const OPTS = {
+    zoom: { scrollwheel: false, zoomControl: false, disableDoubleClickZoom: true },
+    move: { clickToGo: false, linksControl: false },
+  };
+  const owners = { zoom: new Set(), pan: new Set(), move: new Set() };
+  const on = kind => owners[kind].size > 0;
+  const panos = new Map();  // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo } }
+
+  ggs.maps.hook('StreetViewPanorama', (p, args) => {
+    const st = { el: args[0], wanted: { ...(args[1] ?? {}) }, held: {}, raw: p.setOptions.bind(p) };
+    panos.set(p, st);
+    // remember what GeoGuessr wants so a lock can be undone, and keep the locked values on top
+    const setOptions = st.raw;
+    p.setOptions = o => {
+      Object.assign(st.wanted, o);
+      const forced = {};
+      for (const kind of Object.keys(OPTS)) if (on(kind)) Object.assign(forced, OPTS[kind]);
+      return setOptions({ ...o, ...Object.fromEntries(Object.keys(o).filter(k => k in forced).map(k => [k, forced[k]])) });
+    };
+    apply(p);
+  });
+
+  const ev = () => window.google?.maps?.event;
+  const locks = {
+    zoom(p, st) {
+      let zoom = p.getZoom();
+      const a = ev().addListener(p, 'pano_changed', () => { zoom = p.getZoom(); });
+      const b = ev().addListener(p, 'zoom_changed', () => { if (p.getZoom() !== zoom) p.setZoom(zoom); });
+      st.raw(OPTS.zoom);
+      return () => { a.remove(); b.remove(); restore(p, st, OPTS.zoom); };
+    },
+    pan(p) {
+      // held at the view the panorama opened with; tiles.js's redraw nudge is put back like anything else
+      let pov = p.getPov();
+      const a = ev().addListener(p, 'pano_changed', () => { pov = p.getPov(); });
+      const b = ev().addListener(p, 'pov_changed', () => {
+        const now = p.getPov();
+        // only heading and pitch go back: getPov() has no zoom here, and setPov rejects zoom: NaN
+        if (now.heading !== pov.heading || now.pitch !== pov.pitch) p.setPov({ heading: pov.heading, pitch: pov.pitch });
+      });
+      return () => { a.remove(); b.remove(); };
+    },
+    move(p, st) {
+      st.raw(OPTS.move);
+      return () => restore(p, st, OPTS.move);
+    },
+  };
+  function restore(p, st, keys) {
+    const back = {};
+    for (const k of Object.keys(keys)) back[k] = st.wanted[k] ?? (k === 'disableDoubleClickZoom' ? false : true);
+    st.raw(back);
+  }
+  function apply(p) {
+    const st = panos.get(p);
+    for (const kind of Object.keys(locks)) {
+      if (on(kind) && !st.held[kind]) { try { st.held[kind] = locks[kind](p, st); } catch (err) { ggs.log(`lock ${kind} failed`, err); } }
+      else if (!on(kind) && st.held[kind]) { try { st.held[kind](); } catch {} delete st.held[kind]; }
+    }
+  }
+
+  // ---- input, swallowed at the window in the capture phase (registered at document_start,
+  // so before GeoGuessr's and the Maps API's handlers) ----
+  const inPano = t => [...panos.values()].some(st => st.el?.contains?.(t));
+  const stop = e => { e.stopImmediatePropagation(); e.preventDefault(); };
+  window.addEventListener('keydown', e => {
+    if (ggs.isTyping(e)) return;
+    for (const kind of Object.keys(KEYS)) if (on(kind) && KEYS[kind].includes(e.key)) return stop(e);
+  }, true);
+  // zoom: the wheel and pinches over the panorama
+  window.addEventListener('wheel', e => { if (on('zoom') && inPano(e.target)) stop(e); }, { capture: true, passive: false });
+  window.addEventListener('dblclick', e => { if (on('zoom') && inPano(e.target)) stop(e); }, true);
+  for (const t of ['gesturestart', 'gesturechange']) window.addEventListener(t, e => { if (on('zoom') && inPano(e.target)) stop(e); }, true);
+  // pan: dragging on the panorama; the press and release still go through, so the arrows (and
+  // clicking to move) work when moving is allowed
+  let dragging = false;
+  for (const t of ['pointerdown', 'mousedown', 'touchstart']) window.addEventListener(t, e => { if (inPano(e.target)) dragging = true; }, true);
+  for (const t of ['pointerup', 'mouseup', 'touchend', 'touchcancel', 'pointercancel']) window.addEventListener(t, () => { dragging = false; }, true);
+  for (const t of ['pointermove', 'mousemove', 'touchmove']) window.addEventListener(t, e => {
+    if (dragging && (on('pan') || (t === 'touchmove' && on('zoom') && e.touches?.length > 1))) stop(e);
+  }, { capture: true, passive: false });
+
+  const set = kind => (owner, want) => {
+    if (want) owners[kind].add(owner); else owners[kind].delete(owner);
+    for (const p of panos.keys()) apply(p);
+  };
+  ggs.lock = { zoom: set('zoom'), pan: set('pan'), move: set('move') };
 })();
 
 // ==================== src/core/game.js ============================================
@@ -429,10 +468,25 @@ section.off .opts { display: none; }
     [/\/battle-royale\/([^/?#]+)/, 'battle-royale', t => `https://game-server.geoguessr.com/api/battle-royale/${t}`],
   ];
 
+  // Party games play under /party/... without the game id in the address. The page asks
+  // /api/v4/parties/v2/<party>/game/<id> (or game-server's duels API) for the game, so the id
+  // is taken from the last such request (read-only: the browser's own list of requests the
+  // page made). game-server's duels API answers for that id.
+  const DUEL_REQUEST = /geoguessr\.com\/api\/(?:v4\/parties\/v2\/[^/]+\/game|(?:team-)?duels)\/([^/?#]+)/;
+  let partyDuel = null;
+  try {
+    new PerformanceObserver(list => {
+      for (const e of list.getEntries()) { const m = e.name.match(DUEL_REQUEST); if (m) partyDuel = m[1]; }
+    }).observe({ type: 'resource', buffered: true });
+  } catch {}
+
   function context() {
     for (const [re, mode, api] of ROUTES) {
       const m = location.pathname.match(re);
       if (m) return { mode, token: m[1], api: api(m[1]) };
+    }
+    if (partyDuel && /^\/party(\/|$)/.test(location.pathname)) {
+      return { mode: 'duels', token: partyDuel, api: `https://game-server.geoguessr.com/api/duels/${partyDuel}` };
     }
     return null;
   }
@@ -458,36 +512,79 @@ section.off .opts { display: none; }
   }
 
   // The current round is the game token plus how many times the guess map has appeared
-  // (GeoGuessr's round counter markup keeps changing, so the page isn't read).
-  let entries = 0, entryToken = null, hadMap = false;
+  // (GeoGuessr's round counter markup keeps changing, so the page isn't read). The map can
+  // blink out for a moment mid-round, so it only counts as gone after GONE_MS.
+  const GONE_MS = 1000;
+  let entries = 0, entryToken = null, hadMap = false, goneSince = 0;
   setInterval(() => {
     const token = context()?.token ?? null, hasMap = !!ggs.maps.guessMapElement();
     if (token !== entryToken) { entryToken = token; entries = 0; hadMap = false; }
-    if (hasMap && !hadMap) entries++;
-    hadMap = hasMap;
+    if (hasMap) { if (!hadMap) entries++; hadMap = true; goneSince = 0; }
+    else if (hadMap) { goneSince ||= Date.now(); if (Date.now() - goneSince > GONE_MS) hadMap = false; }
   }, 200);
   const roundKey = () => `${context()?.token}|${entries}`;
 
-  // Standard games only: { n, total, lat, lng }. Scripts may use the location for
-  // gameplay (draw-guess's nudge, radio's station pick) but never show it before the guess.
-  async function round() {
+  // { n, total, lat, lng } in standard games and friendly party duels (total is null in duels,
+  // which run until someone's out). Scripts may use the location for gameplay (draw-guess's
+  // boost, radio's station pick) but never show it before the guess. Duels only answer once
+  // competitive() has confirmed a friendly game, so ranked duels never get a location.
+  // Shared by every script: one lookup per round, so they all agree. A failed lookup isn't
+  // kept (the next call tries again) and says why in whyNoRound().
+  const roundCache = new Map(); // roundKey -> Promise<round | null>
+  let noRoundWhy = '';
+  function round() {
+    const key = roundKey();
+    if (!roundCache.has(key)) {
+      roundCache.set(key, lookupRound(key).then(r => {
+        if (!r) roundCache.delete(key);
+        return r;
+      }, err => {
+        roundCache.delete(key);
+        return noRound(`game data: ${err.message}`);
+      }));
+    }
+    return roundCache.get(key);
+  }
+  const whyNoRound = () => noRoundWhy;
+  const noRound = why => { noRoundWhy = why; ggs.log(`no round location: ${why}`); return null; };
+
+  const DUEL_TRIES = 8;
+  const duelRounds = new Map(); // token -> { n, key }: the last duel round handed out, and for which roundKey
+
+  async function lookupRound(key) {
     const ctx = context();
-    if (ctx?.mode !== 'standard') return null;
-    const j = await fetchGame(ctx).catch(() => null);
-    const n = j?.round ?? j?.rounds?.length, cur = j?.rounds?.[n - 1];
-    if (!(n > 0)) return null;
-    return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+    if (!ctx) return noRound('not in a game');
+    if (ctx.mode === 'standard') {
+      const j = await fetchGame(ctx);
+      const n = j?.round ?? j?.rounds?.length, cur = j?.rounds?.[n - 1];
+      if (!(n > 0)) return noRound('standard game data has no current round');
+      return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+    }
+    if (ctx.mode !== 'duels') return noRound(`${ctx.mode} games aren't supported`);
+    if ((await competitive()).competitive) return noRound('competitive game');
+    // The new round can reach the game data a few seconds after the guess map appears, and
+    // until then currentRoundNumber still names the round just played. So a round that has
+    // ended, or one already handed out for an earlier round, is waited on. After DUEL_TRIES it's
+    // taken anyway (the roundKey can also move on without a new round, e.g. after a reload).
+    let last = null;
+    for (let tries = 0; tries < DUEL_TRIES; tries++) {
+      if (tries) await new Promise(r => setTimeout(r, 1000));
+      if (roundKey() !== key) return noRound('moved on while waiting');
+      const j = await fetchGame(ctx);
+      const n = j?.currentRoundNumber, cur = j?.rounds?.find(r => r.roundNumber === n);
+      const p = cur?.panorama ?? cur;
+      if (!(n > 0) || typeof p?.lat !== 'number') { last = `duel data has no location for round ${n}`; continue; }
+      const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
+      const seen = duelRounds.get(ctx.token);
+      last = { n, total: null, lat: p.lat, lng: p.lng };
+      if (ended || (seen && seen.n >= n && seen.key !== key)) { if (tries === DUEL_TRIES - 1) ggs.log(`duel round ${n} still looks old, using it anyway`); continue; }
+      break;
+    }
+    if (typeof last === 'string' || !last) return noRound(last ?? 'no duel data');
+    duelRounds.set(ctx.token, { n: last.n, key });
+    return last;
   }
   const roundLocation = () => round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
-
-  async function state() {
-    const ctx = context();
-    if (ctx?.mode !== 'standard') return null;
-    const j = await fetchGame(ctx).catch(() => null);
-    if (!j) return null;
-    const finished = j.state === 'finished' || (j.roundCount > 0 && j.player?.guesses?.length >= j.roundCount);
-    return { finished, round: j.round, roundCount: j.roundCount };
-  }
 
   // ---- competitive guard ----
   // Party and ranked duels share /duels/<id> URLs, so two signals decide: the lobby you came
@@ -526,7 +623,7 @@ section.off .opts { display: none; }
     return guardCache.get(ctx.token);
   }
 
-  ggs.game = { context, roundKey, round, mapInfo, roundLocation, state, competitive, noteLobby };
+  ggs.game = { context, roundKey, whyNoRound, mapInfo, roundLocation, competitive, noteLobby };
 })();
 
 // ==================== src/core/ui.js ==============================================
@@ -549,10 +646,9 @@ section.off .opts { display: none; }
 
   let zTop = 2147483000; // last-used panel sits on top
 
-  function panel({ id, title, html = '', css = '', onKey, pos = { x: 16, y: 120 } }) {
+  function panel({ id, title, html = '', css = '', pos = { x: 16, y: 120 } }) {
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', id);
-    host.onGgsKey = onKey;
     const front = () => { host.style.zIndex = String(++zTop); };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });
@@ -608,7 +704,7 @@ section.off .opts { display: none; }
 // generateMipmap, to know which textures need it again after a re-upload).
 //
 // For each tile upload a record is made ({ gl, name, args, url, key, img, tex, ... }) and
-// the registered filters (minecraft, lying-signs) get a turn, in order, to swap the source
+// the registered filters (redraw, lying-signs, gradient) get a turn, in order, to swap the source
 // for a canvas. A filter that needs time can keep the record and later push a new source
 // into the same texture with upload(rec, source). Uploads of anything else pass straight
 // through. The API never re-uploads a tile already on screen, so replay() loads every
@@ -620,7 +716,7 @@ section.off .opts { display: none; }
   const records = [];
   const mipTex = new WeakSet();
   const filters = [];                         // [{ fn, order }], lowest order first
-  const orig = {};                            // prototype -> { texImage2D, texSubImage2D }
+  const orig = new Map();                     // prototype -> { texImage2D, texSubImage2D }, unwrapped
 
   // filter((rec, source) => source, order): source is the <img> or what an earlier filter returned
   function filter(fn, order = 0) {
@@ -674,7 +770,8 @@ section.off .opts { display: none; }
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
     try {
-      orig[rec.name].call(gl, ...rec.args, source);
+      orig.get(gl instanceof WebGL2RenderingContext ? WebGL2RenderingContext.prototype : WebGLRenderingContext.prototype)[rec.name]
+        .call(gl, ...rec.args, source);
       if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
     } finally {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
@@ -688,7 +785,8 @@ section.off .opts { display: none; }
     for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
       for (const name of ['texImage2D', 'texSubImage2D']) {
         const fn = P[name];
-        orig[name] ??= fn;
+        if (!orig.has(P)) orig.set(P, {});
+        orig.get(P)[name] ??= fn;
         P[name] = function (...a) {
           const i = a.length - 1;
           if (a[i] instanceof HTMLImageElement) {
@@ -713,6 +811,7 @@ section.off .opts { display: none; }
   // change held for a frame, and a mouse move over the canvas (either alone can be swallowed).
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
+
   async function repaint(panoId) {
     const nudged = [];
     for (const p of panos) {
@@ -765,180 +864,351 @@ section.off .opts { display: none; }
   ggs.tiles = { filter, upload, live, replay, repaint, count: () => records.length };
 })();
 
-// ==================== src/scripts/draw-guess/meta.js ==============================
-(() => {
-  globalThis.__ggs.registry.push({
-    id: 'draw-guess',
-    name: 'Draw your country',
-    description: 'Replaces the guess map with a drawing board. Sketch the country, pin your spot, and it snaps to the closest real country as your guess.',
-    defaultEnabled: false,
-    options: [
-      // percentage points the round's real country may trail the best match by and still win; 0 = no help
-      { key: 'nudge', label: 'Correct country sensitivity', type: 'slider', min: 0, max: 20, default: 7,
-        marks: ['Off', 'Medium', 'Easier'] },
-      { key: 'hardMode', label: 'Hard mode: matches against all 193 countries', type: 'checkbox', default: false },
-    ],
-  });
-})();
-
-// ==================== src/scripts/draw-guess/summary.js ===========================
-// Drawing summaries on GeoGuessr's result screens (which reveal the answer anyway):
-// after each round that round's drawing and the correct country, after the last round
-// every round's. Kept in sessionStorage per game, so it survives a refresh.
+// ==================== src/core/redraw.js ==========================================
+// Redrawn world (Minecraft world): each panorama is redrawn once, by server/minecraft.php,
+// and wrapped back over the Street View sphere. ggs.redraw.script(id, style, label) makes
+// the { start } for the script.
+//
+// Street View tiles arrive through ggs.tiles (core/tiles.js). The first tile of a new
+// panorama starts one generation: the panorama id and size go to SERVER, which fetches
+// the tiles from Google, stitches them and calls the image API with the key it holds.
+// Nothing but that id, the size, a random per-install client id and the optional code
+// leaves the page. Until the picture is back, tiles go up blue; then every tile is swapped
+// for the matching crop, so looking around and zooming never generate again.
+// Generation waits until the panorama has stayed still for a moment, so walking through
+// several positions only redraws the one you stop at; the ones passed through get their
+// real tiles back.
 (() => {
   const ggs = globalThis.__ggs;
-  const KEY = 'ggs-drawings';
+  const SERVER = 'https://oggs.orlandopb.com/minecraft.php'; // holds the prompts, models and daily limits
 
-  const CSS = `
-    .panel { width: auto; max-width: min(720px, calc(100vw - 32px)); }
-    .avg { margin-bottom: 10px; color: rgba(255, 255, 255, .75); }
-    .avg b { color: #fff; font-size: 15px; }
-    .grid { display: flex; flex-wrap: wrap; gap: 12px; }
-    .card { width: 118px; }
-    .card svg { display: block; width: 118px; height: 118px; border-radius: 8px; }
-    .card.big { width: 180px; }
-    .card.big svg { width: 180px; height: 180px; }
-    .r { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: rgba(255, 255, 255, .5);
-         margin-bottom: 4px; }
-    .stats { margin-top: 6px; padding: 4px 6px; border: 1.5px solid transparent; border-radius: 7px; }
-    .card.hit .stats { border-color: #fcc419; background: rgba(252, 196, 25, .12); }
-    .c { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .card.hit .c { color: #ffd43b; }
-    .s { font-variant-numeric: tabular-nums; }
-    .s.good { color: #69db7c; } .s.ok { color: #ffd43b; } .s.bad { color: #ff8787; }
-    .ans { margin-top: 4px; font-size: 12px; color: rgba(255, 255, 255, .6); }
-    .ans b { color: #fff; }
-    .none { width: 118px; height: 118px; border-radius: 8px; display: grid; place-items: center;
-            background: rgba(255, 255, 255, .06); color: rgba(255, 255, 255, .45); }`;
-
-  const esc = ggs.esc;
-  const grade = score => (score >= 70 ? 'good' : score >= 50 ? 'ok' : 'bad');
-
-  function load() {
-    try { return JSON.parse(sessionStorage.getItem(KEY)) ?? {}; } catch { return {}; }
-  }
-  function save(data) {
-    try { sessionStorage.setItem(KEY, JSON.stringify(data)); } catch {}
-  }
-  function game() {
-    const token = ggs.game.context()?.token;
-    if (!token) return null;
-    const data = load();
-    return data.token === token ? data : { token, rounds: {} };
-  }
-
-  function record(drawing) {
-    const g = game();
-    if (!g || !drawing) return;
-    g.rounds[g.seen ?? Object.keys(g.rounds).length + 1] = drawing;
-    save(g);
-  }
-
-  const bbox = pts => {
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-  };
-  const pathD = rings => rings.map(r => 'M' + r.map(p => p.join(',')).join('L') + 'Z').join('');
-
-  // The drawing with its pin, and the correct country's outline dashed over it.
-  function thumb({ rings, pin, answer }) {
-    let over = null;
-    if (answer?.outline?.length) {
-      const [dx0, dy0, dx1, dy1] = bbox(rings.flat()), [ox0, oy0, ox1, oy1] = bbox(answer.outline.flat());
-      const s = Math.max(dx1 - dx0, dy1 - dy0) / Math.max(ox1 - ox0, oy1 - oy0, 1e-9);
-      const mx = (dx0 + dx1) / 2, my = (dy0 + dy1) / 2, ox = (ox0 + ox1) / 2, oy = (oy0 + oy1) / 2;
-      over = answer.outline.map(r => r.map(([x, y]) => [Math.round(mx + (x - ox) * s), Math.round(my + (y - oy) * s)]));
+  function clientId() {
+    let id = ggs.store.get('ggs-client');
+    if (!id) {
+      id = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
+      ggs.store.set('ggs-client', id);
     }
-    const [x0, y0, x1, y1] = bbox(rings.flat().concat([pin], over ? over.flat() : []));
-    const size = Math.max(x1 - x0, y1 - y0, 60) * 1.18, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    const pr = size * 0.035;
-    return `<svg viewBox="${cx - size / 2} ${cy - size / 2} ${size} ${size}">
-      <rect x="${cx - size / 2}" y="${cy - size / 2}" width="${size}" height="${size}" fill="#cfe7f5"/>
-      <path d="${pathD(rings)}" fill="rgba(81,207,102,.55)" stroke="#2b8a3e" stroke-width="1.5" vector-effect="non-scaling-stroke"
-            stroke-linejoin="round"/>
-      ${over ? `<path d="${pathD(over)}" fill="none" stroke="#1f2a44" stroke-width="1.6" stroke-dasharray="4 3"
-            vector-effect="non-scaling-stroke" stroke-linejoin="round" opacity=".85"><title>${esc(answer.name)}</title></path>` : ''}
-      <circle cx="${pin[0]}" cy="${pin[1]}" r="${pr}" fill="#d9480f" stroke="#fff" stroke-width="1.5"
-              vector-effect="non-scaling-stroke"/>
-    </svg>`;
+    return id;
+  }
+  const code = () => active?.cfg.code || ggs.settings?.minecraft?.code || '';
+  async function server(fields, post = false, signal) {
+    const body = new URLSearchParams({ ...fields, client: clientId(), code: code() });
+    const r = post ? await fetch(SERVER, { method: 'POST', body, signal }) : await fetch(`${SERVER}?caps=1&${body}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw new Error(j.error || `server HTTP ${r.status}`);
+    return j;
   }
 
-  const isHit = d => !!d.answer && (d.answer.code === d.code || d.answer.name === d.country);
+  // Typical seconds per generation, from the last rounds; drives the loading bar.
+  const ETA_DEFAULT = { normal: 15, hq: 40 };
+  const eta = ggs.store.get('ggs-minecraft-eta', {});
+  const etaKey = mode => (active.style === 'minecraft' ? mode : `${active.style}/${mode}`);
 
-  function card(n, d, big = false) {
-    if (!d) return `<div class="card"><div class="r">Round ${n}</div><div class="none">no drawing</div></div>`;
-    const a = d.answer, hit = isHit(d);
-    return `<div class="card${hit ? ' hit' : ''}${big ? ' big' : ''}"><div class="r">Round ${n}</div>${thumb(d)}
-      <div class="stats">
-        <div class="c" title="${esc(d.country)}">${esc(d.country)}${hit ? ' \u2713' : ''}</div>
-        <div class="s ${grade(d.score)}">${d.score}% match</div>
-        ${a && !hit ? `<div class="ans">Correct: <b>${esc(a.name)}</b> <span class="s ${grade(a.score)}">${a.score}%</span></div>` : ''}
-      </div></div>`;
+  // panoId -> Promise<{ worldWidth, tileWidth, zmax }> (metaSync: the resolved value)
+  const meta = new Map(), metaSync = new Map();
+  function panoMeta(id) {
+    if (!meta.has(id)) meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
+      .then(({ data }) => {
+        const worldWidth = data.tiles.worldSize.width, tileWidth = data.tiles.tileSize.width;
+        const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
+        metaSync.set(id, m);
+        return m;
+      }));
+    return meta.get(id);
+  }
+  const widthAt = (m, zoom) => Math.ceil(m.worldWidth / 2 ** (m.zmax - zoom));
+
+  const gens = new Map(); // `${panoId}/${style}/${mode}` -> { promise, image, pending: [uploads waiting], error }
+  let active = null, overlay = null; // active: { id, style, label, cfg } while a script is on
+  const panos = new Set();
+  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
+  function shownPano() {
+    for (const p of panos) { try { const id = p.getPano(); if (id) return id; } catch {} }
+    return null;
   }
 
-  function gameHtml(g) {
-    const total = g.total ?? Math.max(...Object.keys(g.rounds).map(Number));
-    const drawn = Object.values(g.rounds);
-    const withAnswer = drawn.filter(d => d.answer);
-    const plural = n => `${n} drawing${n === 1 ? '' : 's'}`;
-    const mean = xs => (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(1);
-    const avg = withAnswer.length
-      ? `Average match with the correct country <b>${mean(withAnswer.map(d => d.answer.score))}%</b> over ${plural(withAnswer.length)}
-         \u00b7 ${withAnswer.filter(isHit).length}/${withAnswer.length} right`
-      : `Average shape match <b>${mean(drawn.map(d => d.score))}%</b> over ${plural(drawn.length)}`;
-    const cards = [];
-    for (let n = 1; n <= total; n++) cards.push(card(n, g.rounds[n]));
-    return `<div class="avg">${avg}</div><div class="grid">${cards.join('')}</div>`;
+  // Tiles of a panorama that has no generation yet wait here (blue on screen) until the
+  // view has stayed on one panorama for SETTLE ms; then that panorama is generated and the
+  // others get their real tiles back.
+  const SETTLE = 800;
+  const waitingPanos = new Map(); // panoId -> [{ rec, img, tw, th }]
+  let settleTimer = null, latestPano = null;
+  function waitFor(id, entry) {
+    if (!waitingPanos.has(id)) waitingPanos.set(id, []);
+    waitingPanos.get(id).push(entry);
+    if (id !== latestPano || !settleTimer) { latestPano = id; clearTimeout(settleTimer); settleTimer = setTimeout(settled, SETTLE); }
   }
-
-  let panel = null, shown = '';
-  function hide() {
-    panel?.destroy();
-    panel = null;
-    shown = '';
-  }
-
-  // Called from the draw-guess tick.
-  let asked = '';
-  function sync(inRound) {
-    const g = game();
-    if (!g) return hide();
-    if (inRound) {
-      const key = ggs.game.roundKey();
-      if (asked !== key) {
-        asked = key;
-        ggs.game.round().then(r => {
-          const g = game();
-          if (!r || !g || ggs.game.roundKey() !== key) return;
-          if (g.seen !== r.n || g.total !== r.total) { g.seen = r.n; g.total = r.total; save(g); }
-        }).catch(() => {});
+  function settled() {
+    settleTimer = null;
+    const id = shownPano() ?? latestPano;
+    // a generation still in flight for a panorama you've moved away from is cancelled
+    for (const [key, g] of gens) if (g.ctrl && !g.image && !g.error && !key.startsWith(`${id}/`)) cancel(key, g);
+    for (const [pid, entries] of [...waitingPanos]) {
+      waitingPanos.delete(pid);
+      if (pid === id && active) {
+        const g = generation(pid);
+        g.pending.push(...entries);
+        if (g.image || g.error) flush(g);
+      } else {
+        for (const { rec, img } of entries) { try { ggs.tiles.upload(rec, img); } catch {} }
       }
-      return hide();
     }
-    const last = !!g.total && g.seen === g.total;
-    if (last ? !Object.keys(g.rounds).length : !g.rounds[g.seen]) return hide();
-    const title = last ? 'Your drawings' : `Round ${g.seen} drawing`;
-    const body = last ? gameHtml(g) : card(g.seen, g.rounds[g.seen], true);
-    if (title + body === shown) return;
-    hide();
-    panel = ggs.ui.panel({ id: 'draw-summary', title, html: body, css: CSS, pos: { x: 16, y: 80 } });
-    panel.clamp();
-    shown = title + body;
   }
 
-  ggs.drawSummary = { record, sync, hide };
+  // ---- daily limits ----
+  // The server counts per client id and its log ({ normal: [ms], hq: [ms] }, rolling 24 h)
+  // is the truth; a copy is kept here so a round isn't started once today's limit is used
+  // up. Generations in flight are added on top until the server's answer (which includes
+  // them) replaces the copy, so nothing is counted twice.
+  const DAY = 24 * 3600 * 1000, QKEY = 'ggs-minecraft-quota';
+  const Q = {
+    tidy(log, other) {
+      const now = Date.now(), out = {};
+      for (const k of ['normal', 'hq']) {
+        const all = new Set([...(log?.[k] ?? []), ...(other?.[k] ?? [])].filter(t => now - t < DAY));
+        out[k] = [...all].sort((a, b) => a - b);
+      }
+      return out;
+    },
+    left(log, mode, cap) {
+      const l = Q.tidy(log)[mode];
+      return { left: Math.max(0, cap - l.length), resetAt: l.length ? l[0] + DAY : null };
+    },
+    until(at) {
+      const m = Math.max(1, Math.ceil((at - Date.now()) / 60000));
+      return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+    },
+  };
+  let serverLog = {}, log = {}, caps = { normal: 100, hq: 10 }, limitShownFor = null;
+  const inFlight = { normal: [], hq: [] }; // t0 of generations the server hasn't answered yet
+  function saveLog(fromServer) {
+    if (fromServer) serverLog = Q.tidy(fromServer);
+    log = Q.tidy(serverLog, inFlight);
+    ggs.store.set(QKEY, serverLog);
+    const part = (label, x) => (x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`);
+    if (active) ggs.status(active.id, `Today: ${part('rounds', Q.left(log, 'normal', caps.normal))} · ${part('high quality', Q.left(log, 'hq', caps.hq))}${caps.codeOk ? ' · code accepted' : ''}`);
+  }
+  async function loadQuota() {
+    serverLog = ggs.store.get(QKEY, {});
+    saveLog();
+    try {
+      caps = await server({});
+      saveLog(caps.log);
+    } catch (err) {
+      if (active) ggs.status(active.id, 'Server not reachable');
+      ggs.debug('redraw: caps', err);
+    }
+  }
+  const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
+  const allowed = mode => Q.left(log, mode, caps[mode]).left > 0;
+  const stats = { uploads: 0, tiles: 0, swapped: 0 };
+  ggs.redraw = { debug: () => ({ active: active && { id: active.id, style: active.style }, tiles: ggs.tiles.count(), ...stats,
+    gens: [...gens].map(([id, g]) => ({ id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null })) }) };
+
+  // Cancelled: the request is aborted (the server may still finish and count it if it had
+  // already reached the image API), its tiles get their real pictures back, and coming
+  // back to that panorama generates it again.
+  function cancel(key, g) {
+    gens.delete(key);
+    g.ctrl.abort();
+    g.error = new Error('cancelled');
+    inFlight[g.mode] = inFlight[g.mode].filter(t => t !== g.t0);
+    saveLog();
+    progressDone(false, key);
+    flush(g).then(() => ggs.tiles.repaint(key.split('/')[0]));
+    ggs.debug(`${active?.style}: cancelled ${key}`);
+  }
+  function generation(id) {
+    const mode = modeOf(active.cfg), style = active.style, key = `${id}/${style}/${mode}`;
+    if (gens.has(key)) return gens.get(key);
+    const g = { image: null, pending: [], error: null, ctrl: new AbortController(), mode, t0: Date.now() };
+    gens.set(key, g);
+    if (gens.size > 20) { const k = gens.keys().next().value; gens.get(k).image?.close?.(); gens.delete(k); }
+    const t0 = g.t0;
+    inFlight[mode].push(t0); // counted from the start; the server's log takes over once it answers
+    saveLog();
+    (async () => {
+      const ek = etaKey(mode);
+      progressStart(eta[ek] ?? ETA_DEFAULT[mode], key);
+      const m = await panoMeta(id);
+      const r = await server({ pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode, style }, true, g.ctrl.signal);
+      if (g.error) return; // cancelled while the server was working
+      inFlight[mode] = inFlight[mode].filter(t => t !== t0);
+      saveLog(r.log);
+      const img = new Image();
+      img.src = r.image;
+      await img.decode();
+      g.image = await createImageBitmap(img);
+      ggs.debug(`${style}: generated ${id} (${mode}) in ${(r.ms / 1000).toFixed(1)} s`);
+      await flush(g);
+      await ggs.tiles.repaint(id);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      eta[ek] = Math.round((Date.now() - t0) / 1000 * 0.7 + (eta[ek] ?? (Date.now() - t0) / 1000) * 0.3);
+      ggs.store.set('ggs-minecraft-eta', eta);
+      progressDone(false, key);
+    })().catch(err => {
+      if (g.error) return; // cancelled: already tidied up
+      g.error = err;
+      inFlight[mode] = inFlight[mode].filter(t => t !== t0);
+      saveLog();
+      ggs.log(`${style}: generation failed`, err);
+      progressDone(true, key);
+      flush(g).then(() => ggs.tiles.repaint(id)); // put the real tiles back
+    });
+    return g;
+  }
+
+  // Crop of the generated picture for tile x,y at this zoom.
+  function crop(g, m, x, y, zoom, tw, th) {
+    const W = widthAt(m, zoom), H = Math.ceil(W / 2), img = g.image;
+    const sx = (x * tw / W) * img.width, sy = (y * th / H) * img.height;
+    const sw = Math.min(img.width - sx, (tw / W) * img.width), sh = Math.min(img.height - sy, (th / H) * img.height);
+    const c = new OffscreenCanvas(tw, th), ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw * sw / ((tw / W) * img.width), th * sh / ((th / H) * img.height));
+    return c;
+  }
+
+  // ---- tile filter: what goes into WebGL for each tile ----
+  ggs.tiles.filter((rec, source) => {
+    stats.uploads++;
+    if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
+    const k = rec.key, img = source;
+    stats.tiles++;
+    const id = k.pano, mode = modeOf(active.cfg), gkey = `${id}/${active.style}/${mode}`;
+    if (!gens.has(gkey) && !allowed(mode)) {
+      if (limitShownFor !== id) {
+        limitShownFor = id;
+        const { resetAt } = Q.left(log, mode, caps[mode]);
+        notice(`${active.cfg.hq ? 'High quality' : active.label} limit reached for today · back in ${Q.until(resetAt)}`);
+      }
+      return img;
+    }
+    const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
+    const g = gens.get(gkey);
+    if (!g) { waitFor(id, { rec, img, tw, th }); return blank(tw, th); }
+    const m = metaSync.get(id);
+    if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
+    if (g.error) return img;
+    g.pending.push({ rec, img, tw, th });
+    return blank(tw, th);
+  }, 0); // one filter for every style; before lying-signs, which then sees a canvas and leaves it alone
+
+  // The picture is in (or failed): push the crops (or the real tiles) into the textures.
+  async function flush(g) {
+    const recs = g.pending.splice(0);
+    if (!recs.length) return;
+    const id = recs[0].rec.key.pano;
+    const m = g.image ? await panoMeta(id).catch(() => null) : null;
+    for (const { rec, img, tw, th } of recs) {
+      try {
+        const k = rec.key;
+        if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
+      } catch (err) { ggs.log('redraw: re-upload failed', err); }
+    }
+  }
+
+  let blankTile = null;
+  function blank(w, h) {
+    if (!blankTile || blankTile.width !== w || blankTile.height !== h) {
+      blankTile = new OffscreenCanvas(w, h);
+      const ctx = blankTile.getContext('2d');
+      ctx.fillStyle = '#35507f'; // a calm blue while the picture is on its way (black flickered)
+      ctx.fillRect(0, 0, w, h);
+    }
+    return blankTile;
+  }
+
+  // ---- loading bar: eases towards 90% over the last rounds' time, fills when tiles are swapped ----
+  const CSS = `
+    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2147483000; pointer-events: none;
+            opacity: 0; transition: opacity .25s; }
+    :host([data-on]) { opacity: 1; }
+    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85); backdrop-filter: blur(8px);
+           box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6); font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
+           text-align: center; letter-spacing: .02em; }
+    .bar[hidden] { display: none; }
+    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19; transition: width .1s linear, background .3s; }
+  `;
+  // The bar belongs to the latest generation started (`owner`); an older one finishing
+  // or failing later leaves it alone.
+  let progressTimer = null, owner = null;
+  function progressStart(seconds, key) {
+    if (!overlay) return;
+    owner = key;
+    clearInterval(progressTimer);
+    const fill = overlay.fill, t0 = Date.now();
+    overlay.text.textContent = 'Loading round…';
+    overlay.bar.hidden = false;
+    fill.style.width = '0%';
+    fill.style.background = '';
+    overlay.host.dataset.on = '';
+    progressTimer = setInterval(() => {
+      const x = (Date.now() - t0) / 1000 / seconds;
+      fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
+    }, 100);
+  }
+  function progressDone(failed, key) {
+    if (!overlay || (key && key !== owner)) return;
+    owner = null;
+    clearInterval(progressTimer);
+    overlay.fill.style.width = '100%';
+    if (failed) { overlay.fill.style.background = '#e03131'; overlay.text.textContent = 'Could not redraw this round'; }
+    setTimeout(() => { if (overlay) delete overlay.host.dataset.on; }, failed ? 4000 : 400);
+  }
+  function notice(message) {
+    if (!overlay) return;
+    clearInterval(progressTimer);
+    overlay.text.textContent = message;
+    overlay.bar.hidden = true;
+    overlay.host.dataset.on = '';
+    setTimeout(() => { if (overlay) { delete overlay.host.dataset.on; setTimeout(() => { if (overlay) overlay.bar.hidden = false; }, 300); } }, 4000);
+  }
+
+  function teardown() {
+    active = null; clearTimeout(settleTimer); settleTimer = null; waitingPanos.clear(); clearInterval(progressTimer);
+    overlay?.host.remove(); overlay = null; ggs.tiles.replay();
+  }
+  function start(id, style, label, cfg) {
+    if (active) teardown(); // only one redraw script at a time
+    active = { id, style, label, cfg };
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div><div class="bar"><div class="fill"></div></div></div>`;
+    document.body.append(host);
+    overlay = { host, text: root.querySelector('.text'), bar: root.querySelector('.bar'), fill: root.querySelector('.fill') };
+    loadQuota().finally(() => ggs.tiles.replay());
+    return {
+      stop() { if (active?.id === id) teardown(); },
+      update(c) {
+        if (active?.id !== id) return;
+        const codeChanged = c.code !== active.cfg.code, hqChanged = !!c.hq !== !!active.cfg.hq;
+        active.cfg = c;
+        if (codeChanged) loadQuota();
+        if (hqChanged) ggs.tiles.replay();
+      },
+    };
+  }
+  Object.assign(ggs.redraw, { script: (id, style, label) => ({ start: cfg => start(id, style, label, cfg) }) });
 })();
 
-// ==================== src/scripts/draw-guess/main.js ==============================
-// Draw your country: a drawing board (app/, in an iframe) over GeoGuessr's guess map.
-// Sketch the country, pin your spot, and the board snaps the drawing onto the closest
-// real country; the pin becomes the guess on the (invisible) map, and a few seconds after
-// the animation the script presses GeoGuessr's own hidden Guess button.
+// ==================== src/core/board.js ===========================================
+// Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess). An app page in an
+// iframe sits where the guess map was; the real map stays in the page, invisible, and the
+// guess goes through it. This handles the hidden map, the frame and its messages, the
+// hover-to-expand size, a blank board each round, placing the pin and pressing Guess.
+//   ggs.board({ id, app, size(roomW, roomH, boardH) -> { w, h }, guessDelay, answer, onMessage(d), onTick(inRound) })
+//     -> { post(msg), place(guess) -> ok, press(guess, waitMs), status(text), created, stop() }
+// The app talks by postMessage: up 'ready', 'height' { h }, 'guess' { guess: { lat, lng } } the
+// moment its Guess is pressed (the pin goes on the hidden map straight away), 'done' once its
+// animation is over (GeoGuessr's Guess is pressed guessDelay ms later), and its own messages
+// (passed to onMessage); down 'reset' each round, 'answer' { lat, lng } each round when `answer` is set
+// (lat null until the round's location is known), plus whatever the script posts.
 (() => {
   const ggs = globalThis.__ggs;
 
-  // The real map stays in the page (the guess goes through it), just invisible, as does
-  // its Guess button (the auto-guess and Space still press it).
+  // The real map and its Guess button stay in the page, only invisible.
   const HIDE_MAP_CSS = `
     [class*="guess-map_canvas"] { opacity: 0 !important; pointer-events: none !important; }
     [class*="guess-map_guessMap"] > :not(:has([data-qa="perform-guess"])):not([data-qa="perform-guess"]),
@@ -954,16 +1224,16 @@ section.off .opts { display: none; }
     .status { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; padding: 4px 10px; border-radius: 999px;
               font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; background: #c92a2a; }
     .status:empty { display: none; }`;
-  const MAX_H = 640, MARGIN = 16;
+  const MARGIN = 16;
   const COLLAPSED_W = 320, COLLAPSE_DELAY = 600; // small until hovered, like GeoGuessr's map
-  const AUTO_GUESS_MS = 3000;
+  const RETRY_MS = 500, TRIES = 10;
+  const AWAY_MS = 1500; // the guess map gone this long = a result screen, so the board clears
 
-  function start(cfg) {
+  ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
-    let host = null, frame, status;
-    let ready = false, queued = [], placed = false, wasInRound = false, lastRound, lastToken;
-    let expanded = false, collapseTimer = 0, answerRound;
-    let boardH = 0, guessTimer = 0;
+    let host = null, frame, statusEl, ready = false, queued = [];
+    let expanded = false, collapseTimer = 0, pressTimer = 0, boardH = 0;
+    let wasInRound = false, awaySince = 0, placed = false, answerRound, lastGuess = null;
     let spot = null, spotKey = ''; // where the board sits; measured once per round and window size
 
     const hideMap = document.createElement('style');
@@ -971,17 +1241,16 @@ section.off .opts { display: none; }
     (document.head ?? document.documentElement).append(hideMap);
 
     const post = msg => (ready ? frame.contentWindow.postMessage(msg, origin) : queued.push(msg));
+    const status = text => { if (statusEl) statusEl.textContent = text ?? ''; };
 
     function create() {
       host = document.createElement('div');
-      host.setAttribute('data-ggs-ui', 'draw-guess');
+      host.setAttribute('data-ggs-ui', id);
       const root = host.attachShadow({ mode: 'open' });
       root.innerHTML = `<style>${CSS}</style><div class="status"></div><iframe></iframe>`;
       frame = root.querySelector('iframe');
-      status = root.querySelector('.status');
-      frame.src = `${ggs.extBase}src/scripts/draw-guess/app/index.html`;
-      post({ ggs: 'hard', on: !!cfg.hardMode });
-      post({ ggs: 'nudge', points: cfg.nudge });
+      statusEl = root.querySelector('.status');
+      frame.src = ggs.extBase + app;
       host.addEventListener('mouseenter', () => { clearTimeout(collapseTimer); setExpanded(true); });
       host.addEventListener('mouseleave', () => {
         clearTimeout(collapseTimer);
@@ -999,107 +1268,504 @@ section.off .opts { display: none; }
 
     // Right-aligned with the guess map, down to the bottom of its hidden Guess button.
     function layout() {
-      const key = `${innerWidth}x${innerHeight}|${lastRound}`;
-      if (!spot || key !== spotKey) {
-        const anchor = (ggs.maps.guessButton() ?? ggs.maps.guessMapElement()).getBoundingClientRect();
-        const right = Math.max(MARGIN, innerWidth - anchor.right);
-        const bottom = Math.max(MARGIN, innerHeight - anchor.bottom);
-        const h = Math.min(MAX_H, innerHeight - bottom - MARGIN), w = Math.min(h - 52, innerWidth - right - MARGIN); // board is 52px taller than wide
-        spot = { right, bottom, w, h };
+      const key = `${innerWidth}x${innerHeight}|${ggs.game.roundKey()}`;
+      const el = (!spot || key !== spotKey) && (ggs.maps.guessButton() ?? ggs.maps.guessMapElement());
+      if (el) { // with no map on screen (between rounds) the last spot stays
+        const anchor = el.getBoundingClientRect();
+        const right = Math.max(MARGIN, innerWidth - anchor.right), bottom = Math.max(MARGIN, innerHeight - anchor.bottom);
+        spot = { right, bottom, roomW: innerWidth - right - MARGIN, roomH: innerHeight - bottom - MARGIN };
         spotKey = key;
       }
-      const { right, bottom, w } = spot;
-      const h = boardH ? Math.min(boardH, innerHeight - bottom - MARGIN) : spot.h;
+      if (!spot) return;
+      const { w, h } = size(spot.roomW, spot.roomH, boardH);
       const scale = expanded ? 1 : Math.min(1, COLLAPSED_W / w);
-      Object.assign(host.style, { right: `${right}px`, bottom: `${bottom}px`, width: `${w}px`, height: `${h}px`,
+      Object.assign(host.style, { right: `${spot.right}px`, bottom: `${spot.bottom}px`, width: `${w}px`, height: `${h}px`,
                                   transform: `scale(${scale})` });
     }
 
-    const onMessage = async e => {
+    const onFrameMessage = e => {
       if (!frame || e.origin !== origin || e.source !== frame.contentWindow) return;
       const d = e.data ?? {};
-      if (d.ggs === 'ready') {
-        ready = true;
-        queued.splice(0).forEach(post);
-      } else if (d.ggs === 'height') {
-        boardH = d.h;
-        if (host.style.width) layout();
-      } else if (d.ggs === 'pool') {
-        ggs.debug(`draw-guess: map "${d.map}" -> ${d.pool} (${d.how}): ${d.count} countries possible`);
-      } else if (d.ggs === 'guess') { // the moment Guess is pressed, before the animation
-        try {
-          ggs.maps.placeGuess(d.guess.lat, d.guess.lng);
-        } catch (err) {
-          status.textContent = err.message;
-          ggs.maps.debug();
-          return;
-        }
-        placed = true;
-        status.textContent = '';
-        ggs.drawSummary.record(d.drawing);
-      } else if (d.ggs === 'done' && placed) { // animation finished
-        clearTimeout(guessTimer);
-        const round = ggs.game.roundKey();
-        guessTimer = setTimeout(() => {
-          if (ggs.game.roundKey() !== round || !ggs.maps.guessMapElement()) return; // already guessed or moved on
-          if (!ggs.maps.submitGuess()) status.textContent = "Guess placed, but couldn't press Guess";
-        }, AUTO_GUESS_MS);
-      }
+      if (d.ggs === 'ready') { ready = true; queued.splice(0).forEach(post); }
+      else if (d.ggs === 'height') { boardH = d.h; if (host.style.width) layout(); }
+      else if (d.ggs === 'guess') lastGuess = place(d.guess) ? d.guess : null;
+      else if (d.ggs === 'done') { if (lastGuess) press(lastGuess, guessDelay); lastGuess = null; }
+      else onMessage?.(d);
     };
-    window.addEventListener('message', onMessage);
+    window.addEventListener('message', onFrameMessage);
 
+    // A guess is a click on the invisible map (maps.js), so GeoGuessr places its own pin.
+    function place(guess) {
+      try {
+        ggs.maps.placeGuess(guess.lat, guess.lng);
+      } catch (err) {
+        status(err.message);
+        ggs.maps.debug();
+        return false;
+      }
+      placed = true;
+      status('');
+      return true;
+    }
+
+    // GeoGuessr's Guess button can take a moment to appear or enable after the pin goes down,
+    // so keep trying for a few seconds, putting the pin down again once in case it was missed.
+    // With no button on the page at all (some layouts only show it on hover), Space instead.
+    // A new round clears pressTimer (tick below), so this never presses into the next round.
+    function press(guess, wait, n = 1) {
+      clearTimeout(pressTimer);
+      pressTimer = setTimeout(() => {
+        if (!ggs.maps.guessMapElement()) return; // already guessed or moved on
+        if (ggs.maps.submitGuess()) return;
+        if (n === 2) { try { ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false }); } catch {} }
+        if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
+        if (n < TRIES) return press(guess, RETRY_MS, n + 1);
+        status(`Guess placed, but couldn't press Guess (${ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found'})`);
+        ggs.maps.debug();
+      }, wait);
+    }
+
+    // The round's real location, for boards that show it once the guess is in.
+    function sendAnswer(round) {
+      if (round === answerRound) return;
+      answerRound = round;
+      post({ ggs: 'answer', lat: null });
+      ggs.game.roundLocation()
+        .then(loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
+        .catch(() => {});
+    }
+
+    // A new round gets a blank board. The guess map can blink out for a moment mid-round,
+    // so the board only clears after a guess or once the map was gone for a while.
     const tick = setInterval(() => {
       const inRound = !!ggs.maps.guessMapElement();
-      ggs.drawSummary.sync(inRound);
       if (inRound && !host) create();
-      if (!host) return;
-      const round = ggs.game.roundKey();
-      if (inRound && placed && (!wasInRound || round !== lastRound)) { // next round: blank board
-        post({ ggs: 'reset' });
-        clearTimeout(guessTimer);
-        placed = false;
-        status.textContent = '';
+      if (host) {
+        if (!inRound && wasInRound) awaySince = Date.now();
+        if (inRound && !wasInRound && (placed || Date.now() - awaySince > AWAY_MS)) {
+          post({ ggs: 'reset' });
+          clearTimeout(pressTimer);
+          placed = false;
+          status('');
+        }
+        wasInRound = inRound;
+        host.hidden = !inRound;
+        if (inRound) layout();
+        if (inRound && answer) sendAnswer(ggs.game.roundKey());
       }
-      if (inRound && round !== answerRound) { // tell the board the round's country, for the nudge
-        answerRound = round;
-        post({ ggs: 'answer', lat: null });
-        ggs.game.roundLocation()
-          .then(loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
-          .catch(() => {});
-      }
-      wasInRound = inRound;
-      lastRound = round;
-      host.hidden = !inRound;
-      if (!inRound) return;
-      layout();
-      const token = ggs.game.context()?.token;
-      if (token !== lastToken) { // new game: pick the country pool from the map name
-        lastToken = token;
-        ggs.game.mapInfo()
-          .then(m => (m?.name ? post({ ggs: 'map', name: m.name }) : ggs.debug('draw-guess: no map name, using world coverage')))
-          .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
-      }
+      onTick?.(inRound);
     }, 500);
 
     return {
-      update(next) {
-        if (host && !!next.hardMode !== !!cfg.hardMode) post({ ggs: 'hard', on: !!next.hardMode });
-        if (host && next.nudge !== cfg.nudge) post({ ggs: 'nudge', points: next.nudge });
-        cfg = next;
-      },
+      post, place, press, status,
+      get created() { return !!host; },
       stop() {
         clearInterval(tick);
         clearTimeout(collapseTimer);
-        clearTimeout(guessTimer);
-        window.removeEventListener('message', onMessage);
+        clearTimeout(pressTimer);
+        window.removeEventListener('message', onFrameMessage);
         host?.remove();
         hideMap.remove();
-        ggs.drawSummary.hide();
       },
+    };
+  };
+})();
+
+// ==================== src/form.js =================================================
+// Settings form: one card per script in ggs.registry. Rendered by the popup (saved to
+// chrome.storage.sync) and by the in-page panel (src/panel.js). update(settings) shows
+// settings changed elsewhere without firing save.
+//   ggs.settingsForm(container, { settings, save(id, key, value) }) -> { setStatus(id, text), update(settings) }
+(() => {
+  const ggs = (globalThis.__ggs ??= {});
+
+  ggs.settingsForm = (container, { settings: initial, save }) => {
+    let settings = initial;
+    const { registry, config } = ggs;
+    const statusEls = {}, refreshers = [], hideable = []; // hideable: options with a hideIn, by game mode
+
+    function option(o) { return o.type === 'text'
+        ? `<label class="row"><span class="text">${o.label}</span>
+             <input type="${o.secret ? 'password' : 'text'}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}" autocomplete="off"></label>`
+        : o.type === 'select'
+        ? `<label class="row"><span class="text">${o.label}</span>
+             <select data-key="${o.key}">${o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}</select></label>`
+        : o.type === 'slider'
+        ? `<label class="row slider"><span class="text">${o.label}</span>
+             <input type="range" data-key="${o.key}" min="${o.min}" max="${o.max}" step="1">
+             <span class="marks">${o.marks.map(m => `<span>${m}</span>`).join('')}</span></label>`
+        : `<label class="row"><span class="text">${o.label}</span><input type="checkbox" class="switch" data-key="${o.key}"></label>`; }
+
+    // metas sharing a `group` render inside one card, each as a .part; the card is off
+    // when none of its parts is enabled
+    const groups = {}, parts = {};
+    const reflect = (card, metas) => card.classList.toggle('off', !metas.some(m => config(m, settings).enabled));
+    // a flat script is on while any of its options is; an option with `mirror: '<id>'`
+    // is another (flat) script's option of the same key, shown in a second place
+    const setFlat = (meta, key, value) => {
+      const cfg = config(meta, settings);
+      const changes = { [key]: value, enabled: meta.options.some(o => (o.key === key ? value : cfg[o.key]) === true) };
+      settings[meta.id] = { ...settings[meta.id], ...changes };
+      for (const [k, v] of Object.entries(changes)) save(meta.id, k, v);
+      refreshers.forEach(fn => fn());
+    };
+    const byId = Object.fromEntries(registry.map(m => [m.id, m]));
+
+    // A script's `turnsOn` options go on with it and, unless the user has touched them since,
+    // off with it. `auto_<key>` on the option's script remembers which script switched it on.
+    const mark = (id, k, by) => {
+      settings[id] = { ...settings[id], [`auto_${k}`]: by };
+      save(id, `auto_${k}`, by);
+    };
+    const autoOn = meta => {
+      for (const { id, key: k } of meta.turnsOn ?? []) {
+        if (config(byId[id], settings)[k]) continue;
+        setFlat(byId[id], k, true);
+        mark(id, k, meta.id);
+      }
+    };
+    const autoOff = meta => {
+      for (const { id, key: k } of meta.turnsOn ?? []) {
+        if (config(byId[id], settings)[`auto_${k}`] !== meta.id) continue;
+        mark(id, k, null);
+        setFlat(byId[id], k, false);
+      }
+    };
+    // the user setting an option themselves makes it theirs
+    const setByUser = (meta, key, value) => {
+      if (config(meta, settings)[`auto_${key}`]) mark(meta.id, key, null);
+      setFlat(meta, key, value);
+    };
+    for (const meta of registry) {
+      let card = meta.group && groups[meta.group];
+      if (!card) {
+        card = document.createElement('section');
+        card.dataset.id = meta.group ?? meta.id;
+        if (meta.group) groups[meta.group] = card;
+        container.append(card);
+      }
+      (parts[card.dataset.id] ??= []).push(meta);
+      const metasHere = parts[card.dataset.id];
+      const part = meta.group ? document.createElement('div') : card;
+      part.className = meta.group ? 'part' : '';
+      part.dataset.id = meta.id;
+      const setOff = () => reflect(card, metasHere);
+      setOff();
+      card.classList.toggle('flat', !!meta.flat && !meta.group);
+      // flat: a button per option, "enabled" is any option on (no name when grouped)
+      part.innerHTML = meta.flat ? `
+        <div class="row boxes">
+          ${meta.group ? '' : `<span class="text"><span class="name">${meta.name}</span></span>`}
+          ${meta.options.map(o => `<button type="button" class="tog" data-key="${o.key}">${o.label}</button>`).join('')}
+        </div><div class="status"></div>` : `
+        <label class="row">
+          <span class="text"><span class="name">${meta.name}</span><span class="desc">${meta.description}</span></span>
+          <input type="checkbox" class="switch" data-key="enabled">
+        </label>
+        <div class="opts">${meta.options.map(o => o.hidden ? '' : option(o)).join('')}${meta.options.some(o => o.hidden)
+          ? `<details class="more"><summary>More</summary>${meta.options.filter(o => o.hidden).map(option).join('')}</details>` : ''}<div class="status"></div></div>`;
+      if (meta.group) card.append(part);
+      for (const btn of part.querySelectorAll('button.tog')) {
+        const key = btn.dataset.key;
+        const show = () => {
+          const cfg = config(meta, settings);
+          btn.setAttribute('aria-pressed', !!cfg[key]);
+          setOff();
+        };
+        show();
+        refreshers.push(show);
+        btn.addEventListener('click', () => setByUser(meta, key, !config(meta, settings)[key]));
+      }
+      statusEls[meta.id] = part.querySelector('.status');
+      for (const o of meta.options) {
+        const el = o.hideIn && part.querySelector(`[data-key="${o.key}"]`)?.closest('button, label');
+        if (el) hideable.push({ el, hideIn: o.hideIn });
+      }
+      for (const box of part.querySelectorAll('input[data-key], select[data-key]')) {
+        const key = box.dataset.key, range = box.type === 'range', select = box.tagName === 'SELECT';
+        const text = box.type === 'text' || box.type === 'password';
+        const mirror = byId[meta.options.find(o => o.key === key)?.mirror];
+        const show = () => {
+          const v = config(mirror ?? meta, settings)[key];
+          if (range || select || text) box.value = v; else box.checked = !!v;
+          if (key === 'enabled') setOff();
+        };
+        show();
+        refreshers.push(show);
+        box.addEventListener('change', () => {
+          const value = range ? Number(box.value) : select || text ? box.value : box.checked;
+          if (mirror) return setByUser(mirror, key, value);
+          settings[meta.id] = { ...settings[meta.id], [key]: value };
+          save(meta.id, key, value);
+          if (key === 'enabled' && value) {
+            // switching this one on switches off the scripts it can't run beside...
+            for (const ex of meta.excludes ?? []) {
+              if (!config(byId[ex], settings).enabled) continue;
+              settings[ex] = { ...settings[ex], enabled: false };
+              save(ex, 'enabled', false);
+              autoOff(byId[ex]);
+            }
+            // ...and switches on the (flat) options it wants, which can be switched off again
+            autoOn(meta);
+          } else if (key === 'enabled') autoOff(meta);
+          refreshers.forEach(fn => fn());
+        });
+      }
+    }
+
+    return {
+      setStatus(id, text) {
+        if (id === '_mode') for (const h of hideable) h.el.hidden = h.hideIn.includes(text);
+        else if (statusEls[id]) statusEls[id].textContent = text ?? '';
+      },
+      update(next) { settings = next; refreshers.forEach(fn => fn()); },
+    };
+  };
+})();
+
+// ==================== src/panel.js ================================================
+// In-page settings: the OGGS tab (bottom left) or Alt+O opens the popup's form in a panel.
+// Saves go to the bridge ("save" message), which stores them (chrome.storage.sync, or
+// localStorage for the userscript) and sends them back as the usual "settings" message.
+// settings.panel.hideTab hides the tab for recording; the hotkey still works.
+(() => {
+  const ggs = globalThis.__ggs;
+  let panel = null, form = null, tab = null, settings = null;
+
+  const save = () => window.postMessage({ ggs: 'save', settings }, location.origin);
+  const showTab = () => { if (tab) tab.style.display = settings?.panel?.hideTab ? 'none' : ''; }; // inline `all: initial` would beat the hidden attribute
+
+  async function open() {
+    if (panel) { panel.show(!panel.visible); return; }
+    if (!settings) return;
+    // the popup's stylesheet, inlined by the userscript build or fetched from the extension
+    const css = ggs.panelCss ?? await fetch(ggs.extBase + 'popup/popup.css').then(r => r.text()).catch(() => '');
+    if (panel) { panel.show(true); return; } // opened twice while the fetch was out
+    // same look as the popup: its stylesheet, its header (logo and title) as the drag bar
+    const paper = 'color: #1c1a2e; background-color: #f5f1e8; background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px); background-size: 22px 22px; background-position: 11px 11px;';
+    panel = ggs.ui.panel({ id: 'settings', title: `<img src="${ggs.extBase}icons/icon-128.png" alt=""><h1>Orlando's GeoGuessr Scripts</h1>`, css: `
+      ${css.replace(/\bbody\b/g, '.body').replace(/\bmain\b/g, '.scroll')}
+      .panel { width: 348px; background: none; border: 0; box-shadow: none; backdrop-filter: none; overflow: visible; }
+      .head { display: flex; align-items: center; gap: 10px; padding: 14px 10px 0 14px; font: inherit; letter-spacing: 0; text-transform: none;
+              ${paper} border: 2px solid #1c1a2e; border-bottom: 0; border-radius: 10px 10px 0 0; }
+      .head img { width: 32px; height: 32px; }
+      .head h1 { flex: 1; margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
+      .body { width: auto; padding: 0; border: 2px solid #1c1a2e; border-top: 0; border-radius: 0 0 10px 10px; background-position: 11px -3px; }
+      .scroll { display: flex; flex-direction: column; gap: 14px; padding: 14px; max-height: 75vh; overflow: auto; }
+      .close { flex: none; width: 28px; height: 28px; font: 700 16px/1 inherit; color: inherit;
+               background: none; border: 0; border-radius: 6px; cursor: pointer; }
+      .close:hover { background: rgba(28, 26, 46, .15); }`, html: '<div class="scroll"></div>' });
+    panel.$('.head').insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
+    panel.$('.close').addEventListener('click', () => panel.show(false));
+    form = ggs.settingsForm(panel.$('.scroll'), { settings, save });
+    ggs.onStatus((id, text) => form.setStatus(id, text));
+    panel.clamp();
+  }
+
+  ggs.onSettings(all => {
+    settings = all;
+    showTab();
+    if (!form) return;
+    form.update(settings);
+  });
+
+  const ready = () => {
+    ggs.hotkey(e => e.altKey && e.code === 'KeyO', open);
+    tab = document.createElement('button');
+    tab.setAttribute('data-ggs-ui', 'tab');
+    tab.textContent = 'OGGS';
+    tab.title = 'OGGS settings (Alt+O, Option+O on a Mac)';
+    // bottom-left corner, over the Street View "Google" mark
+    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000; padding: 6px 10px 6px 8px;' +
+      ' border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e; font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;' +
+      ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
+    tab.addEventListener('click', open);
+    showTab();
+    document.body.append(tab);
+  };
+  if (document.body) queueMicrotask(ready); else document.addEventListener('DOMContentLoaded', ready);
+})();
+
+// ==================== src/scripts/nmpz/meta.js ====================================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'nmpz',
+    name: 'Controls',
+    description: 'No move, pan or zoom for you, whatever the game allows.',
+    defaultEnabled: false,
+    group: 'controls', // popup: shares one card with the clean-screen toggles
+    flat: true,        // popup: a box per option, no name; on when any is
+    options: [
+      { key: 'noMove', label: 'No move', type: 'checkbox', default: true },
+      { key: 'noPan', label: 'No pan', type: 'checkbox', default: true },
+      { key: 'noZoom', label: 'No zoom', type: 'checkbox', default: true },
+    ],
+  });
+})();
+
+// ==================== src/scripts/clean/meta.js ===================================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'clean',
+    name: 'Clean map',
+    description: 'Hides the Google overlays, the GeoGuessr logo, the round scores and the player count.',
+    defaultEnabled: false,
+    group: 'controls', // popup: a box per option under the NMPZ boxes; on when any is
+    flat: true,
+    options: [
+      { key: 'google', label: 'Clean map', type: 'checkbox', default: false },
+      { key: 'logo', label: 'Remove logo', type: 'checkbox', default: false, hideIn: ['duels'] }, // duels have neither
+      { key: 'progress', label: 'Remove scoreboard', type: 'checkbox', default: false, hideIn: ['duels'] },
+    ],
+  });
+})();
+
+// ==================== src/scripts/panel/meta.js ===================================
+// Not a script: the OGGS tab's own setting (settings.panel.hideTab, read by src/panel.js).
+// `ui` keeps boot.js from looking for an implementation.
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'panel',
+    name: 'OGGS tab',
+    description: 'Hide the OGGS tab bottom left; Alt+O (Option+O on a Mac) still opens the panel.',
+    defaultEnabled: false,
+    group: 'controls',
+    flat: true,
+    ui: true,
+    options: [
+      { key: 'hideTab', label: 'Hide OGGS tab · Alt+O / Option+O reopens', type: 'checkbox', default: false },
+    ],
+  });
+})();
+
+// ==================== src/scripts/nmpz/main.js ====================================
+// NMPZ: the three locks in core/lock.js, each switched by its own option.
+(() => {
+  const ggs = globalThis.__ggs;
+  function apply(cfg) {
+    ggs.lock.move('nmpz', !!cfg?.noMove);
+    ggs.lock.pan('nmpz', !!cfg?.noPan);
+    ggs.lock.zoom('nmpz', !!cfg?.noZoom);
+  }
+  ggs.scripts.nmpz = {
+    start(cfg) {
+      apply(cfg);
+      return { stop() { apply(null); }, update: apply };
+    },
+  };
+})();
+
+// ==================== src/scripts/draw-guess/meta.js ==============================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'draw-guess',
+    name: 'Draw your country',
+    description: 'Replaces the guess map with a drawing board. Sketch the country, pin your spot, and it snaps to the closest real country as your guess.',
+    defaultEnabled: false,
+    excludes: ['flag-guess'], // one board over the guess map at a time
+    turnsOn: [{ id: 'clean', key: 'google' }], // the guess map is hidden, so its leftover Google bits go too
+    options: [
+      { key: 'hardMode', label: 'Hard mode: matches against every country and territory (199)', type: 'checkbox', default: false },
+    ],
+  });
+})();
+
+// ==================== src/scripts/draw-guess/main.js ==============================
+// Draw your country: a drawing board (app/) over GeoGuessr's guess map, through core/board.js.
+// Sketch the country, pin your spot, and the board snaps the drawing onto the closest real
+// country; the pin becomes the guess, and a few seconds after the animation GeoGuessr's own
+// Guess button is pressed.
+(() => {
+  const ggs = globalThis.__ggs;
+  const MAX_H = 640, AUTO_GUESS_MS = 3000;
+
+  function start(cfg) {
+    let lastToken;
+
+    const board = ggs.board({
+      id: 'draw-guess',
+      answer: true, // for the boost, and the flag on the right spot after the guess
+      app: 'src/scripts/draw-guess/app/index.html',
+      size: (roomW, roomH, boardH) => {
+        const h = Math.min(MAX_H, roomH), w = Math.min(h - 52, roomW); // the board is 52px taller than wide
+        return { w, h: boardH ? Math.min(boardH, roomH) : h };
+      },
+      guessDelay: AUTO_GUESS_MS,
+      onMessage(d) {
+        if (d.ggs === 'pool') ggs.debug(`draw-guess: map "${d.map}" -> ${d.pool} (${d.how}): ${d.count} countries possible`);
+      },
+      onTick(inRound) {
+        if (!inRound || !board.created) return;
+        const token = ggs.game.context()?.token;
+        if (token !== lastToken) { // new game: pick the country pool from the map name
+          lastToken = token;
+          ggs.game.mapInfo()
+            .then(m => (m?.name ? board.post({ ggs: 'map', name: m.name }) : ggs.debug('draw-guess: no map name, using world coverage')))
+            .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
+        }
+      },
+    });
+    board.post({ ggs: 'hard', on: !!cfg.hardMode });
+
+    return {
+      update(next) {
+        if (!!next.hardMode !== !!cfg.hardMode) board.post({ ggs: 'hard', on: !!next.hardMode });
+        cfg = next;
+      },
+      stop: board.stop,
     };
   }
 
   ggs.scripts['draw-guess'] = { start };
+})();
+
+// ==================== src/scripts/flag-guess/meta.js ==============================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'flag-guess',
+    name: 'Draw the flag',
+    description: 'Replaces the guess map with a paint board. Paint the flag, it finds the country with the closest flag, then click its outline where you want to guess.',
+    defaultEnabled: false,
+    excludes: ['draw-guess'], // one board over the guess map at a time
+    turnsOn: [{ id: 'clean', key: 'google' }], // the guess map is hidden, so its leftover Google bits go too
+    options: [
+      { key: 'forceInside', label: 'Guess must go inside the matched country', type: 'checkbox', default: true },
+    ],
+  });
+})();
+
+// ==================== src/scripts/flag-guess/main.js ==============================
+// Draw the flag: a paint board (app/) over GeoGuessr's guess map, through core/board.js.
+// Paint the flag, the board finds the country with the closest flag and shows its outline;
+// the spot clicked in it becomes the guess, the board zooms out to the right spot, and
+// GeoGuessr's own Guess button is pressed.
+(() => {
+  const ggs = globalThis.__ggs;
+  const MAX_W = 620, AUTO_GUESS_MS = 1500;
+
+  function start(cfg) {
+    const board = ggs.board({
+      id: 'flag-guess',
+      answer: true, // the flag on the right spot after the guess
+      app: 'src/scripts/flag-guess/app/index.html',
+      size: (roomW, roomH, boardH) => {
+        const w = Math.min(MAX_W, roomW);
+        return { w, h: Math.min(boardH || w * 0.9, roomH) };
+      },
+      guessDelay: AUTO_GUESS_MS,
+    });
+    board.post({ ggs: 'strict', on: !!cfg.forceInside });
+
+    return {
+      update(next) {
+        if (!!next.forceInside !== !!cfg.forceInside) board.post({ ggs: 'strict', on: !!next.forceInside });
+        cfg = next;
+      },
+      stop: board.stop,
+    };
+  }
+
+  ggs.scripts['flag-guess'] = { start };
 })();
 
 // ==================== src/scripts/radio/meta.js ===================================
@@ -1182,7 +1848,7 @@ section.off .opts { display: none; }
   async function search(params) {
     const q = new URLSearchParams({ is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params });
     const r = await fetch(`${API}?${q}`);
-    if (!r.ok) return [];
+    if (!r.ok) throw new Error(`Radio Browser: HTTP ${r.status}`);
     // http streams are blocked on an https page; HLS needs a library
     return (await r.json()).filter(s => s.url_resolved?.startsWith('https://') && !s.hls);
   }
@@ -1285,21 +1951,14 @@ section.off .opts { display: none; }
     :host(.mini) svg { width: 15px; height: 15px; }
     :host(.mini) input[type=range] { width: 70px; }
     :host(.mini) .extra { grid-column: 1 / -1; }
-    .reveal:empty, .hist:empty { display: none; }
+    .reveal:empty { display: none; }
     .reveal { padding: 8px 4px 2px; border-top: 1px solid rgba(255, 255, 255, .12); margin-top: 4px; }
     .reveal b { display: block; font-size: 15px; font-style: italic; }
-    .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }
-    .hist { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-    .hist .row { display: grid; grid-template-columns: 22px 1fr; gap: 0 8px; padding: 5px 6px;
-                 border-radius: 8px; cursor: pointer; }
-    .hist .row:hover { background: rgba(255, 255, 255, .08); }
-    .hist .row.on { background: rgba(254, 205, 25, .14); }
-    .hist .n { grid-row: span 2; align-self: center; font-weight: 700; font-style: italic; color: ${YELLOW}; }
-    .hist .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hist .where { font-size: 11px; color: rgba(255, 255, 255, .55); }`;
+    .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }`;
 
-  // ---- the visual: a shape always blending between random country outlines (never the
-  // round's), rippling with the volume; a circle while loading, an icon on play/pause/skip ----
+  // ---- the visual: a shape blending between random country outlines (chosen without the
+  // round's location, so they give nothing away), rippling with the volume; a circle while
+  // loading, an icon on play/pause/skip ----
   const MORPH_MS = 3000;
   const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
   const ICON_POLYS = {
@@ -1510,8 +2169,6 @@ section.off .opts { display: none; }
     let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0, blocked = false, userPaused = false, skipping = 0;
     let host = null, root = null, draw = null, raf = 0, lastT = 0, lastMove = 0, live = false;
     let round = null, loc = null, stations = [], idx = 0;
-    // history: this game's rounds { n, loc, stations, idx }; cur: the one playing
-    let game = null, history = [], cur = null, histSig = '', finished = false, checked = null;
 
     const $ = sel => root.querySelector(sel);
     const setStatus = t => { $('.status').textContent = t; };
@@ -1532,7 +2189,7 @@ section.off .opts { display: none; }
               <label class="vol">${ICON.vol}<input type="range" min="0" max="1" step="0.02" value="${volume}"></label>
             </div>
           </div>
-          <div class="extra"><div class="reveal"></div><div class="hist"></div></div>
+          <div class="extra"><div class="reveal"></div></div>
         </div>`;
       const togglePlay = () => {
         if (!audio) return;
@@ -1552,12 +2209,6 @@ section.off .opts { display: none; }
       $('.prev').onclick = () => { draw.flash('back', 600); tune(idx - 1); };
       $('.next').onclick = () => { draw.flash('skip', 600); tune(idx + 1); };
       $('input').oninput = e => { volume = +e.target.value; if (audio) audio.volume = volume; };
-      $('.hist').onclick = e => {
-        const h = history[e.target.closest('.row')?.dataset.i];
-        if (!h?.stations.length) return;
-        cur = h; stations = h.stations; loc = h.loc;
-        tune(h.idx);
-      };
       draw = blob($('canvas'));
       let playing = null;
       const frame = now => {
@@ -1699,7 +2350,6 @@ section.off .opts { display: none; }
     function tune(i, { paused = false } = {}) {
       if (!stations.length) return;
       idx = ((i % stations.length) + stations.length) % stations.length;
-      if (cur) cur.idx = idx;
       music.reset();
       userPaused = paused;
       allowMusic = paused;
@@ -1776,9 +2426,7 @@ section.off .opts { display: none; }
 
     async function newRound(key) {
       round = key;
-      const token = ggs.game.context()?.token;
-      if (token !== game) { game = token; history = []; }
-      stations = []; loc = null; cur = null;
+      stations = []; loc = null;
       drop();
       clearTimeout(watchdog); clearTimeout(stallTimer);
       waitingSince = 0; blocked = false;
@@ -1787,34 +2435,22 @@ section.off .opts { display: none; }
       tuning = true;
       loc = await ggs.game.roundLocation().catch(() => null);
       if (round !== key) return;
-      if (!loc) { tuning = false; return setStatus('No location (standard games only)'); }
-      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(() => []);
+      if (!loc) { tuning = false; return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`); }
+      let failed = null;
+      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(err => { failed = err; return []; });
       if (round !== key) return;
+      if (failed) { tuning = false; ggs.log('radio: station search failed', failed); return setStatus(`Station search failed (${failed.message})`); }
       tuning = false;
-      history = history.filter(h => h.key !== key); // re-tuned (streamer mode switched)
-      cur = { key, n: history.length + 1, loc, stations, idx: 0 };
-      history.push(cur);
       if (!stations.length) return setStatus(cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
       tune(0);
     }
 
-    // Result screens: the guess is in, so name the stations.
+    // Result screens: the guess is in, so name the station.
     function reveal() {
       const s = stations[idx];
       if (s && !$('.reveal').innerHTML) {
         $('.reveal').innerHTML = `<b>${esc(s.name.trim())}</b><span>${esc(describe(s, loc))}</span>`;
       }
-      const sig = history.map(h => h.idx).join() + '|' + history.indexOf(cur) + '|' + finished;
-      if (sig === histSig) return;
-      histSig = sig;
-      $('.hist').innerHTML = !finished || history.length < 2 ? '' : `<div class="label">Stations this game</div>` +
-        history.map((h, i) => {
-          const st = h.stations[h.idx];
-          const title = st ? ` title="${esc(new URL(st.url_resolved).hostname)}"` : '';
-          return `<div class="row${h === cur ? ' on' : ''}" data-i="${i}"${title}><span class="n">${h.n}</span>
-            <span class="name">${esc(st ? st.name.trim() : 'No station found')}</span>
-            <span class="where">${esc(st ? describe(st, h.loc) : '')}</span></div>`;
-        }).join('');
     }
 
     const tick = setInterval(() => {
@@ -1827,14 +2463,7 @@ section.off .opts { display: none; }
       place(inRound);
       const key = ggs.game.roundKey();
       if (inRound && key !== round) newRound(key);
-      if (inRound) { $('.hist').innerHTML = ''; histSig = ''; finished = false; checked = null; }
-      else {
-        if (checked !== key) {
-          checked = key;
-          ggs.game.state().then(st => { if (checked === key) finished = !!st?.finished; }).catch(() => {});
-        }
-        reveal();
-      }
+      if (!inRound) reveal();
     }, 500);
 
     return {
@@ -2114,11 +2743,12 @@ section.off .opts { display: none; }
     description: 'Rewrites the text on signs.',
     defaultEnabled: false,
     options: [
-      // index into WORDS in main.js; 0 = a different one for every sign
+      // index into WORDS in main.js; 0 = a different one for every panorama
       { key: 'script', label: 'Script to write in', type: 'select', default: 0,
         choices: ['Random', 'Thai', 'Georgian', 'Korean', 'Arabic', 'Cyrillic', 'Greek', 'Hebrew', 'Japanese', 'Hindi', 'Armenian',
           'English (wrong words)', 'German', 'Spanish', 'French', 'Minecraft'].map((label, value) => ({ value, label })) },
-      { key: 'noZoom', label: 'Disable zoom', type: 'checkbox', default: false },
+      // the same setting as the No zoom box at the top (nmpz.noZoom), shown here too
+      { key: 'noZoom', label: 'Disable zoom', type: 'checkbox', default: false, mirror: 'nmpz' },
     ],
   });
 })();
@@ -2126,9 +2756,9 @@ section.off .opts { display: none; }
 // ==================== src/scripts/lying-signs/main.js =============================
 // Lying signs: every Street View tile (via ggs.tiles, core/tiles.js) has its text found
 // by a detector in a worker (worker.js, PP-OCRv4 on onnxruntime-web, loaded from
-// ggs.extBase), painted over, and new text in another script written on top. A blurred
-// copy goes up while the detector works, then the edited tile replaces it in the same
-// texture.
+// ggs.extBase), painted over, and new text (another script, language or Minecraft glyphs)
+// written on top. A blurred copy goes up while the detector works, then the edited tile
+// replaces it in the same texture.
 (() => {
   const ggs = globalThis.__ggs;
   const DET_SIZE = 768;                       // detector input; 512-px tiles are upscaled so small text is found
@@ -2136,23 +2766,23 @@ section.off .opts { display: none; }
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
   const ENGLISH = [
-    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Jack Massey Welsh', 'JackSucksAtGuessing', 'JackSucksAtClips',
-    'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'turd boi420',
-    'SamSmellsOfApricots', 'SamSmellsOfApricot', 'ejsafc', 'Fufik', 'pretty woman kitchen', 'Geography Stuff', 'Jack & Oscar',
+    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing', 'JackSucksAtClips',
+    'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'Sock Outlet 42',
+    'ShopSmellsOfApricots', 'Apricot Outlet', 'qwerty', 'Fudge', 'pretty decent kitchen', 'Geography Stuff', 'Jack & Oscar',
     'Minecraft', 'Becky', 'Rick', 'Kai', 'Kong', 'Flossy', 'Kazoo', 'Toothbrush', 'Spudger', 'Rhombus', 'Unicycle', 'Beanie',
-    'Lovely', 'Guinness', 'Playbutton', 'PewDiePie', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg',
+    'Lovely', 'Guinness', 'Playbutton', 'Pie Shop', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg',
     'Seychelles', 'Car Bar', 'Black tape', 'Vatican', 'Australia', 'Nottinghamshire', 'Welsh', 'Spanish', 'Español', 'Reddit',
-    'Jackoffs', 'Diddle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday', 'Piglin', 'Skyblock',
-    'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Urinate', 'Weel', 'Toilet', 'zi8gzag',
-    'Oscar', 'zi8gzag Was Here', 'Oscar Sucks At Life', 'Jack Was Here', 'Sucks At Life', 'Sucks At Geography', 'Not Luxembourg',
+    'Knick-Knacks', 'Doodle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday', 'Piglin', 'Skyblock',
+    'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Ukulele', 'Weel', 'Toilet', 'Zigzag',
+    'Oscar', 'Zigzag Road', 'Oscar Was Here', 'Jack Was Here', 'Sucks At Life', 'Sucks At Geography', 'Not Luxembourg',
     'Definitely Kyrgyzstan', 'Probably Ohio', 'Bolivia?', 'Wrong Country', 'Trust The Bollard', 'Follow The Tape', 'Guess Again',
     'Plonk Here', '5000 Points', '4,999', 'Zero Points', 'Round 5', 'Gen 4', 'Trekker', 'Snow Cam', 'Rifts', 'Google Car',
-    'Kiwicraft', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch', 'Silver Playbutton', 'Diamond Playbutton',
-    'Jack Massey Welch', 'Jaxsucksatlife', 'Sucks', 'Massey', 'Apricots', 'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby',
+    'Socks For Sale', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch', 'Silver Playbutton', 'Diamond Playbutton',
+    'Mossy Bench', 'Jaxsucksatlife', 'Sucks', 'Mossy', 'Apricots', 'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby',
     'Rhombus Road', 'Unicycle Lane', 'Spudger Street', 'Flossy Avenue', 'Guinness Bar', 'Vampire Weekend', 'Piglin Bank',
     'Skyblock Island', 'Harmony Hollow Hotel', 'Misprint Museum', 'Briefcase Depot', 'Wig Emporium', 'Recycling Centre',
-    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', 'Becky Lynch', 'Kong King', 'Rick Roll',
-    'Kai Cenat', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
+    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', "Becky's Lunch", 'Kong King', 'Rick Roll',
+    'Kale Salad', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
     'Wrong Way', 'Mild Peril', 'Beware Of Jack', 'Oscar Crossing', 'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
   // Indexed by the "script" option; 0 is random (one script per panorama).
@@ -2344,6 +2974,7 @@ section.off .opts { display: none; }
     try {
       await detector();
       const job = pickJob();
+      if (!job) return; // another pump took the last one while the detector loaded
       if (!job.alive()) { stats.skipped = (stats.skipped || 0) + 1; job.res(null); return; }
       const bitmap = await createImageBitmap(job.img);
       const boxes = await new Promise(r => {
@@ -2473,7 +3104,6 @@ section.off .opts { display: none; }
     }
     t.pending = [];
   }
-
 
   // ---- the edits ----
   // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
@@ -2682,39 +3312,16 @@ section.off .opts { display: none; }
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
     panos.add(p);
-    if (active?.noZoom) lockZoom(p);
     try { p.addListener('pano_changed', pruneQueue); } catch {}
   });
-
-  // "Disable zoom": the wheel and zoom buttons are switched off on every panorama and any zoom
-  // that still gets through (GeoGuessr's own buttons and keys call setZoom) is put straight back
-  // to the level it was at, so signs are only ever read at the zoom the tiles were drawn for.
-  const locks = new Map(); // pano -> { listener, options to restore }
-  function lockZoom(p) {
-    if (locks.has(p)) return;
-    const ev = window.google?.maps?.event;
-    if (!ev) return;
-    const was = { scrollwheel: p.get('scrollwheel'), zoomControl: p.get('zoomControl') };
-    const zoom = p.getZoom();
-    const listener = ev.addListener(p, 'zoom_changed', () => { if (p.getZoom() !== zoom) p.setZoom(zoom); });
-    p.setOptions({ scrollwheel: false, zoomControl: false });
-    locks.set(p, { listener, was });
-  }
-  function unlockZoom() {
-    for (const [p, { listener, was }] of locks) { listener.remove(); p.setOptions(was); }
-    locks.clear();
-  }
-  function applyZoom() { if (active?.noZoom) panos.forEach(lockZoom); else unlockZoom(); }
-
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
     detector();
     ggs.tiles.replay();
-    applyZoom();
     return {
-      stop() { active = null; unlockZoom(); ggs.tiles.replay(); },
-      update(next) { const changed = next.script !== active.script; active = next; applyZoom(); if (changed) ggs.tiles.replay(); },
+      stop() { active = null; ggs.tiles.replay(); },
+      update(next) { const changed = next.script !== active.script; active = next; if (changed) ggs.tiles.replay(); },
     };
   }
   ggs.scripts['lying-signs'] = { start };
@@ -2728,6 +3335,7 @@ section.off .opts { display: none; }
     name: 'Minecraft world',
     description: 'The round is redrawn in Minecraft.',
     defaultEnabled: false,
+    turnsOn: [{ id: 'nmpz', key: 'noMove' }], // each panorama costs a generation; No move can be unticked again
     options: [
       { key: 'hq', label: 'High quality (slower; a few rounds a day)', type: 'checkbox', default: false },
       { key: 'code', label: 'Code', type: 'text', default: '', placeholder: 'optional', secret: true, hidden: true },
@@ -2736,302 +3344,226 @@ section.off .opts { display: none; }
 })();
 
 // ==================== src/scripts/minecraft/main.js ===============================
-// Minecraft world: each panorama is redrawn once, by server/minecraft.php, and wrapped
-// back over the Street View sphere.
-//
-// Street View tiles arrive through ggs.tiles (core/tiles.js). The first tile of a new
-// panorama starts one generation: the panorama id and size go to SERVER, which fetches
-// the tiles from Google, stitches them and calls the image API with the key it holds.
-// Nothing but that id, the size, a random per-install client id and the optional code
-// leaves the page. Until the picture is back, tiles go up black; then every tile is
-// swapped for the matching crop, so looking around and zooming never generate again.
-// Generation waits until the panorama has stayed still for a moment, so walking through
-// several positions only redraws the one you stop at; the ones passed through get their
-// real tiles back.
+// Minecraft world: the shared redraw core (core/redraw.js) in the "minecraft" style.
 (() => {
   const ggs = globalThis.__ggs;
-  const SERVER = 'https://oggs.orlandopb.com/minecraft.php'; // holds the prompt, models and daily limits
+  ggs.scripts.minecraft = ggs.redraw.script('minecraft', 'minecraft', 'Minecraft');
+})();
 
-  function clientId() {
-    let id = ggs.store.get('ggs-client');
-    if (!id) {
-      id = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
-      ggs.store.set('ggs-client', id);
+// ==================== src/scripts/gradient/meta.js ================================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'gradient',
+    name: 'Senegal gradient',
+    description: 'Street View melts into a colour gradient.',
+    defaultEnabled: false,
+    options: [
+      // 1 = barely blurred, 10 = a few colours per view
+      { key: 'strength', label: 'How much gradient', type: 'slider', min: 1, max: 10, default: 8,
+        marks: ['Blurry', 'Smudged', 'Gradient'] },
+    ],
+  });
+})();
+
+// ==================== src/scripts/gradient/main.js ================================
+// Senegal gradient: every Street View tile (via ggs.tiles, core/tiles.js) is shrunk to a
+// handful of cells and scaled back up, so the view is a smooth colour gradient. A tile
+// is shrunk together with its eight neighbours (mirrored copies stand in for ones not
+// loaded yet) so the gradient runs across tile edges; when a neighbour arrives the
+// tiles around it are redone and re-uploaded into the same textures.
+(() => {
+  const ggs = globalThis.__ggs;
+  const KEEP = 2;                             // panoramas whose tiles are remembered
+  let active = null;
+
+  // Cells per tile for the strength setting, made the same size on screen at every zoom:
+  // one zoom step in halves the angle a tile covers, so it gets half the cells.
+  function cells(z, size) {
+    const base = 2 ** (10 - active.strength);         // cells across a zoom-3 (45°) tile
+    return Math.max(1, Math.min(size, Math.round(base * 2 ** (3 - z))));
+  }
+
+  // pano id -> Map of "z/x/y" -> { rec, src }; oldest panorama dropped past KEEP
+  const panos = new Map();
+  function store(k) {
+    let m = panos.get(k.pano);
+    if (!m) {
+      m = new Map();
+      panos.set(k.pano, m);
+      while (panos.size > KEEP) panos.delete(panos.keys().next().value);
     }
-    return id;
+    return m;
   }
-  async function server(fields, post = false) {
-    const body = new URLSearchParams({ ...fields, client: clientId(), code: active?.code ?? '' });
-    const r = post ? await fetch(SERVER, { method: 'POST', body }) : await fetch(`${SERVER}?caps=1&${body}`);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.error) throw new Error(j.error || `server HTTP ${r.status}`);
-    return j;
-  }
+  const tileId = k => `${k.z}/${k.x}/${k.y}`;
 
-  // Typical seconds per generation, from the last rounds; drives the loading bar.
-  const ETA_DEFAULT = { normal: 15, hq: 40 };
-  const eta = ggs.store.get('ggs-minecraft-eta', {});
-
-  // panoId -> Promise<{ worldWidth, tileWidth, zmax }> (metaSync: the resolved value)
-  const meta = new Map(), metaSync = new Map();
-  function panoMeta(id) {
-    if (!meta.has(id)) meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-      .then(({ data }) => {
-        const worldWidth = data.tiles.worldSize.width, tileWidth = data.tiles.tileSize.width;
-        const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
-        metaSync.set(id, m);
-        return m;
-      }));
-    return meta.get(id);
-  }
-  const widthAt = (m, zoom) => Math.ceil(m.worldWidth / 2 ** (m.zmax - zoom));
-
-  const gens = new Map(); // `${panoId}/${mode}` -> { promise, image, pending: [uploads waiting], error }
-  let active = null, overlay = null; // active: the cfg while the script is on
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
-  function shownPano() {
-    for (const p of panos) { try { const id = p.getPano(); if (id) return id; } catch {} }
-    return null;
-  }
-
-  // Tiles of a panorama that has no generation yet wait here (black on screen) until the
-  // view has stayed on one panorama for SETTLE ms; then that panorama is generated and the
-  // others get their real tiles back.
-  const SETTLE = 800;
-  const waitingPanos = new Map(); // panoId -> [{ rec, img, tw, th }]
-  let settleTimer = null, latestPano = null;
-  function waitFor(id, entry) {
-    if (!waitingPanos.has(id)) waitingPanos.set(id, []);
-    waitingPanos.get(id).push(entry);
-    if (id !== latestPano || !settleTimer) { latestPano = id; clearTimeout(settleTimer); settleTimer = setTimeout(settled, SETTLE); }
-  }
-  function settled() {
-    settleTimer = null;
-    const id = shownPano() ?? latestPano;
-    for (const [pid, entries] of [...waitingPanos]) {
-      waitingPanos.delete(pid);
-      if (pid === id && active) {
-        const g = generation(pid);
-        g.pending.push(...entries);
-        if (g.image || g.error) flush(g);
-      } else {
-        for (const { rec, img } of entries) { try { ggs.tiles.upload(rec, img); } catch {} }
-      }
+  // Draws the tile with its neighbours in a 3x3 grid (mirrored copies where a neighbour is
+  // missing, so the edges never fade to black), shrinks the grid to 3n x 3n cells, scales
+  // it back up, blurs the creases between cells and keeps the middle tile.
+  const grid = new OffscreenCanvas(1, 1), small = new OffscreenCanvas(1, 1), big = new OffscreenCanvas(1, 1);
+  function melt(k, src, tiles) {
+    const w = src.width || src.naturalWidth || 512, h = src.height || src.naturalHeight || 512;
+    if (grid.width !== 3 * w || grid.height !== 3 * h) { grid.width = 3 * w; grid.height = 3 * h; big.width = 3 * w; big.height = 3 * h; }
+    const g = grid.getContext('2d');
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const n = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
+      const x = (dx + 1) * w, y = (dy + 1) * h;
+      if (n) { g.drawImage(n.src, x, y, w, h); continue; }
+      g.save();
+      g.translate(x + (dx ? w : 0), y + (dy ? h : 0));
+      g.scale(dx ? -1 : 1, dy ? -1 : 1);
+      g.drawImage(src, 0, 0, w, h);
+      g.restore();
     }
-  }
-
-  // ---- daily limits ----
-  // The server counts per client id. A copy of its log ({ normal: [ms], hq: [ms] }, rolling
-  // 24 h) is kept here so a round isn't started once today's limit is used up; the two are
-  // merged on every call.
-  const DAY = 24 * 3600 * 1000, QKEY = 'ggs-minecraft-quota';
-  const Q = {
-    tidy(log, other) {
-      const now = Date.now(), out = {};
-      for (const k of ['normal', 'hq']) {
-        const all = new Set([...(log?.[k] ?? []), ...(other?.[k] ?? [])].filter(t => now - t < DAY));
-        out[k] = [...all].sort((a, b) => a - b);
-      }
-      return out;
-    },
-    left(log, mode, cap) {
-      const l = Q.tidy(log)[mode];
-      return { left: Math.max(0, cap - l.length), resetAt: l.length ? l[0] + DAY : null };
-    },
-    until(at) {
-      const m = Math.max(1, Math.ceil((at - Date.now()) / 60000));
-      return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
-    },
-  };
-  let log = {}, caps = { normal: 100, hq: 10 }, limitShownFor = null;
-  function saveLog(other) {
-    log = Q.tidy(log, other);
-    ggs.store.set(QKEY, log);
-    const part = (label, x) => (x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`);
-    ggs.status('minecraft', `Today: ${part('rounds', Q.left(log, 'normal', caps.normal))} · ${part('high quality', Q.left(log, 'hq', caps.hq))}${caps.codeOk ? ' · code accepted' : ''}`);
-  }
-  async function loadQuota() {
-    log = ggs.store.get(QKEY, {});
-    try {
-      caps = await server({});
-      saveLog(caps.log);
-    } catch (err) {
-      ggs.status('minecraft', 'Server not reachable');
-      ggs.debug('minecraft: caps', err);
+    const n = cells(k.z, w);
+    small.width = 3 * n; small.height = 3 * n;
+    const s = small.getContext('2d');
+    s.imageSmoothingQuality = 'high';
+    // shrink in halves: one big step skips pixels and speckles the colours
+    let cur = grid, cw = grid.width, ch = grid.height;
+    while (cw > 6 * n) {
+      const half = new OffscreenCanvas(cw >> 1, ch >> 1), hc = half.getContext('2d');
+      hc.imageSmoothingQuality = 'high';
+      hc.drawImage(cur, 0, 0, cw, ch, 0, 0, half.width, half.height);
+      cur = half; cw = half.width; ch = half.height;
     }
-  }
-  const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
-  const allowed = mode => Q.left(log, mode, caps[mode]).left > 0;
-  const stats = { uploads: 0, tiles: 0, swapped: 0 };
-  ggs.minecraft = { debug: () => ({ active: !!active, tiles: ggs.tiles.count(), ...stats,
-    gens: [...gens].map(([id, g]) => ({ id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null })) }) };
-
-  function generation(id) {
-    const mode = modeOf(active), key = `${id}/${mode}`;
-    if (gens.has(key)) return gens.get(key);
-    const g = { image: null, pending: [], error: null };
-    gens.set(key, g);
-    if (gens.size > 20) { const k = gens.keys().next().value; gens.get(k).image?.close?.(); gens.delete(k); }
-    const t0 = Date.now();
-    (log[mode] ??= []).push(t0); // counted when it starts; the server's log replaces it once it answers
-    saveLog();
-    g.promise = (async () => {
-      progressStart(eta[mode] ?? ETA_DEFAULT[mode], key);
-      const m = await panoMeta(id);
-      const r = await server({ pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode }, true);
-      if (r.log) saveLog(r.log);
-      const img = new Image();
-      img.src = r.image;
-      await img.decode();
-      g.image = await createImageBitmap(img);
-      ggs.debug(`minecraft: generated ${id} (${mode}) in ${(r.ms / 1000).toFixed(1)} s`);
-      await flush(g);
-      await ggs.tiles.repaint(id);
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      eta[mode] = Math.round((Date.now() - t0) / 1000 * 0.7 + (eta[mode] ?? (Date.now() - t0) / 1000) * 0.3);
-      ggs.store.set('ggs-minecraft-eta', eta);
-      progressDone(false, undefined, key);
-    })().catch(err => {
-      g.error = err;
-      ggs.log('minecraft: generation failed', err);
-      progressDone(true, undefined, key);
-      flush(g).then(() => ggs.tiles.repaint(id)); // put the real tiles back
-    });
-    return g;
+    s.drawImage(cur, 0, 0, cw, ch, 0, 0, 3 * n, 3 * n);
+    const b = big.getContext('2d');
+    b.imageSmoothingQuality = 'high';
+    b.filter = `blur(${Math.min(48, w / n / 3)}px)`;
+    b.drawImage(small, 0, 0, 3 * w, 3 * h);
+    b.filter = 'none';
+    const out = new OffscreenCanvas(w, h);
+    out.getContext('2d').drawImage(big, w, h, w, h, 0, 0, w, h);
+    return out;
   }
 
-  // Crop of the generated picture for tile x,y at this zoom.
-  function crop(g, m, x, y, zoom, tw, th) {
-    const W = widthAt(m, zoom), H = Math.ceil(W / 2), img = g.image;
-    const sx = (x * tw / W) * img.width, sy = (y * th / H) * img.height;
-    const sw = Math.min(img.width - sx, (tw / W) * img.width), sh = Math.min(img.height - sy, (th / H) * img.height);
-    const c = new OffscreenCanvas(tw, th), ctx = c.getContext('2d');
-    ctx.imageSmoothingQuality = 'high';
-    if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw * sw / ((tw / W) * img.width), th * sh / ((th / H) * img.height));
-    return c;
+  // Neighbours of tiles that just arrived get redone once things settle.
+  const dirty = new Map();                    // "pano/z/x/y" -> { k, tiles }
+  let timer = null;
+  function touchNeighbours(k, tiles) {
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nk = { pano: k.pano, z: k.z, x: k.x + dx, y: k.y + dy };
+      if (tiles.has(tileId(nk))) dirty.set(`${k.pano}/${tileId(nk)}`, { k: nk, tiles });
+    }
+    clearTimeout(timer);
+    timer = setTimeout(redo, 80);
+  }
+  function redo() {
+    timer = null;
+    const todo = [...dirty.values()];
+    dirty.clear();
+    if (!active) return;
+    let pano = null;
+    for (const { k, tiles } of todo) {
+      const t = tiles.get(tileId(k));
+      if (!t || !ggs.tiles.live(t.rec)) continue;
+      try { if (ggs.tiles.upload(t.rec, melt(k, t.src, tiles))) pano = k.pano; } catch (err) { ggs.log('gradient: re-upload failed', err); }
+    }
+    if (pano) ggs.tiles.repaint(pano);
   }
 
-  // ---- tile filter: what goes into WebGL for each tile ----
   ggs.tiles.filter((rec, source) => {
-    stats.uploads++;
-    if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
-    const k = rec.key, img = source;
-    stats.tiles++;
-    const id = k.pano, mode = modeOf(active);
-    if (!gens.has(`${id}/${mode}`) && !allowed(mode)) {
-      if (limitShownFor !== id) {
-        limitShownFor = id;
-        const { resetAt } = Q.left(log, mode, caps[mode]);
-        notice(`${active.hq ? 'High quality' : 'Minecraft'} limit reached for today · back in ${Q.until(resetAt)}`);
-      }
-      return img;
-    }
-    const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
-    const g = gens.get(`${id}/${mode}`);
-    if (!g) { waitFor(id, { rec, img, tw, th }); return blank(tw, th); }
-    const m = metaSync.get(id);
-    if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
-    if (g.error) return img;
-    g.pending.push({ rec, img, tw, th });
-    return blank(tw, th);
-  }, 0); // before lying-signs, which then sees a canvas and leaves it alone
-
-  // The picture is in (or failed): push the crops (or the real tiles) into the textures.
-  async function flush(g) {
-    const recs = g.pending.splice(0);
-    if (!recs.length) return;
-    const id = recs[0].rec.key.pano;
-    const m = g.image ? await panoMeta(id).catch(() => null) : null;
-    for (const { rec, img, tw, th } of recs) {
-      try {
-        const k = rec.key;
-        if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
-      } catch (err) { ggs.log('minecraft: re-upload failed', err); }
-    }
-  }
-
-  let blankTile = null;
-  function blank(w, h) {
-    if (!blankTile || blankTile.width !== w || blankTile.height !== h) {
-      blankTile = new OffscreenCanvas(w, h);
-      blankTile.getContext('2d').fillRect(0, 0, w, h);
-    }
-    return blankTile;
-  }
-
-  // ---- loading bar: eases towards 90% over the last rounds' time, fills when tiles are swapped ----
-  const CSS = `
-    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2147483000; pointer-events: none;
-            opacity: 0; transition: opacity .25s; }
-    :host([data-on]) { opacity: 1; }
-    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85); backdrop-filter: blur(8px);
-           box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6); font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
-           text-align: center; letter-spacing: .02em; }
-    .bar[hidden] { display: none; }
-    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
-    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19; transition: width .1s linear, background .3s; }
-  `;
-  // The bar belongs to the latest generation started (`owner`); an older one finishing
-  // or failing later leaves it alone.
-  let progressTimer = null, owner = null;
-  function progressStart(seconds, key) {
-    if (!overlay) return;
-    owner = key;
-    clearInterval(progressTimer);
-    const fill = overlay.fill, t0 = Date.now();
-    overlay.text.textContent = 'Loading round…';
-    overlay.bar.hidden = false;
-    fill.style.width = '0%';
-    fill.style.background = '';
-    overlay.host.dataset.on = '';
-    progressTimer = setInterval(() => {
-      const x = (Date.now() - t0) / 1000 / seconds;
-      fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
-    }, 100);
-  }
-  function progressDone(failed, message, key) {
-    if (!overlay || (key && key !== owner)) return;
-    owner = null;
-    clearInterval(progressTimer);
-    overlay.fill.style.width = '100%';
-    if (failed) { overlay.fill.style.background = '#e03131'; overlay.text.textContent = message ?? 'Could not redraw this round'; }
-    setTimeout(() => { if (overlay) delete overlay.host.dataset.on; }, failed ? 4000 : 400);
-  }
-  function notice(message) {
-    if (!overlay) return;
-    clearInterval(progressTimer);
-    overlay.text.textContent = message;
-    overlay.bar.hidden = true;
-    overlay.host.dataset.on = '';
-    setTimeout(() => { if (overlay) { delete overlay.host.dataset.on; setTimeout(() => { if (overlay) overlay.bar.hidden = false; }, 300); } }, 4000);
-  }
+    if (!active || !rec.key) return source;
+    const k = rec.key, tiles = store(k);
+    tiles.set(tileId(k), { rec, src: source });
+    touchNeighbours(k, tiles);
+    return melt(k, source, tiles);
+  }, 2); // after minecraft and lying-signs, so their tiles melt too
 
   function start(cfg) {
     active = cfg;
-    const host = document.createElement('div');
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div><div class="bar"><div class="fill"></div></div></div>`;
-    document.body.append(host);
-    overlay = { host, text: root.querySelector('.text'), bar: root.querySelector('.bar'), fill: root.querySelector('.fill') };
-    loadQuota().finally(() => ggs.tiles.replay());
+    ggs.debug('gradient on', cfg);
+    ggs.tiles.replay();
     return {
-      stop() { active = null; clearTimeout(settleTimer); settleTimer = null; waitingPanos.clear(); clearInterval(progressTimer); host.remove(); overlay = null; ggs.tiles.replay(); },
-      update(c) {
-        const codeChanged = c.code !== active?.code, hqChanged = !!c.hq !== !!active?.hq;
-        active = c;
-        if (codeChanged) loadQuota();
-        if (hqChanged) ggs.tiles.replay();
+      stop() { active = null; clearTimeout(timer); timer = null; dirty.clear(); panos.clear(); ggs.tiles.replay(); },
+      update(next) {
+        const changed = next.strength !== active.strength;
+        active = next;
+        if (changed) ggs.tiles.replay();
       },
     };
   }
+  ggs.scripts.gradient = { start };
+})();
 
-  ggs.scripts.minecraft = { start };
+// ==================== src/scripts/clean/main.js ===================================
+// Clean map: one stylesheet hides, each behind its own option, the small Google overlays on
+// both maps (the Terms / Map data / Keyboard shortcuts strip and the Google logo), the
+// GeoGuessr logo, and the round scores plus the "N playing" count. Only their display
+// changes; Google's key handlers sit on the map element, so the shortcuts still work.
+(() => {
+  const ggs = globalThis.__ggs;
+  const GOOGLE = [
+    '.gm-style-cc',                                   // Terms, Map data, Keyboard shortcuts (both maps)
+    // Google logo: the map and Street View build it differently, so match the link's
+    // href, title or label, or the logo image itself (not scoped to .gm-style, as the
+    // panorama's copy can sit outside it)
+    'a[href*="google.com/maps"]',
+    'a[title^="Open this area in Google Maps"]',
+    'a[aria-label^="Open this area in Google Maps"]',
+    'a:has(> img[alt="Google"])',
+    'img[alt="Google"]',
+    '.gm-style .gm-iv-address',                       // Street View address card
+    'img[alt="Google Maps Logo"]', 'img[src*="google-logo"]', // GeoGuessr's own copy of the logo over Street View
+  ];
+  // GeoGuessr class names are CSS-module hashed, so match on the prefix.
+  const LOGO = ['[class*="header_logo"]', '[class*="game_logo"]', 'a[href="/"] img[alt="GeoGuessr"]', 'img[alt="GeoGuessr"]'];
+  // The round / total scores panel top right (class seen 2026-09) and the "N playing" count
+  // beside it. markScores() also finds both by their text and marks them data-ggs-clean, so
+  // they stay hidden if the classes are renamed.
+  const SCORES = ['[class*="rounds-status_panel"]', '[class*="live-players-count_"]', '[data-ggs-clean]'];
+  const HIDDEN = 'data-ggs-clean';
+
+  const rule = sels => sels.join(',\n') + ' { display: none !important; }\n';
+  const css = cfg => (cfg.google ? rule(GOOGLE) : '') + (cfg.logo ? rule(LOGO) : '') + (cfg.progress ? rule(SCORES) : '');
+
+  // Scores: the smallest element holding both a "Round" and a "Total" label, at most 600px
+  // wide so a page-sized ancestor is never picked.
+  const LABEL = /^(round|total)$/i;
+  // the "316 playing" player count shown on maps with other people in them: the leaf
+  // holding it, or its parent when the number and the word are split across two leaves
+  const PLAYING = /^[\d,.]+\s*k?\s+playing$/i;
+  function markScores() {
+    const leaves = [...document.querySelectorAll('div, span, p')].filter(e => e.children.length === 0);
+    for (const l of leaves.filter(e => /^playing$/i.test(e.textContent.trim()) || PLAYING.test(e.textContent.trim()))) {
+      const p = l.parentElement;
+      (p && p !== document.body && PLAYING.test(p.textContent.trim()) ? p : l).setAttribute(HIDDEN, '');
+    }
+    const labels = leaves.filter(e => LABEL.test(e.textContent.trim()));
+    for (const l of labels) {
+      for (let e = l.parentElement; e && e !== document.body; e = e.parentElement) {
+        const t = e.textContent;
+        if (/\bRound\b/i.test(t) && /\bTotal\b/i.test(t)) {
+          if (e.getBoundingClientRect().width <= 600) e.setAttribute(HIDDEN, '');
+          break;
+        }
+      }
+    }
+  }
+
+  function start(cfg) {
+    const style = document.createElement('style');
+    style.textContent = css(cfg);
+    document.documentElement.appendChild(style);
+    let timer = null;
+    const obs = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(markScores, 150); });
+    const watch = on => { obs.disconnect(); if (on) { markScores(); obs.observe(document.body, { childList: true, subtree: true }); } };
+    watch(cfg.progress);
+    ggs.debug('clean on', cfg);
+    return {
+      stop() { style.remove(); watch(false); clearTimeout(timer); },
+      update(next) { style.textContent = css(next); watch(next.progress); },
+    };
+  }
+  ggs.scripts.clean = { start };
 })();
 
 // ==================== src/boot.js =================================================
 // Starts and stops each script to match the settings, live. In competitive games
-// (ggs.game.competitive) every script is stopped, whatever the settings say.
+// (ggs.game.competitive) every script is stopped, whatever the settings say. Scripts that
+// can't run together (a meta's `excludes`, either way round) never do: the first one in the
+// registry wins, whatever the stored settings say.
 (() => {
   const ggs = globalThis.__ggs;
   const running = new Map(); // id -> { stop, update? }
@@ -3039,17 +3571,21 @@ section.off .opts { display: none; }
 
   function apply() {
     if (!settings) return;
+    const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
+      if (meta.ui) continue; // a settings-only entry, no script behind it
       const impl = ggs.scripts[meta.id];
       if (!impl) { ggs.log(`no implementation loaded for "${meta.id}"`); continue; }
       const cfg = ggs.config(meta, settings);
-      const on = cfg.enabled && !blocked;
+      const clash = [...on.values()].some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+      const wanted = cfg.enabled && !blocked && !clash;
+      if (wanted) on.set(meta.id, meta);
       const inst = running.get(meta.id);
       try {
-        if (on && !inst) {
+        if (wanted && !inst) {
           running.set(meta.id, impl.start(cfg));
           ggs.debug(`started ${meta.id}`);
-        } else if (!on && inst) {
+        } else if (!wanted && inst) {
           inst.stop();
           running.delete(meta.id);
           ggs.debug(`stopped ${meta.id}`);
@@ -3078,7 +3614,14 @@ section.off .opts { display: none; }
       if (competitive !== blocked) { blocked = competitive; apply(); }
     });
   }
-  setInterval(onPath, 500);
+  // The game mode goes out like a status line ('_mode'), so the settings form can hide
+  // options that do nothing in it (an option's hideIn).
+  let mode = null;
+  setInterval(() => {
+    onPath();
+    const now = ggs.game.context()?.mode ?? '';
+    if (now !== mode) ggs.status('_mode', mode = now);
+  }, 500);
 
   ggs.onSettings(all => {
     settings = all;

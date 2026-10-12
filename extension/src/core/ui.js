@@ -17,10 +17,9 @@
 
   let zTop = 2147483000; // last-used panel sits on top
 
-  function panel({ id, title, html = '', css = '', onKey, pos = { x: 16, y: 120 } }) {
+  function panel({ id, title, html = '', css = '', pos = { x: 16, y: 120 } }) {
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', id);
-    host.onGgsKey = onKey;
     const front = () => { host.style.zIndex = String(++zTop); };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });

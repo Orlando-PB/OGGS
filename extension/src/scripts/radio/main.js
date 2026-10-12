@@ -59,7 +59,7 @@
   async function search(params) {
     const q = new URLSearchParams({ is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params });
     const r = await fetch(`${API}?${q}`);
-    if (!r.ok) return [];
+    if (!r.ok) throw new Error(`Radio Browser: HTTP ${r.status}`);
     // http streams are blocked on an https page; HLS needs a library
     return (await r.json()).filter(s => s.url_resolved?.startsWith('https://') && !s.hls);
   }
@@ -162,21 +162,14 @@
     :host(.mini) svg { width: 15px; height: 15px; }
     :host(.mini) input[type=range] { width: 70px; }
     :host(.mini) .extra { grid-column: 1 / -1; }
-    .reveal:empty, .hist:empty { display: none; }
+    .reveal:empty { display: none; }
     .reveal { padding: 8px 4px 2px; border-top: 1px solid rgba(255, 255, 255, .12); margin-top: 4px; }
     .reveal b { display: block; font-size: 15px; font-style: italic; }
-    .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }
-    .hist { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-    .hist .row { display: grid; grid-template-columns: 22px 1fr; gap: 0 8px; padding: 5px 6px;
-                 border-radius: 8px; cursor: pointer; }
-    .hist .row:hover { background: rgba(255, 255, 255, .08); }
-    .hist .row.on { background: rgba(254, 205, 25, .14); }
-    .hist .n { grid-row: span 2; align-self: center; font-weight: 700; font-style: italic; color: ${YELLOW}; }
-    .hist .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hist .where { font-size: 11px; color: rgba(255, 255, 255, .55); }`;
+    .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }`;
 
-  // ---- the visual: a shape always blending between random country outlines (never the
-  // round's), rippling with the volume; a circle while loading, an icon on play/pause/skip ----
+  // ---- the visual: a shape blending between random country outlines (chosen without the
+  // round's location, so they give nothing away), rippling with the volume; a circle while
+  // loading, an icon on play/pause/skip ----
   const MORPH_MS = 3000;
   const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
   const ICON_POLYS = {
@@ -387,8 +380,6 @@
     let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0, blocked = false, userPaused = false, skipping = 0;
     let host = null, root = null, draw = null, raf = 0, lastT = 0, lastMove = 0, live = false;
     let round = null, loc = null, stations = [], idx = 0;
-    // history: this game's rounds { n, loc, stations, idx }; cur: the one playing
-    let game = null, history = [], cur = null, histSig = '', finished = false, checked = null;
 
     const $ = sel => root.querySelector(sel);
     const setStatus = t => { $('.status').textContent = t; };
@@ -409,7 +400,7 @@
               <label class="vol">${ICON.vol}<input type="range" min="0" max="1" step="0.02" value="${volume}"></label>
             </div>
           </div>
-          <div class="extra"><div class="reveal"></div><div class="hist"></div></div>
+          <div class="extra"><div class="reveal"></div></div>
         </div>`;
       const togglePlay = () => {
         if (!audio) return;
@@ -429,12 +420,6 @@
       $('.prev').onclick = () => { draw.flash('back', 600); tune(idx - 1); };
       $('.next').onclick = () => { draw.flash('skip', 600); tune(idx + 1); };
       $('input').oninput = e => { volume = +e.target.value; if (audio) audio.volume = volume; };
-      $('.hist').onclick = e => {
-        const h = history[e.target.closest('.row')?.dataset.i];
-        if (!h?.stations.length) return;
-        cur = h; stations = h.stations; loc = h.loc;
-        tune(h.idx);
-      };
       draw = blob($('canvas'));
       let playing = null;
       const frame = now => {
@@ -576,7 +561,6 @@
     function tune(i, { paused = false } = {}) {
       if (!stations.length) return;
       idx = ((i % stations.length) + stations.length) % stations.length;
-      if (cur) cur.idx = idx;
       music.reset();
       userPaused = paused;
       allowMusic = paused;
@@ -653,9 +637,7 @@
 
     async function newRound(key) {
       round = key;
-      const token = ggs.game.context()?.token;
-      if (token !== game) { game = token; history = []; }
-      stations = []; loc = null; cur = null;
+      stations = []; loc = null;
       drop();
       clearTimeout(watchdog); clearTimeout(stallTimer);
       waitingSince = 0; blocked = false;
@@ -664,34 +646,22 @@
       tuning = true;
       loc = await ggs.game.roundLocation().catch(() => null);
       if (round !== key) return;
-      if (!loc) { tuning = false; return setStatus('No location (standard games only)'); }
-      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(() => []);
+      if (!loc) { tuning = false; return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`); }
+      let failed = null;
+      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(err => { failed = err; return []; });
       if (round !== key) return;
+      if (failed) { tuning = false; ggs.log('radio: station search failed', failed); return setStatus(`Station search failed (${failed.message})`); }
       tuning = false;
-      history = history.filter(h => h.key !== key); // re-tuned (streamer mode switched)
-      cur = { key, n: history.length + 1, loc, stations, idx: 0 };
-      history.push(cur);
       if (!stations.length) return setStatus(cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
       tune(0);
     }
 
-    // Result screens: the guess is in, so name the stations.
+    // Result screens: the guess is in, so name the station.
     function reveal() {
       const s = stations[idx];
       if (s && !$('.reveal').innerHTML) {
         $('.reveal').innerHTML = `<b>${esc(s.name.trim())}</b><span>${esc(describe(s, loc))}</span>`;
       }
-      const sig = history.map(h => h.idx).join() + '|' + history.indexOf(cur) + '|' + finished;
-      if (sig === histSig) return;
-      histSig = sig;
-      $('.hist').innerHTML = !finished || history.length < 2 ? '' : `<div class="label">Stations this game</div>` +
-        history.map((h, i) => {
-          const st = h.stations[h.idx];
-          const title = st ? ` title="${esc(new URL(st.url_resolved).hostname)}"` : '';
-          return `<div class="row${h === cur ? ' on' : ''}" data-i="${i}"${title}><span class="n">${h.n}</span>
-            <span class="name">${esc(st ? st.name.trim() : 'No station found')}</span>
-            <span class="where">${esc(st ? describe(st, h.loc) : '')}</span></div>`;
-        }).join('');
     }
 
     const tick = setInterval(() => {
@@ -704,14 +674,7 @@
       place(inRound);
       const key = ggs.game.roundKey();
       if (inRound && key !== round) newRound(key);
-      if (inRound) { $('.hist').innerHTML = ''; histSig = ''; finished = false; checked = null; }
-      else {
-        if (checked !== key) {
-          checked = key;
-          ggs.game.state().then(st => { if (checked === key) finished = !!st?.finished; }).catch(() => {});
-        }
-        reveal();
-      }
+      if (!inRound) reveal();
     }, 500);
 
     return {

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draw the Flag</title>
+<style>
+  :root { --bg: #f4efe6; --paper: #fffdf8; --ink: #1f2a44; --muted: #6b7280; --line: #e3dccd; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+         padding: 10px; user-select: none; }
+  .board { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 10px;
+           box-shadow: 0 8px 24px -14px rgba(31, 42, 68, .25); }
+  .head { display: flex; align-items: center; gap: 12px; min-height: 28px; margin-bottom: 8px; }
+  .head .words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .head .tip { color: var(--muted); }
+  .head .name { font: 700 24px/1.1 Georgia, "Times New Roman", serif; }
+  .head .score { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .head canvas { width: 84px; height: 56px; border-radius: 3px; box-shadow: 0 0 0 1px rgba(31, 42, 68, .35), 0 2px 6px -2px rgba(31, 42, 68, .4); }
+  .stage { position: relative; aspect-ratio: 3 / 2; overflow: hidden; background: #fff; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  /* the paper is the flag; drawn inside its edge, so it doesn't move what a click lands on */
+  #paper { cursor: crosshair; outline: 2px solid #000; outline-offset: -2px; }
+  .tool { width: 38px; height: 34px; padding: 0; display: inline-grid; place-items: center; }
+  #paper.fill { cursor: cell; }
+  #pick { background: #cfe7f5; cursor: pointer; }
+  #pole { transition: opacity .6s ease; }
+  #pole.out { opacity: 0; pointer-events: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  .row .gap { flex: 1; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 6px 12px;
+           border-radius: 999px; cursor: pointer; }
+  button:hover { border-color: #c9bfa9; }
+  button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .swatch { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #0004; }
+  .swatch.on { box-shadow: 0 0 0 2px var(--ink); transform: scale(1.12); }
+  /* Main buttons look like GeoGuessr's own Guess (green, bold italic capitals), since that one is hidden. */
+  .go { background: linear-gradient(180deg, #8fd33c 0%, #6cb928 55%, #58a31d 100%); border: 0; color: #fff; font-weight: 800;
+        font-style: italic; text-transform: uppercase; letter-spacing: .04em; padding: 8px 22px;
+        box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18); text-shadow: 0 1px 1px rgba(0, 0, 0, .25); }
+  .go:hover:not(:disabled) { filter: brightness(1.07); }
+  .go:disabled { filter: saturate(.55); }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="head">
+    <canvas id="mini" width="96" height="64" hidden></canvas>
+    <div class="words">
+      <span class="name" id="name" hidden></span>
+      <span class="tip" id="tip">Paint the flag</span>
+    </div>
+    <span class="score" id="score"></span>
+    <canvas id="yours" width="96" height="64" title="Your flag" hidden></canvas>
+  </div>
+  <div class="stage">
+    <canvas id="paper" width="720" height="480"></canvas>
+    <canvas id="pick" width="720" height="480" hidden></canvas>
+    <canvas id="pole" width="720" height="480" hidden></canvas>
+  </div>
+  <div class="row" id="drawBar">
+    <button class="tool" id="fine" title="Fine line (Q)"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 17c3-9 6-9 8-4s5 4 8-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="tool on" id="medium" title="Medium line (W)"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 17c3-9 6-9 8-4s5 4 8-6" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="tool" id="thick" title="Thick line (E)"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 17c3-9 6-9 8-4s5 4 8-6" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="tool" id="fill" title="Fill (F)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/></svg></button>
+    <span class="gap"></span>
+    <button class="tool" id="undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button class="tool" id="redo" title="Redo (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+    <button id="clear">Clear</button>
+  </div>
+  <div class="row" id="palette"></div>
+  <div class="row" id="drawGo">
+    <span class="gap"></span>
+    <button class="go" id="match">Find country</button>
+  </div>
+  <div class="row" id="pickBar" hidden>
+    <span class="gap"></span>
+    <button class="go" id="guess" disabled>Guess</button>
+  </div>
+</div>
+<script src="../../draw-guess/app/marks.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
