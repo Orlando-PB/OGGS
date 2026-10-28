@@ -4,7 +4,8 @@
 // GeoGuessr's own Guess button is pressed.
 (() => {
   const ggs = globalThis.__ggs;
-  const MAX_W = 620, AUTO_GUESS_MS = 1500;
+  const MAX_W = 620;
+  const AUTO_GUESS_MS = 1500;
 
   function start(cfg) {
     const board = ggs.board({

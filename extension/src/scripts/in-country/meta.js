@@ -1,5 +1,6 @@
 (() => {
   // Every country in draw-guess's geo.json, by its code there.
+  // biome-ignore format: generated list
   const COUNTRIES = [
     ['AFG', 'Afghanistan'], ['ALB', 'Albania'], ['DZA', 'Algeria'], ['ASM', 'American Samoa'],
     ['AND', 'Andorra'], ['AGO', 'Angola'], ['ATG', 'Antigua and Barbuda'], ['ARG', 'Argentina'],
@@ -67,13 +68,30 @@
     section: 'guessing',
     defaultEnabled: false,
     // the boards hide the map; the others move, add or score pins on the real world map
-    excludes: ['draw-guess', 'flag-guess', 'ocean', 'guesses', 'wobble', 'drift', 'distance',
-      'lat-band', 'lng-band', 'radius', 'liar'],
+    excludes: [
+      'draw-guess',
+      'flag-guess',
+      'ocean',
+      'guesses',
+      'wobble',
+      'drift',
+      'distance',
+      'lat-band',
+      'lng-band',
+      'radius',
+      'liar',
+    ],
     options: [
-      { key: 'country', label: 'Country', type: 'select', default: 'AUS', choices: [
-        { value: 'random', label: 'Random each round' },
-        ...COUNTRIES.map(([value, label]) => ({ value, label })),
-      ] },
+      {
+        key: 'country',
+        label: 'Country',
+        type: 'select',
+        default: 'AUS',
+        choices: [
+          { value: 'random', label: 'Random each round' },
+          ...COUNTRIES.map(([value, label]) => ({ value, label })),
+        ],
+      },
       { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: true },
     ],
   });

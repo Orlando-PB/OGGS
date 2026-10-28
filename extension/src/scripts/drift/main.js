@@ -13,7 +13,8 @@
     attach(ctx) {
       // This map, not ctx.map: by the time cleanup runs, ctx.map may already be the next one.
       const map = ctx.map;
-      let angle = Math.random() * 2 * Math.PI, frame;
+      let angle = Math.random() * 2 * Math.PI;
+      let frame;
       const saved = Object.fromEntries(LOCK.map(k => [k, map.get(k)]));
       const z0 = map.getZoom();
       map.setOptions({
@@ -25,7 +26,8 @@
       });
       const step = () => {
         frame = requestAnimationFrame(step);
-        const c = map.getCenter(), z = map.getZoom();
+        const c = map.getCenter();
+        const z = map.getZoom();
         if (!c || z == null) return;
         angle += (Math.random() - 0.5) * 0.15;
         // turn back near the poles (screen y points down)
@@ -33,7 +35,7 @@
         const v = SPEED[ctx.cfg.speed] ?? SPEED[1];
         const deg = 360 / (256 * 2 ** z); // degrees of longitude per pixel
         map.setCenter({
-          lat: c.lat() - v * Math.sin(angle) * deg * Math.cos(c.lat() * Math.PI / 180),
+          lat: c.lat() - v * Math.sin(angle) * deg * Math.cos((c.lat() * Math.PI) / 180),
           lng: c.lng() + v * Math.cos(angle) * deg,
         });
       };

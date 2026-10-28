@@ -6,8 +6,6 @@
     section: 'guessing',
     defaultEnabled: false,
     excludes: ['draw-guess', 'flag-guess', 'drift'],
-    options: [
-      { key: 'grid', label: 'Grid lines', type: 'checkbox', default: true },
-    ],
+    options: [{ key: 'grid', label: 'Grid lines', type: 'checkbox', default: true }],
   });
 })();

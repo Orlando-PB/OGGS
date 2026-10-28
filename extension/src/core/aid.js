@@ -26,7 +26,8 @@
 // player's own pins. It's never drawn itself.
 (() => {
   const ggs = globalThis.__ggs;
-  const KM_PER_DEG = 111.32, EARTH_KM = 6371;
+  const KM_PER_DEG = 111.32;
+  const EARTH_KM = 6371;
   // km. The band sliders' marks, then the hemisphere.
   const BANDS = [0, 5, 25, 50, 100, 500, 1000, 2500];
   // km. The radius slider's first marks.
@@ -34,14 +35,21 @@
   const RING_PX = 9;
   // Not clickable, so clicks still reach the map to place the guess.
   const STYLE = {
-    strokeColor: '#2b8a3e', strokeOpacity: .9, strokeWeight: 2, fillColor: '#40c057', fillOpacity: .3,
-    clickable: false, zIndex: 1,
+    strokeColor: '#2b8a3e',
+    strokeOpacity: 0.9,
+    strokeWeight: 2,
+    fillColor: '#40c057',
+    fillOpacity: 0.3,
+    clickable: false,
+    zIndex: 1,
   };
   // Notes from every script stack in one corner of the map.
-  const NOTES_CSS = 'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;'
-    + 'align-items:flex-start;gap:6px;pointer-events:none;';
-  const NOTE_CSS = 'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;'
-    + 'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
+  const NOTES_CSS =
+    'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;' +
+    'align-items:flex-start;gap:6px;pointer-events:none;';
+  const NOTE_CSS =
+    'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;' +
+    'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
   function notesIn(div) {
     let box = div.querySelector(':scope > [data-ggs-notes]');
     if (!box) {
@@ -72,10 +80,12 @@
   // Widths are km along the axis. For longitude that's at the equator, so a band's width
   // can't give the latitude away.
   function band(x, rand, index, half) {
-    let lo = x < 0 ? -half : 0, hi = lo + half;
+    let lo = x < 0 ? -half : 0;
+    let hi = lo + half;
     for (let i = BANDS.length - 1; i >= index; i--) {
       const w = BANDS[i] / KM_PER_DEG;
-      const min = Math.max(lo, x - w), max = Math.min(hi - w, x);
+      const min = Math.max(lo, x - w);
+      const max = Math.min(hi - w, x);
       lo = min + rand() * (max - min);
       hi = lo + w;
     }
@@ -86,17 +96,20 @@
   // close enough to the bigger circle's centre to sit inside it. Offsets are km east and north.
   // If 50 tries miss, the point on the line from the bigger centre towards the location fits.
   function circle(loc, rand, index) {
-    let c = [0, 0], room = Infinity;
+    let c = [0, 0];
+    let room = Infinity;
     for (let i = RADII.length - 1; i >= index; i--) {
       const r = 0.95 * RADII[i];
       let p = null;
       for (let t = 0; t < 50 && !p; t++) {
-        const d = r * Math.sqrt(rand()), a = 2 * Math.PI * rand();
+        const d = r * Math.sqrt(rand());
+        const a = 2 * Math.PI * rand();
         const q = [d * Math.sin(a), d * Math.cos(a)];
         if (Math.hypot(q[0] - c[0], q[1] - c[1]) <= room) p = q;
       }
       if (!p) {
-        const d = Math.hypot(...c), k = Math.max(0, 1 - room / d);
+        const d = Math.hypot(...c);
+        const k = Math.max(0, 1 - room / d);
         p = [c[0] * k, c[1] * k];
       }
       c = p;
@@ -111,46 +124,63 @@
     const out = [];
     for (let x = w; x < e; x += 90) {
       const x2 = Math.min(e, x + 90);
-      const paths = [{ lat: s, lng: x }, { lat: n, lng: x }, { lat: n, lng: x2 }, { lat: s, lng: x2 }];
+      const paths = [
+        { lat: s, lng: x },
+        { lat: n, lng: x },
+        { lat: n, lng: x2 },
+        { lat: s, lng: x2 },
+      ];
       out.push({ type: 'Polygon', strokeWeight: 0, paths });
     }
     return out;
   }
   const latLine = lat => ({ type: 'Polyline', path: [-180, -90, 0, 90, 180].map(lng => ({ lat, lng })) });
-  const lngLine = lng => ({ type: 'Polyline', path: [{ lat: -85, lng }, { lat: 85, lng }] });
+  const lngLine = lng => ({
+    type: 'Polyline',
+    path: [
+      { lat: -85, lng },
+      { lat: 85, lng },
+    ],
+  });
 
   // The point km away from a spot along a bearing (radians from north), on a sphere.
   function destination({ lat, lng }, km, bearing) {
-    const rad = Math.PI / 180, d = km / EARTH_KM, p1 = lat * rad;
+    const rad = Math.PI / 180;
+    const d = km / EARTH_KM;
+    const p1 = lat * rad;
     const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(bearing));
-    const l2 = lng * rad + Math.atan2(Math.sin(bearing) * Math.sin(d) * Math.cos(p1),
-      Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    const l2 =
+      lng * rad +
+      Math.atan2(Math.sin(bearing) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
     return { lat: p2 / rad, lng: ((l2 / rad + 540) % 360) - 180 };
   }
 
   // Great-circle distance in km.
   function distance(a, b) {
     const rad = Math.PI / 180;
-    const h = Math.sin((b.lat - a.lat) * rad / 2) ** 2
-      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin((b.lng - a.lng) * rad / 2) ** 2;
+    const h =
+      Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
     return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
   // Country outlines from draw-guess's geo.json (code -> [[outer ring, ...holes], ...] in
   // [lng, lat]). Fetched once, the first time a script asks.
   let geo = null;
-  const loadGeo = () => (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
-    .then(r => r.json())
-    .catch(err => {
-      geo = null;
-      throw err;
-    }));
+  const loadGeo = () =>
+    (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
+      .then(r => r.json())
+      .catch(err => {
+        geo = null;
+        throw err;
+      }));
 
   function inside([x, y], ring) {
     let hit = false;
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i], [xj, yj] = ring[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
     }
     return hit;
   }
@@ -158,12 +188,16 @@
   // Failing that, with `near`, the nearest vertex within ~1.5 degrees. That catches coastal
   // roads outside the simplified coastlines.
   function countryAt(geo, { lat, lng }, { near: useNear = true } = {}) {
-    let best = null, bestArea = Infinity, near = null, nearD = 1.5 ** 2;
-    const k = Math.cos(lat * Math.PI / 180);
+    let best = null;
+    let bestArea = Infinity;
+    let near = null;
+    let nearD = 1.5 ** 2;
+    const k = Math.cos((lat * Math.PI) / 180);
     for (const [code, polys] of Object.entries(geo)) {
       for (const [outer, ...holes] of polys) {
         if (inside([lng, lat], outer) && !holes.some(h => inside([lng, lat], h))) {
-          const xs = outer.map(p => p[0]), ys = outer.map(p => p[1]);
+          const xs = outer.map(p => p[0]);
+          const ys = outer.map(p => p[1]);
           const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
           if (area < bestArea) {
             bestArea = area;
@@ -189,17 +223,20 @@
     return specs.some(s => {
       if (s.type === 'Circle') return distance(s.center, p) <= s.radius / 1000;
       if (s.type !== 'Polygon') return false;
-      const rings = (s.paths[0]?.lat === undefined ? s.paths : [s.paths])
-        .map(r => r.map(q => [q.lng, q.lat]));
-      return [p.lng, p.lng - 360, p.lng + 360]
-        .some(x => rings.filter(r => inside([x, p.lat], r)).length % 2 === 1);
+      const rings = (s.paths[0]?.lat === undefined ? s.paths : [s.paths]).map(r =>
+        r.map(q => [q.lng, q.lat]),
+      );
+      return [p.lng, p.lng - 360, p.lng + 360].some(
+        x => rings.filter(r => inside([x, p.lat], r)).length % 2 === 1,
+      );
     });
   }
 
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
   const guessHooks = new Set();
-  let passing = false, swallowUp = false;
+  let passing = false;
+  let swallowUp = false;
   function onPress(e) {
     if (passing || !guessHooks.size) return;
     if (e.type === 'keyup') {
@@ -209,11 +246,13 @@
       }
       return;
     }
-    const isPress = e.type === 'keydown'
-      ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
-      : !!ggs.maps.guessButton()?.contains(e.target);
+    const isPress =
+      e.type === 'keydown'
+        ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
+        : !!ggs.maps.guessButton()?.contains(e.target);
     if (!isPress) return;
-    let p = null, block = false;
+    let p = null;
+    let block = false;
     for (const fn of guessHooks) {
       const r = fn();
       if (r === false) block = true;
@@ -243,19 +282,28 @@
   const guessed = () => {
     if (ggs.maps.lastGuess()) owners.forEach(fn => fn());
   };
-  window.addEventListener('click', e => {
-    if (ggs.maps.guessButton()?.contains(e.target)) guessed();
-  }, true);
-  window.addEventListener('keydown', e => {
-    if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.guessMapElement()) guessed();
-  }, true);
+  window.addEventListener(
+    'click',
+    e => {
+      if (ggs.maps.guessButton()?.contains(e.target)) guessed();
+    },
+    true,
+  );
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.guessMapElement()) guessed();
+    },
+    true,
+  );
 
   // Lying (an aid with `lies`): each round there's a 50% chance it works from a made-up spot
   // instead of the real one. The coin and the spots are seeded like the shapes, so a reload
   // doesn't flip them. Made-up spots are points on random countries' outlines. For aids that
   // draw shapes, the first spot whose shapes leave the real location out is used.
   async function fakes(rand) {
-    const geo = await loadGeo(), codes = Object.keys(geo).sort();
+    const geo = await loadGeo();
+    const codes = Object.keys(geo).sort();
     const pick = list => list[Math.floor(rand() * list.length)];
     return Array.from({ length: 20 }, () => {
       const [lng, lat] = pick(pick(pick(geo[pick(codes)])));
@@ -265,8 +313,19 @@
 
   ggs.aid = (id, hooks) => ({
     start(cfg) {
-      let map = null, round = null, real = null, loc = null, lying = null, lies = null, stopped = false;
-      let shapes = [], shapesKey = '', extras = [], listener = null, note = null, detach = null;
+      let map = null;
+      let round = null;
+      let real = null;
+      let loc = null;
+      let lying = null;
+      let lies = null;
+      let stopped = false;
+      const shapes = [];
+      let shapesKey = '';
+      let extras = [];
+      let listener = null;
+      let note = null;
+      let detach = null;
       const gm = () => window.google.maps;
       const colour = () => (typeof hooks.colour === 'function' ? hooks.colour(ctx) : hooks.colour);
       const look = () => {
@@ -280,10 +339,18 @@
       };
       const seed = (what, p) => seeded(`${id}|${what}|${ggs.game.context()?.token}|${p?.lat}|${p?.lng}`);
       const ctx = {
-        get cfg() { return cfg; },
-        get map() { return map; },
-        get loc() { return loc; },
-        get gm() { return gm(); },
+        get cfg() {
+          return cfg;
+        },
+        get map() {
+          return map;
+        },
+        get loc() {
+          return loc;
+        },
+        get gm() {
+          return gm();
+        },
         rand: () => seed('shape', loc),
         pick: () => seed('pick', real),
         // Takes a spec or a ready-made overlay.
@@ -317,7 +384,8 @@
       // The key for a coloured hint: its name on its colour.
       const name = () => hooks.name?.(ctx) ?? ggs.registry.find(m => m.id === id)?.name ?? id;
       // owned is the round whose lie was owned up to.
-      let goneSince = 0, owned = null;
+      let goneSince = 0;
+      let owned = null;
       function ownUp() {
         if (!lying || !loc || loc === real || !note?.textContent) return;
         owned = round;
@@ -335,7 +403,7 @@
         const z = map?.getZoom();
         for (const o of shapes) {
           if (!o.ring || z == null) continue;
-          const px = o.getRadius() / (156543 * Math.cos(o.getCenter().lat() * Math.PI / 180) / 2 ** z);
+          const px = o.getRadius() / ((156543 * Math.cos((o.getCenter().lat() * Math.PI) / 180)) / 2 ** z);
           o.ring.setVisible(px < RING_PX);
         }
       }
@@ -402,15 +470,18 @@
           loc = lie ? null : real;
           shapesKey = '';
           if (lie) {
-            fakes(seed('fake', real)).then(list => {
-              if (round === key && lying === lie) {
-                lies = list;
-                loc = list[0];
-              }
-            }, () => {
-              // No outlines to lie with, so tell the truth.
-              if (round === key && lying === lie) loc = real;
-            });
+            fakes(seed('fake', real)).then(
+              list => {
+                if (round === key && lying === lie) {
+                  lies = list;
+                  loc = list[0];
+                }
+              },
+              () => {
+                // No outlines to lie with, so tell the truth.
+                if (round === key && lying === lie) loc = real;
+              },
+            );
           }
         }
         // A redraw after the guess put the plain name back.
@@ -419,27 +490,34 @@
         if (!loc || !hooks.shapes || want === shapesKey) return;
         shapesKey = want;
         if (lies) loc = lies[0];
-        draw(want).then(specs => {
-          // The settings or round moved on (or it stopped) while it loaded.
-          if (!specs || shapesKey !== want) return;
-          clear(shapes);
-          shapes.push(...specs.map(make));
-          // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
-          // rings() shows it only while the circle itself is smaller than that.
-          for (const o of [...shapes]) {
-            if (!(o instanceof gm().Circle)) continue;
-            const icon = {
-              path: 0, scale: RING_PX, strokeColor: look().strokeColor, strokeWeight: 3,
-              fillColor: look().fillColor, fillOpacity: .3,
-            };
-            o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
-            shapes.push(o.ring);
-          }
-          rings();
-          if (hooks.colour) label();
-        }, err => {
-          if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
-        });
+        draw(want).then(
+          specs => {
+            // The settings or round moved on (or it stopped) while it loaded.
+            if (!specs || shapesKey !== want) return;
+            clear(shapes);
+            shapes.push(...specs.map(make));
+            // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
+            // rings() shows it only while the circle itself is smaller than that.
+            for (const o of [...shapes]) {
+              if (!(o instanceof gm().Circle)) continue;
+              const icon = {
+                path: 0,
+                scale: RING_PX,
+                strokeColor: look().strokeColor,
+                strokeWeight: 3,
+                fillColor: look().fillColor,
+                fillOpacity: 0.3,
+              };
+              o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
+              shapes.push(o.ring);
+            }
+            rings();
+            if (hooks.colour) label();
+          },
+          err => {
+            if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
+          },
+        );
       }, 300);
 
       return {
@@ -473,7 +551,17 @@
     },
   });
   Object.assign(ggs.aid, {
-    seeded, band, circle, box, latLine, lngLine, destination, distance, loadGeo, countryAt, covers,
+    seeded,
+    band,
+    circle,
+    box,
+    latLine,
+    lngLine,
+    destination,
+    distance,
+    loadGeo,
+    countryAt,
+    covers,
     hints: {},
   });
 })();

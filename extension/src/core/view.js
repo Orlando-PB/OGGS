@@ -37,13 +37,15 @@
   function panoElement() {
     const map = ggs.maps.guessMapElement();
     const ok = el => el?.isConnected && el.offsetWidth > 0 && !(map && el.contains(map));
-    return [...hooked].reverse().find(ok)
-      ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok)
-      ?? null;
+    return (
+      [...hooked].reverse().find(ok) ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok) ?? null
+    );
   }
   // The picture inside it: Google's .gm-style layer, or its first child that isn't ours.
-  const sceneOf = pano => [...pano.children].find(c => c.classList.contains('gm-style'))
-    ?? [...pano.children].find(c => !c.hasAttribute(HOST)) ?? null;
+  const sceneOf = pano =>
+    [...pano.children].find(c => c.classList.contains('gm-style')) ??
+    [...pano.children].find(c => !c.hasAttribute(HOST)) ??
+    null;
 
   // The guess map's area: the smallest element holding both the map and its Guess button,
   // so the map's own size buttons are in it too. If that is most of the window, the two
@@ -57,8 +59,10 @@
     const r = box?.getBoundingClientRect();
     if (r && r.width * r.height < innerWidth * innerHeight * 0.6) return r;
     const rects = [map, btn].filter(Boolean).map(e => e.getBoundingClientRect());
-    const left = Math.min(...rects.map(q => q.left)), top = Math.min(...rects.map(q => q.top));
-    const right = Math.max(...rects.map(q => q.right)), bottom = Math.max(...rects.map(q => q.bottom));
+    const left = Math.min(...rects.map(q => q.left));
+    const top = Math.min(...rects.map(q => q.top));
+    const right = Math.max(...rects.map(q => q.right));
+    const bottom = Math.max(...rects.map(q => q.bottom));
     return { left, top, right, bottom, width: right - left, height: bottom - top };
   }
 
@@ -74,14 +78,22 @@
   const n = v => Math.round(v * 10) / 10;
   const shape = {
     poly: pts => `M${pts.map(([x, y]) => `${n(x)} ${n(y)}`).join('L')}Z`,
-    circle: (cx, cy, r) => `M${n(cx - r)} ${n(cy)}`
-      + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
+    circle: (cx, cy, r) =>
+      `M${n(cx - r)} ${n(cy)}` + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
     rect(x, y, w, h, r = 0) {
       r = Math.min(r, w / 2, h / 2);
-      if (!r) return shape.poly([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+      if (!r)
+        return shape.poly([
+          [x, y],
+          [x + w, y],
+          [x + w, y + h],
+          [x, y + h],
+        ]);
       const arc = (dx, dy) => `a${n(r)} ${n(r)} 0 0 1 ${n(dx)} ${n(dy)}`;
-      return `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}`
-        + `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`;
+      return (
+        `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}` +
+        `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`
+      );
     },
   };
 
@@ -110,7 +122,10 @@
     }
     const { width: w, height: h } = pano.getBoundingClientRect();
     const all = [...effects.values()];
-    const filter = all.map(e => e.filter).filter(Boolean).join(' ');
+    const filter = all
+      .map(e => e.filter)
+      .filter(Boolean)
+      .join(' ');
     const transform = all
       .map(e => (typeof e.transform === 'function' ? e.transform(now, w, h) : e.transform))
       .filter(Boolean)
@@ -143,24 +158,42 @@
   const LOOKS = {
     // Cream paper with a faint dot grid and an ink edge with a hard shadow, like the popup.
     paper: {
-      paper: '#f5f1e8', dot: 'rgba(28,26,46,.09)', edge: '#1c1a2e', width: 3, shadow: 'rgba(28,26,46,.3)',
+      paper: '#f5f1e8',
+      dot: 'rgba(28,26,46,.09)',
+      edge: '#1c1a2e',
+      width: 3,
+      shadow: 'rgba(28,26,46,.3)',
     },
     // Near-black with a barely-there dot grid and a thin cream edge round the holes.
     night: {
-      paper: '#0b0a12', dot: 'rgba(245,241,232,.06)', edge: 'rgba(245,241,232,.8)', width: 2, shadow: null,
+      paper: '#0b0a12',
+      dot: 'rgba(245,241,232,.06)',
+      edge: 'rgba(245,241,232,.8)',
+      width: 2,
+      shadow: null,
     },
   };
   const BLOCKED = [
-    'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu',
-    'wheel', 'touchstart', 'touchmove',
+    'pointerdown',
+    'pointerup',
+    'mousedown',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'touchstart',
+    'touchmove',
   ];
 
   function mask({ over, look: lookName, cut }) {
-    const look = LOOKS[lookName] ?? LOOKS.paper, screen = over === 'screen';
+    const look = LOOKS[lookName] ?? LOOKS.paper;
+    const screen = over === 'screen';
     const host = document.createElement('div');
     host.setAttribute(HOST, '');
-    host.style.cssText = `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;`
-      + ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
+    host.style.cssText =
+      `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;` +
+      ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
     // Events on the painted sheet stop here, so neither Street View nor GeoGuessr see them.
     for (const type of BLOCKED) host.addEventListener(type, e => e.stopPropagation());
     const root = host.attachShadow({ mode: 'open' });
@@ -208,7 +241,9 @@
           if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
         }
       }
-      const w = host.clientWidth, h = host.clientHeight, holes = cut(w, h);
+      const w = host.clientWidth;
+      const h = host.clientHeight;
+      const holes = cut(w, h);
       host.hidden = holes === null;
       // The outer edge is 20px past the box so its stroke is off screen. Only the holes' edges show.
       const d = holes === null ? '' : `M-20 -20H${w + 20}V${h + 20}H-20Z${holes}`;
@@ -258,29 +293,79 @@
   const key = (k, code, keyCode) => ({ key: k, code, keyCode });
   const SWAP = {
     move: {
-      ArrowUp: key('ArrowDown', 'ArrowDown', 40), ArrowDown: key('ArrowUp', 'ArrowUp', 38),
-      w: key('s', 'KeyS', 83), s: key('w', 'KeyW', 87), W: key('S', 'KeyS', 83), S: key('W', 'KeyW', 87),
+      ArrowUp: key('ArrowDown', 'ArrowDown', 40),
+      ArrowDown: key('ArrowUp', 'ArrowUp', 38),
+      w: key('s', 'KeyS', 83),
+      s: key('w', 'KeyW', 87),
+      W: key('S', 'KeyS', 83),
+      S: key('W', 'KeyW', 87),
     },
     turn: {
-      ArrowLeft: key('ArrowRight', 'ArrowRight', 39), ArrowRight: key('ArrowLeft', 'ArrowLeft', 37),
-      a: key('d', 'KeyD', 68), d: key('a', 'KeyA', 65), A: key('D', 'KeyD', 68), D: key('A', 'KeyA', 65),
+      ArrowLeft: key('ArrowRight', 'ArrowRight', 39),
+      ArrowRight: key('ArrowLeft', 'ArrowLeft', 37),
+      a: key('d', 'KeyD', 68),
+      d: key('a', 'KeyA', 65),
+      A: key('D', 'KeyD', 68),
+      D: key('A', 'KeyA', 65),
     },
     zoom: {
-      '+': key('-', 'Minus', 189), '=': key('-', 'Minus', 189),
-      '-': key('=', 'Equal', 187), '_': key('=', 'Equal', 187),
+      '+': key('-', 'Minus', 189),
+      '=': key('-', 'Minus', 189),
+      '-': key('=', 'Equal', 187),
+      _: key('=', 'Equal', 187),
     },
   };
   // Every event field the copies need. The constructor ignores the ones its type lacks.
   const FIELDS = [
-    'bubbles', 'cancelable', 'composed', 'view', 'detail', 'ctrlKey', 'shiftKey', 'altKey', 'metaKey',
-    'key', 'code', 'location', 'repeat', 'keyCode', 'which', 'charCode',
-    'screenX', 'screenY', 'clientX', 'clientY', 'movementX', 'movementY', 'button', 'buttons', 'relatedTarget',
-    'pointerId', 'pointerType', 'isPrimary', 'width', 'height', 'pressure', 'tiltX', 'tiltY', 'twist',
-    'deltaX', 'deltaY', 'deltaZ', 'deltaMode',
+    'bubbles',
+    'cancelable',
+    'composed',
+    'view',
+    'detail',
+    'ctrlKey',
+    'shiftKey',
+    'altKey',
+    'metaKey',
+    'key',
+    'code',
+    'location',
+    'repeat',
+    'keyCode',
+    'which',
+    'charCode',
+    'screenX',
+    'screenY',
+    'clientX',
+    'clientY',
+    'movementX',
+    'movementY',
+    'button',
+    'buttons',
+    'relatedTarget',
+    'pointerId',
+    'pointerType',
+    'isPrimary',
+    'width',
+    'height',
+    'pressure',
+    'tiltX',
+    'tiltY',
+    'twist',
+    'deltaX',
+    'deltaY',
+    'deltaZ',
+    'deltaMode',
   ];
   const POINTER = [
-    'pointerdown', 'mousedown', 'pointermove', 'mousemove', 'pointerup', 'mouseup', 'pointercancel',
-    'click', 'dblclick',
+    'pointerdown',
+    'mousedown',
+    'pointermove',
+    'mousemove',
+    'pointerup',
+    'mouseup',
+    'pointercancel',
+    'click',
+    'dblclick',
   ];
   // owner -> wanted flips
   const mirrors = new Map();
@@ -332,7 +417,8 @@
   // Click-to-move with `move` flipped. Google's own is off (clickToGo), and a click that wasn't
   // a drag walks to the link pointing furthest from where you clicked.
   // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
-  let pressAt = null, noClickTo = null;
+  let pressAt = null;
+  let noClickTo = null;
   function clickToGo() {
     const p = panoOf.get(panoElement());
     const off = want('move') ? p : null;
@@ -342,12 +428,15 @@
     noClickTo = off;
   }
   function walkBack(x) {
-    const el = panoElement(), p = panoOf.get(el), links = p?.getLinks?.();
+    const el = panoElement();
+    const p = panoOf.get(el);
+    const links = p?.getLinks?.();
     if (!links?.length) return;
-    const r = el.getBoundingClientRect(), pov = p.getPov();
+    const r = el.getBoundingClientRect();
+    const pov = p.getPov();
     const fov = 180 / 2 ** (p.getZoom?.() ?? 1);
     const away = pov.heading + ((x - r.left) / r.width - 0.5) * fov + 180;
-    const off = l => Math.abs(((l.heading - away) % 360 + 540) % 360 - 180);
+    const off = l => Math.abs(((((l.heading - away) % 360) + 540) % 360) - 180);
     p.setPano(links.reduce((a, b) => (off(b) < off(a) ? b : a)).pano);
   }
 
@@ -373,7 +462,8 @@
     const flip = (v, c, on) => (on ? 2 * c - v : v);
     const inPano = onPano(e.target) || from;
     if (!r || !inPano) return;
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
     let x = flip(e.clientX, cx, want('flipX'));
     let y = flip(e.clientY, cy, want('flipY'));
     if (from && !down) {
@@ -388,13 +478,18 @@
         from = null;
       });
     }
-    const dx = x - e.clientX, dy = y - e.clientY;
+    const dx = x - e.clientX;
+    const dy = y - e.clientY;
     if (!dx && !dy) return;
-    const sx = (want('flipX') !== (!!from && want('dragX'))) ? -1 : 1;
-    const sy = (want('flipY') !== (!!from && want('dragY'))) ? -1 : 1;
+    const sx = want('flipX') !== (!!from && want('dragX')) ? -1 : 1;
+    const sy = want('flipY') !== (!!from && want('dragY')) ? -1 : 1;
     resend(e, {
-      clientX: x, clientY: y, screenX: e.screenX + dx, screenY: e.screenY + dy,
-      movementX: sx * e.movementX, movementY: sy * e.movementY,
+      clientX: x,
+      clientY: y,
+      screenX: e.screenX + dx,
+      screenY: e.screenY + dy,
+      movementX: sx * e.movementX,
+      movementY: sy * e.movementY,
     });
   }
   const onBlur = e => {
@@ -403,7 +498,10 @@
     sent.clear();
   };
   const LISTENERS = [
-    ['keydown', onKey], ['keyup', onKey], ['wheel', onWheel], ['blur', onBlur],
+    ['keydown', onKey],
+    ['keyup', onKey],
+    ['wheel', onWheel],
+    ['blur', onBlur],
     ...POINTER.map(t => [t, onPointer]),
   ];
   // Added once, at document_start, so they run before GeoGuessr's and the Maps API's own

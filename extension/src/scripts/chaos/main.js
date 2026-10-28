@@ -9,7 +9,9 @@
 (() => {
   const ggs = globalThis.__ggs;
   const EVERY = [10, 15, 20, 30, 45, 60, 90, 120]; // seconds, by the slider
-  const LIFE_MS = 30000, FIRST_MS = 3000, TICK_MS = 250;
+  const LIFE_MS = 30000;
+  const FIRST_MS = 3000;
+  const TICK_MS = 250;
   // The guess map gone this long means the round is over. It can blink mid-round.
   const AWAY_MS = 1500;
   // Chance of a board per pick at a 30 s interval. It scales with the interval, so a board comes
@@ -18,7 +20,18 @@
   const BOARDS = ['draw-guess', 'flag-guess'];
   // Effects that need the guess map, which a board hides (or that press Guess themselves).
   const NEEDS_MAP = [
-    'guesses', 'wobble', 'ocean', 'in-country', 'blind', 'drift', 'lat-band', 'lng-band', 'radius', 'distance', 'liar', 'lag',
+    'guesses',
+    'wobble',
+    'ocean',
+    'in-country',
+    'blind',
+    'drift',
+    'lat-band',
+    'lng-band',
+    'radius',
+    'distance',
+    'liar',
+    'lag',
   ];
   // Street View tile filters: slow to switch.
   const TILES = ['ascii', 'minecraft', 'lying-signs', 'gradient', 'greyscale'];
@@ -36,7 +49,10 @@
   const SKIP = ['liar']; // the hints above already lie
   // Options chaos leaves as the player set them.
   const KEEP = {
-    minecraft: ['code'], radio: ['streamerMode'], 'draw-guess': ['hardMode'], 'flag-guess': ['forceInside'],
+    minecraft: ['code'],
+    radio: ['streamerMode'],
+    'draw-guess': ['hardMode'],
+    'flag-guess': ['forceInside'],
   };
   const LOCKS = { noMove: 'move', noPan: 'pan', noZoom: 'zoom' };
   // NMPZ, Clean map, OGGS tab: the player's own
@@ -94,14 +110,17 @@
   }
   // A few words on the settings it got, for the panel: choices and named slider stops.
   function describe(meta, cfg) {
-    return meta.options.map(o => {
-      const v = cfg[o.key];
-      if (KEEP[meta.id]?.includes(o.key)) return '';
-      if (o.choices) return o.choices.find(c => String(c.value) === String(v))?.label ?? '';
-      if (o.steps) return o.steps[v - o.min] ?? '';
-      if (o.marks?.length === o.max - o.min + 1) return withUnit(o.label, o.marks[v - o.min]);
-      return '';
-    }).filter(Boolean).join(' · ');
+    return meta.options
+      .map(o => {
+        const v = cfg[o.key];
+        if (KEEP[meta.id]?.includes(o.key)) return '';
+        if (o.choices) return o.choices.find(c => String(c.value) === String(v))?.label ?? '';
+        if (o.steps) return o.steps[v - o.min] ?? '';
+        if (o.marks?.length === o.max - o.min + 1) return withUnit(o.label, o.marks[v - o.min]);
+        return '';
+      })
+      .filter(Boolean)
+      .join(' · ');
   }
 
   const PANEL_CSS = `
@@ -126,7 +145,8 @@
     ul:empty { display: none; }
     li { animation: pop .35s ease-out; }
     @keyframes pop { from { opacity: 0; transform: translateX(-12px); } }`;
-  const PANEL_HTML = '<div class="next"><div class="row"><span class="label"><b>Next effect</b></span>' +
+  const PANEL_HTML =
+    '<div class="next"><div class="row"><span class="label"><b>Next effect</b></span>' +
     '<span class="secs"></span></div><div class="bar"><i></i></div></div><ul></ul>';
 
   // key (script id or lock name) -> { key, name, detail, cfg?, left?, round? }
@@ -136,7 +156,7 @@
     mix(stored) {
       const out = {};
       for (const m of ggs.registry) {
-        out[m.id] = own().includes(m.id) ? stored[m.id] : active.get(m.id)?.cfg ?? { enabled: false };
+        out[m.id] = own().includes(m.id) ? stored[m.id] : (active.get(m.id)?.cfg ?? { enabled: false });
       }
       return out;
     },
@@ -151,7 +171,10 @@
     let awaySince = 0;
     let lastRound = ggs.game.roundKey();
     const panel = ggs.ui.panel({
-      id: 'chaos', title: 'Chaos', css: PANEL_CSS, html: PANEL_HTML,
+      id: 'chaos',
+      title: 'Chaos',
+      css: PANEL_CSS,
+      html: PANEL_HTML,
       pos: { x: 16, y: Math.round(innerHeight * 0.3) },
     });
     panel.show(false);
@@ -172,9 +195,10 @@
     };
     // Fits beside the effects still on `ms` from now. A board fits beside anything but the other
     // board, and ends what clashes with it (see add).
-    const fits = (key, ms = 0) => (BOARDS.includes(key)
-      ? !BOARDS.some(b => active.has(b))
-      : [...active.values()].every(e => (!e.round && e.left <= ms) || !clash(e.key, key)));
+    const fits = (key, ms = 0) =>
+      BOARDS.includes(key)
+        ? !BOARDS.some(b => active.has(b))
+        : [...active.values()].every(e => (!e.round && e.left <= ms) || !clash(e.key, key));
 
     // Locks: the Controls effects, and No move under Minecraft (each panorama costs a generation).
     function locks() {
@@ -206,7 +230,9 @@
         for (const k of [...active.keys()]) if (clash(k, key)) active.delete(k);
         // after the map effects let go of it
         setTimeout(() => {
-          try { ggs.maps.clearGuess(); } catch {}
+          try {
+            ggs.maps.clearGuess();
+          } catch {}
         }, 300);
       } else {
         effect.left = LIFE_MS;
@@ -228,9 +254,9 @@
         .filter(k => !(quick && TILES.includes(k)) && ms >= (LEAD[k] ?? 0));
       const boards = can.filter(k => BOARDS.includes(k));
       const others = can.filter(k => !BOARDS.includes(k));
-      const board = boards.length && Math.random() < DRAW_CHANCE * EVERY[cfg.every] / 30;
+      const board = boards.length && Math.random() < (DRAW_CHANCE * EVERY[cfg.every]) / 30;
       // only boards left ticked: a board
-      const key = board || !others.length ? pick(boards) ?? null : pick(others);
+      const key = board || !others.length ? (pick(boards) ?? null) : pick(others);
       return key && make(key);
     }
     // The effect for the slot `ms` from now, starting to get ready.
@@ -320,17 +346,21 @@
     // The list is rebuilt when effects come or go. The bars and countdown update every tick.
     function draw(rebuild) {
       panel.$('.next .secs').textContent = `${Math.ceil(Math.max(0, next) / 1000)}s`;
-      panel.$('.next .bar i').style.width = `${100 * Math.max(0, next) / span}%`;
+      panel.$('.next .bar i').style.width = `${(100 * Math.max(0, next)) / span}%`;
       if (rebuild) {
-        list.innerHTML = [...active.values()].map(e =>
-          `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
-          `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
-          '<div class="bar"><i></i></div></li>').join('');
+        list.innerHTML = [...active.values()]
+          .map(
+            e =>
+              `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
+              `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
+              '<div class="bar"><i></i></div></li>',
+          )
+          .join('');
       }
       for (const li of list.children) {
         const e = active.get(li.dataset.key);
         if (!e) continue;
-        li.querySelector('.bar i').style.width = `${e.round ? 100 : 100 * e.left / LIFE_MS}%`;
+        li.querySelector('.bar i').style.width = `${e.round ? 100 : (100 * e.left) / LIFE_MS}%`;
       }
     }
 

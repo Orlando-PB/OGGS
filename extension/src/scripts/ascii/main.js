@@ -7,7 +7,9 @@
   const ggs = globalThis.__ggs;
   const RAMP = ' .:-=+*#%@'; // darkest to brightest
   const ACROSS = 64; // characters across a zoom-3 (45°) tile
-  const BG = '#0b0a12', PAPER = '#ffffff', INK = '#111111';
+  const BG = '#0b0a12';
+  const PAPER = '#ffffff';
+  const INK = '#111111';
   let active = null;
   let pre = null; // { look, tiles } drawn ahead by prepare
 
@@ -53,13 +55,14 @@
     const g = glyphs.getContext('2d');
     const strip = atlas(cw, ch);
     const sw = Math.ceil(cw);
-    for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
-      const i = (y * nx + x) * 4;
-      let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
-      if (paper) light = 1 - light; // black on white: dark cells get the dense characters
-      const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
-      if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
-    }
+    for (let y = 0; y < ny; y++)
+      for (let x = 0; x < nx; x++) {
+        const i = (y * nx + x) * 4;
+        let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+        if (paper) light = 1 - light; // black on white: dark cells get the dense characters
+        const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+        if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
+      }
     g.globalCompositeOperation = 'source-in';
     if (paper) {
       g.fillStyle = INK;
@@ -81,10 +84,12 @@
   // A tile drawn ahead is used only while it's still a plain picture. An earlier filter that
   // changes a tile hands on a canvas instead.
   const ahead = (rec, source) =>
-    (pre?.look === active.look && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null);
+    pre?.look === active.look && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null;
   // order 3: after gradient (2)
-  ggs.tiles.filter((rec, source) =>
-    (active && rec.key ? ahead(rec, source) ?? draw(source, rec.key.z) : source), 3);
+  ggs.tiles.filter(
+    (rec, source) => (active && rec.key ? (ahead(rec, source) ?? draw(source, rec.key.z)) : source),
+    3,
+  );
 
   const drop = p => {
     p?.tiles.cancel();
@@ -94,7 +99,7 @@
     prepare(cfg) {
       drop(pre);
       const tiles = ggs.tiles.prerender((img, k) => draw(img, k.z, cfg.look));
-      const p = pre = { look: cfg.look, tiles };
+      const p = (pre = { look: cfg.look, tiles });
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {

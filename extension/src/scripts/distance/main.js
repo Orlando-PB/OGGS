@@ -5,15 +5,14 @@
   const KM_PER_MILE = 1.609344;
 
   function format(km, units) {
-    const [n, big, small, per] = units === 'mi'
-      ? [km / KM_PER_MILE, 'mi', 'yd', 1760]
-      : [km, 'km', 'm', 1000];
+    const [n, big, small, per] =
+      units === 'mi' ? [km / KM_PER_MILE, 'mi', 'yd', 1760] : [km, 'km', 'm', 1000];
     if (n < 1) return `${Math.round(n * per).toLocaleString('en')} ${small}`;
     return `${n < 100 ? n.toFixed(1) : Math.round(n).toLocaleString('en')} ${big}`;
   }
 
   // the last distance is kept, so switching units rewrites the note straight away
-  const show = ctx => ctx.note(format(ctx.km, ctx.shownIn = ctx.cfg.units));
+  const show = ctx => ctx.note(format(ctx.km, (ctx.shownIn = ctx.cfg.units)));
 
   // the clicked spot is kept and measured once the round's location is known
   ggs.scripts.distance = ggs.aid('distance', {

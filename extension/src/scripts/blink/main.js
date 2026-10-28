@@ -5,7 +5,8 @@
 (() => {
   const ggs = globalThis.__ggs;
   const MS = [100, 500, 1000, 2000, 5000, 10000]; // by the Shown for slider
-  const LOADING_MS = 1000, READY_MS = 1000;
+  const LOADING_MS = 1000;
+  const READY_MS = 1000;
   const NO_TILES_MS = 5000; // a round whose tiles never show up moves on anyway
   // While covered, a stylesheet also makes every Street View picture (any .gm-style but the guess
   // map's) see-through. It applies the moment GeoGuessr adds a new one, before the sheet moves onto
@@ -13,13 +14,16 @@
   // visibility. Only during a round, since the results screen's map is a .gm-style too.
   const HIDE_CSS =
     '.gm-style:not([class*="guess-map"] *, [data-qa="guess-map"] *) { opacity: 0 !important; }';
-  const INK = '#1c1a2e', YELLOW = '#fecd19';
-  const BAR_CSS = 'position:fixed;z-index:2147481000;height:4px;' +
+  const INK = '#1c1a2e';
+  const YELLOW = '#fecd19';
+  const BAR_CSS =
+    'position:fixed;z-index:2147481000;height:4px;' +
     `background:${YELLOW};box-shadow:0 -1px 0 ${INK};pointer-events:none;`;
   const CARD_CSS = `position:fixed;z-index:2147481000;transform:translate(-50%,-50%);flex-direction:column;
     align-items:center;gap:10px;font:800 18px/1 system-ui,sans-serif;letter-spacing:.04em;color:${INK};
     pointer-events:none;`;
-  const CARD_HTML = '<span></span>' +
+  const CARD_HTML =
+    '<span></span>' +
     `<b style="display:block;width:160px;height:8px;border:1.5px solid ${INK};border-radius:6px;overflow:hidden">
       <i style="display:block;height:100%;width:0;background:${YELLOW}"></i></b>`;
 
@@ -72,11 +76,11 @@
       if (step === 'loading' || step === 'ready') {
         word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
         meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
-        fill.style.width = `${Math.min(100, (now - round.ready) / READY_MS * 100) || 0}%`;
+        fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
         Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
         card.style.display = 'flex'; // not `hidden`: the inline display would beat it
       } else if (step === 'show') {
-        const width = r.width * (round.until - now) / ms;
+        const width = (r.width * (round.until - now)) / ms;
         Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
         bar.hidden = false;
       }

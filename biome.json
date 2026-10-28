@@ -1,0 +1,56 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "extension/**",
+      "server/**",
+      "tools/**",
+      "userscript/bridge.js",
+      "!extension/src/scripts/draw-guess/app/app.js",
+      "!extension/src/scripts/draw-guess/app/index.html",
+      "!**/vendor",
+      "!**/data",
+      "!extension/src/scripts/flag-guess/app/flags.json",
+      "!extension/src/scripts/radio/shapes.js",
+      "!extension/src/scripts/ghana-tape/ghana.js"
+    ]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 110
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "arrowParentheses": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "rules": {
+      "recommended": true,
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 15
+          }
+        }
+      },
+      "style": {
+        "useSingleVarDeclarator": "error"
+      }
+    }
+  },
+  "css": {
+    "formatter": {
+      "enabled": false
+    }
+  }
+}

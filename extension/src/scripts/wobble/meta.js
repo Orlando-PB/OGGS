@@ -7,8 +7,15 @@
     defaultEnabled: false,
     options: [
       // index into KM in main.js
-      { key: 'size', label: 'How far (km)', type: 'slider', min: 0, max: 6, default: 4,
-        marks: ['10', '50', '100', '250', '500', '1000', '2500'] },
+      {
+        key: 'size',
+        label: 'How far (km)',
+        type: 'slider',
+        min: 0,
+        max: 6,
+        default: 4,
+        marks: ['10', '50', '100', '250', '500', '1000', '2500'],
+      },
     ],
   });
 })();

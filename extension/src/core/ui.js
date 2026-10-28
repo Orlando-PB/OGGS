@@ -23,7 +23,9 @@
   function panel({ id, title, html = '', css = '', pos = { x: 16, y: 120 } }) {
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', id);
-    const front = () => { host.style.zIndex = String(++zTop); };
+    const front = () => {
+      host.style.zIndex = String(++zTop);
+    };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `<style>${BASE_CSS}${css}</style>
@@ -43,7 +45,8 @@
       // A button in the header (close) gets the click, not a drag.
       if (e.target.closest('button')) return;
       const r = host.getBoundingClientRect();
-      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
       head.setPointerCapture(e.pointerId);
       const move = ev => place(ev.clientX - dx, ev.clientY - dy);
       const up = () => {
@@ -60,15 +63,21 @@
       host,
       root,
       $: sel => root.querySelector(sel),
-      show(visible) { host.hidden = !visible; },
+      show(visible) {
+        host.hidden = !visible;
+      },
       front,
       // Pulls the panel back on screen, e.g. after it grew.
       clamp() {
         const r = host.getBoundingClientRect();
         place(r.left, Math.min(r.top, innerHeight - host.offsetHeight - 8));
       },
-      get visible() { return !host.hidden; },
-      destroy() { host.remove(); },
+      get visible() {
+        return !host.hidden;
+      },
+      destroy() {
+        host.remove();
+      },
     };
   }
 

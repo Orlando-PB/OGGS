@@ -36,18 +36,32 @@
     .status:empty { display: none; }`;
   const MARGIN = 16;
   // Small until hovered, like GeoGuessr's map.
-  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600;
-  const RETRY_MS = 500, TRIES = 10;
+  const COLLAPSED_W = 320;
+  const COLLAPSE_DELAY = 600;
+  const RETRY_MS = 500;
+  const TRIES = 10;
   // The guess map gone this long means a result screen, so the board clears.
   const AWAY_MS = 1500;
 
   ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
-    let host = null, frame, statusEl, ready = false, queued = [];
-    let expanded = false, collapseTimer = 0, pressTimer = 0, boardH = 0;
-    let wasInRound = false, awaySince = 0, placed = false, answerRound, lastGuess = null;
+    let host = null;
+    let frame;
+    let statusEl;
+    let ready = false;
+    const queued = [];
+    let expanded = false;
+    let collapseTimer = 0;
+    let pressTimer = 0;
+    let boardH = 0;
+    let wasInRound = false;
+    let awaySince = 0;
+    let placed = false;
+    let answerRound;
+    let lastGuess = null;
     // Where the board sits. Measured once per round and window size.
-    let spot = null, spotKey = '';
+    let spot = null;
+    let spotKey = '';
 
     const hideMap = document.createElement('style');
     hideMap.textContent = HIDE_MAP_CSS;
@@ -170,9 +184,11 @@
       if (round === answerRound) return;
       answerRound = round;
       post({ ggs: 'answer', lat: null });
-      ggs.game.roundLocation()
-        .then(loc => loc && ggs.game.roundKey() === round
-          && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
+      ggs.game
+        .roundLocation()
+        .then(
+          loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }),
+        )
         .catch(() => {});
     }
 
@@ -198,8 +214,13 @@
     }, 500);
 
     return {
-      post, place, press, status,
-      get created() { return !!host; },
+      post,
+      place,
+      press,
+      status,
+      get created() {
+        return !!host;
+      },
       stop() {
         clearInterval(tick);
         clearTimeout(collapseTimer);

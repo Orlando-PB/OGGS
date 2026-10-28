@@ -55,20 +55,21 @@
     const grid = canvas(3 * tw, 3 * th, 'grid');
     const g = grid.getContext('2d');
     g.clearRect(0, 0, grid.width, grid.height);
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
-      const x = (dx + 1) * tw;
-      const y = (dy + 1) * th;
-      if (nb) {
-        g.drawImage(nb.src, x, y, tw, th);
-        continue;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
+        const x = (dx + 1) * tw;
+        const y = (dy + 1) * th;
+        if (nb) {
+          g.drawImage(nb.src, x, y, tw, th);
+          continue;
+        }
+        g.save();
+        g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
+        g.scale(dx ? -1 : 1, dy ? -1 : 1);
+        g.drawImage(src, 0, 0, tw, th);
+        g.restore();
       }
-      g.save();
-      g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
-      g.scale(dx ? -1 : 1, dy ? -1 : 1);
-      g.drawImage(src, 0, 0, tw, th);
-      g.restore();
-    }
     // shrink in halves: one big step skips pixels and speckles the colours
     let cur = grid;
     let cw = grid.width;
@@ -102,20 +103,22 @@
   const dirty = new Map(); // "pano/z/x/y" -> { k, tiles }
   let timer = null;
   function touchNeighbours(k, tiles) {
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue;
-      const nk = { pano: k.pano, z: k.z, x: k.x + dx, y: k.y + dy };
-      if (tiles.has(tileId(nk))) dirty.set(`${k.pano}/${tileId(nk)}`, { k: nk, tiles });
-    }
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nk = { pano: k.pano, z: k.z, x: k.x + dx, y: k.y + dy };
+        if (tiles.has(tileId(nk))) dirty.set(`${k.pano}/${tileId(nk)}`, { k: nk, tiles });
+      }
     clearTimeout(timer);
     timer = setTimeout(redo, 80);
   }
   // A few tiles per frame, so the game keeps drawing (a replay can leave hundreds dirty at once).
   // Tiles that turn dirty meanwhile join the same pass.
-  const PER_FRAME = 4, SLICE = 8;
+  const PER_FRAME = 4;
+  const SLICE = 8;
   let redoing = false;
-  const nextFrame = () => new Promise(r =>
-    (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  const nextFrame = () =>
+    new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
   async function redo() {
     timer = null;
     if (redoing) return;

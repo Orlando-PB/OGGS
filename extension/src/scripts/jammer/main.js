@@ -36,8 +36,14 @@
     const limit = audio.createDynamicsCompressor();
     const limitSettings = { threshold: -3, knee: 0, ratio: 20, attack: 0.001, release: 0.05 };
     for (const [k, v] of Object.entries(limitSettings)) limit[k].value = v;
-    audio.createMediaStreamSource(stream)
-      .connect(lowCut).connect(delay).connect(lows).connect(squeeze).connect(gain).connect(limit);
+    audio
+      .createMediaStreamSource(stream)
+      .connect(lowCut)
+      .connect(delay)
+      .connect(lows)
+      .connect(squeeze)
+      .connect(gain)
+      .connect(limit);
     // the static joins after the compressor, so it never pushes the voice down
     const hiss = audio.createBufferSource();
     hiss.buffer = pinkNoise(audio, 4);
@@ -55,7 +61,13 @@
   function pinkNoise(audio, seconds) {
     const buf = audio.createBuffer(1, audio.sampleRate * seconds, audio.sampleRate);
     const d = buf.getChannelData(0);
-    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    let b0 = 0;
+    let b1 = 0;
+    let b2 = 0;
+    let b3 = 0;
+    let b4 = 0;
+    let b5 = 0;
+    let b6 = 0;
     for (let i = 0; i < d.length; i++) {
       const w = Math.random() * 2 - 1;
       b0 = 0.99886 * b0 + w * 0.0555179;

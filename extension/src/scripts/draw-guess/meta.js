@@ -11,8 +11,10 @@
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
       {
-        key: 'hardMode', label: 'Hard mode: all 199 countries and territories',
-        type: 'checkbox', default: false,
+        key: 'hardMode',
+        label: 'Hard mode: all 199 countries and territories',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });

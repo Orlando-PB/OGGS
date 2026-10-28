@@ -7,13 +7,43 @@
 (() => {
   const ggs = globalThis.__ggs;
   const INPUT = [
-    'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup',
-    'click', 'dblclick', 'contextmenu', 'wheel', 'keydown', 'keyup',
+    'pointerdown',
+    'pointermove',
+    'pointerup',
+    'pointercancel',
+    'mousedown',
+    'mousemove',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'keydown',
+    'keyup',
   ];
   // Street View's own keys (as core/lock.js)
   const KEYS = [
-    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D',
-    '+', '-', '=', '_', 'z', 'x', 'Z', 'X', 'Backspace',
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'w',
+    'a',
+    's',
+    'd',
+    'W',
+    'A',
+    'S',
+    'D',
+    '+',
+    '-',
+    '=',
+    '_',
+    'z',
+    'x',
+    'Z',
+    'X',
+    'Backspace',
   ];
   // Input events kept during one freeze. Mouse moves past this are dropped.
   const MAX_HELD = 500;
@@ -44,7 +74,8 @@
   // for the GPU process.
   // Partial uploads (texSubImage2D, or a mip level) must keep their size, so they get a full-size
   // copy.
-  let chunk = 0, greyShare = 0;
+  let chunk = 0;
+  let greyShare = 0;
   const GREY = '#8e9094';
   const pot = n => 2 ** Math.max(0, Math.round(Math.log2(n)));
   const sharp = new WeakSet(); // textures drawn NEAREST
@@ -199,9 +230,12 @@
     .dialog button.main { background: #1a73e8; border-color: #1a73e8; color: #fff; }
   `;
   // Spinners: html, and an optional live(el, ep) for ones whose text changes.
-  const wheelSpokes = Array.from({ length: 12 }, (_, i) =>
-    `<span style="transform: rotate(${i * 30}deg) translateY(-15px); ` +
-    `animation-delay: ${(i * 0.075 - 0.9).toFixed(3)}s"></span>`).join('');
+  const wheelSpokes = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `<span style="transform: rotate(${i * 30}deg) translateY(-15px); ` +
+      `animation-delay: ${(i * 0.075 - 0.9).toFixed(3)}s"></span>`,
+  ).join('');
   const windowsDots = [0, 1, 2, 3, 4].map(i => `<i style="animation-delay: ${i * 0.24}s"></i>`).join('');
   const SPINNERS = {
     ring: { html: '<div class="lag shade ring"></div>' },
@@ -314,8 +348,8 @@
     function showPing(ep, ms = between(400, 1500)) {
       const r = panoRect();
       if (!r) return;
-      const html = '<div class="lag dark ping">' +
-        'PING <b>0</b> ms · LOSS <b>0</b>% · FPS <b class="ok">0</b></div>';
+      const html =
+        '<div class="lag dark ping">' + 'PING <b>0</b> ms · LOSS <b>0</b>% · FPS <b class="ok">0</b></div>';
       const el = ep.show(html, [r.left + r.width / 2, r.top + 70]);
       const [ping, loss, fps] = el.querySelectorAll('b');
       const tick = () => {
@@ -330,23 +364,31 @@
     // ---- the effects ----
     function spinners(ep, k) {
       const n = 1 + (roll(k.s * k.s * 0.6) ? 1 : 0) + (roll(k.hard * 0.4) ? 1 : 0);
-      const names = Object.keys(SPINNERS).sort(() => Math.random() - 0.5).slice(0, n);
+      const names = Object.keys(SPINNERS)
+        .sort(() => Math.random() - 0.5)
+        .slice(0, n);
       names.forEach(name => spinner(ep, name));
     }
     function loadingBar(ep) {
       const step = BARS[pick(Object.keys(BARS))];
       const r = panoRect();
-      let el, at;
+      let el;
+      let at;
       let label = null;
       if (roll(0.5) && (at = spot())) {
         const text = pick(LABELS);
         const speed = pick(['12 KB/s', '3 KB/s', '0 KB/s']);
-        el = ep.show(`<div class="lag card"><p>${text}</p><u><i class="bar"></i></u><span>0%</span>` +
-          `<small>${speed}</small></div>`, at);
+        el = ep.show(
+          `<div class="lag card"><p>${text}</p><u><i class="bar"></i></u><span>0%</span>` +
+            `<small>${speed}</small></div>`,
+          at,
+        );
         label = el.querySelector('p');
         label.dataset.text = text;
       } else if (r) {
-        el = ep.show('<div class="top"><i class="bar"></i></div>', [r.left, r.top], { width: `${r.width}px` });
+        el = ep.show('<div class="top"><i class="bar"></i></div>', [r.left, r.top], {
+          width: `${r.width}px`,
+        });
       }
       if (!el) return;
       const bar = el.querySelector('.bar');
@@ -384,13 +426,20 @@
     }
     function lowQuality(ep, k, ms) {
       const r = panoRect();
-      const badge = r && ep.show('<div class="lag dark badge">Quality: Auto <b>144p</b></div>',
-        [r.right - 120, r.top + 70]);
-      const steps = [['144p', lerp(4, 9, k.s * k.s)], ['240p', 4], ['480p', 1.5]];
-      steps.forEach(([q, px], i) => ep.after(ms * i / 3, () => {
-        ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
-        if (badge) badge.querySelector('b').textContent = q;
-      }));
+      const badge =
+        r &&
+        ep.show('<div class="lag dark badge">Quality: Auto <b>144p</b></div>', [r.right - 120, r.top + 70]);
+      const steps = [
+        ['144p', lerp(4, 9, k.s * k.s)],
+        ['240p', 4],
+        ['480p', 1.5],
+      ];
+      steps.forEach(([q, px], i) =>
+        ep.after((ms * i) / 3, () => {
+          ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
+          if (badge) badge.querySelector('b').textContent = q;
+        }),
+      );
       ep.finally(() => ggs.view.effect('lag-quality', null));
     }
     // Shared with the Street View input queue below.
@@ -423,8 +472,12 @@
       ep.every(between(300, 550), () => {
         const old = past[0];
         if (!old || roll(0.3)) return;
-        try { if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch }); } catch {}
-        try { if (old.centre) map.setCenter(old.centre); } catch {}
+        try {
+          if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch });
+        } catch {}
+        try {
+          if (old.centre) map.setCenter(old.centre);
+        } catch {}
         past.length = 0;
       });
       showPing(ep);
@@ -434,10 +487,12 @@
       const r = panoRect();
       if (!r) return;
       ep.show('<div class="fog"></div>', [r.left, r.top], { width: `${r.width}px`, height: `${r.height}px` });
-      const box = ep.show(`<div class="lag dialog"><h1>Page Unresponsive</h1>
+      const box = ep.show(
+        `<div class="lag dialog"><h1>Page Unresponsive</h1>
         <p>You can wait for it to become responsive or exit the page.</p><p>www.geoguessr.com</p>
         <div><button>Exit page</button><button class="main">Wait</button></div></div>`,
-      [r.left + r.width / 2, r.top + r.height * 0.42]);
+        [r.left + r.width / 2, r.top + r.height * 0.42],
+      );
       for (const b of box.querySelectorAll('button')) {
         b.addEventListener('click', e => {
           e.stopPropagation();
@@ -460,9 +515,10 @@
       { id: 'hang', from: 7, weight: 1, ms: [4000, 7000], run: hang },
     ];
     function launch(k) {
-      const list = EFFECTS
-        .filter(e => level >= e.from && !busy(e.id))
-        .map(e => [e, e.weight * (e.grows ? 1 + 3 * k.hard : 1)]);
+      const list = EFFECTS.filter(e => level >= e.from && !busy(e.id)).map(e => [
+        e,
+        e.weight * (e.grows ? 1 + 3 * k.hard : 1),
+      ]);
       let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
       const fx = list.find(([, w]) => (r -= w) < 0)?.[0];
       if (!fx) return;
@@ -480,9 +536,11 @@
     function next(first, now) {
       const k = knobs(level);
       clearTimeout(timer);
-      const wait = now ? 100
-        : first ? between(1000, 3000) + (1 - k.s) * between(0, 8000)
-        : between(...k.gap) * 1000;
+      const wait = now
+        ? 100
+        : first
+          ? between(1000, 3000) + (1 - k.s) * between(0, 8000)
+          : between(...k.gap) * 1000;
       timer = setTimeout(() => {
         if (inRound()) {
           launch(k);
@@ -510,8 +568,14 @@
     function wanted(e) {
       if (!e.isTrusted || !inRound()) return false;
       if (e.type.startsWith('key')) {
-        return KEYS.includes(e.key) && !ggs.isTyping(e) && !e.ctrlKey && !e.metaKey && !e.altKey
-          && !ggs.maps.guessMapElement()?.contains(e.target);
+        return (
+          KEYS.includes(e.key) &&
+          !ggs.isTyping(e) &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !ggs.maps.guessMapElement()?.contains(e.target)
+        );
       }
       const t = e.target;
       if (pressed) return true;
@@ -585,93 +649,102 @@
     // ---- the guess map: slow guesses, late or misplaced pins (core/aid.js) ----
     let sending = false;
     let pinTimer = 0;
-    const aid = ggs.aid('lag', {
-      usesLocation: false,
-      beforeGuess() {
-        const k = knobs(level);
-        if (sending === 'pass') return null;
-        if (sending) return false;
-        if (!k.hard || !roll(0.15 + 0.8 * k.hard)) return null;
-        const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
-        const ep = episode('guess', ms + 50);
-        const btn = ggs.maps.guessButton()?.getBoundingClientRect();
-        sending = true;
-        ep.finally(() => {
-          sending = false;
-        });
-        const el = ep.show('<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
-          btn ? [btn.left + btn.width / 2, btn.top - 26] : spot());
-        if (k.level >= 8) {
-          const say = text => {
-            el.querySelector('span').textContent = text;
-          };
-          ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
-          ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
-        }
-        ep.after(ms, () => {
-          if (!ggs.maps.guessMapElement()) return;
-          sending = 'pass';
-          try {
-            if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
-          } finally {
-            sending = true;
-          }
-        });
-        return false;
-      },
-      // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
-      // you clicked or not (from level 3, more often higher up).
-      attach(ctx) {
-        let prev = null;
-        let last = null;
-        const ev = ctx.gm.event;
-        const a = ev.addListener(ctx.map, 'mousemove', e => {
-          prev = last;
-          last = e.latLng;
-        });
-        const b = ev.addListener(ctx.map, 'mouseout', () => {
+    const aid = ggs
+      .aid('lag', {
+        usesLocation: false,
+        beforeGuess() {
           const k = knobs(level);
-          const bounds = ctx.map.getBounds();
-          if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
-          const from = prev ?? ctx.map.getCenter();
-          const span = bounds.toSpan();
-          const dy = last.lat() - from.lat();
-          const dx = last.lng() - from.lng();
-          const len = Math.hypot(dx, dy) || 1;
-          const far = between(0.15, 0.5);
-          const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
-          const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
-          clearTimeout(pinTimer);
-          pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
-        });
-        return () => {
-          a.remove();
-          b.remove();
-        };
-      },
-      click(latLng, ctx) {
-        const k = knobs(level);
-        clearTimeout(pinTimer);
-        if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
-        let lat = latLng.lat(), lng = latLng.lng();
-        if (roll(0.5)) {
-          // late: the pin goes, then shows up a moment later
-          setTimeout(() => {
-            try { ggs.maps.clearGuess(); } catch {}
+          if (sending === 'pass') return null;
+          if (sending) return false;
+          if (!k.hard || !roll(0.15 + 0.8 * k.hard)) return null;
+          const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
+          const ep = episode('guess', ms + 50);
+          const btn = ggs.maps.guessButton()?.getBoundingClientRect();
+          sending = true;
+          ep.finally(() => {
+            sending = false;
           });
-          pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
-        } else {
-          // off: it lands, then slides a few dozen pixels away
-          const px = between(15, 40) * (1 + k.hard);
-          const mPerPx = 156543 * Math.cos(lat * Math.PI / 180) / 2 ** (ctx.map?.getZoom() ?? 2);
-          ({ lat, lng } = ggs.aid.destination({ lat, lng }, px * mPerPx / 1000, between(0, 2 * Math.PI)));
-          pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
-        }
-      },
-    }).start(cfg);
+          const el = ep.show(
+            '<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
+            btn ? [btn.left + btn.width / 2, btn.top - 26] : spot(),
+          );
+          if (k.level >= 8) {
+            const say = text => {
+              el.querySelector('span').textContent = text;
+            };
+            ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
+            ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
+          }
+          ep.after(ms, () => {
+            if (!ggs.maps.guessMapElement()) return;
+            sending = 'pass';
+            try {
+              if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
+            } finally {
+              sending = true;
+            }
+          });
+          return false;
+        },
+        // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
+        // you clicked or not (from level 3, more often higher up).
+        attach(ctx) {
+          let prev = null;
+          let last = null;
+          const ev = ctx.gm.event;
+          const a = ev.addListener(ctx.map, 'mousemove', e => {
+            prev = last;
+            last = e.latLng;
+          });
+          const b = ev.addListener(ctx.map, 'mouseout', () => {
+            const k = knobs(level);
+            const bounds = ctx.map.getBounds();
+            if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
+            const from = prev ?? ctx.map.getCenter();
+            const span = bounds.toSpan();
+            const dy = last.lat() - from.lat();
+            const dx = last.lng() - from.lng();
+            const len = Math.hypot(dx, dy) || 1;
+            const far = between(0.15, 0.5);
+            const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
+            const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
+            clearTimeout(pinTimer);
+            pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
+          });
+          return () => {
+            a.remove();
+            b.remove();
+          };
+        },
+        click(latLng, ctx) {
+          const k = knobs(level);
+          clearTimeout(pinTimer);
+          if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
+          let lat = latLng.lat();
+          let lng = latLng.lng();
+          if (roll(0.5)) {
+            // late: the pin goes, then shows up a moment later
+            setTimeout(() => {
+              try {
+                ggs.maps.clearGuess();
+              } catch {}
+            });
+            pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
+          } else {
+            // off: it lands, then slides a few dozen pixels away
+            const px = between(15, 40) * (1 + k.hard);
+            const mPerPx = (156543 * Math.cos((lat * Math.PI) / 180)) / 2 ** (ctx.map?.getZoom() ?? 2);
+            ({ lat, lng } = ggs.aid.destination({ lat, lng }, (px * mPerPx) / 1000, between(0, 2 * Math.PI)));
+            pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
+          }
+        },
+      })
+      .start(cfg);
     const place = (lat, lng) => {
       if (!ggs.maps.guessMapElement()) return;
-      try { ggs.maps.placeGuess(lat, lng, { pan: false }); } catch {}
+      try {
+        ggs.maps.placeGuess(lat, lng, { pan: false });
+      } catch {}
     };
 
     return {

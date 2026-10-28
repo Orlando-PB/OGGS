@@ -19,13 +19,15 @@
     colour: '#2b8a3e',
     async shapes({ loc, rand, cfg, status }) {
       // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to 5 km
-      const area = cfg.area ?? 8, continentOnly = area === 0;
+      const area = cfg.area ?? 8;
+      const continentOnly = area === 0;
       if (area >= 6) {
         const { center, km } = ggs.aid.circle(loc, rand(), 12 - area);
         // core/aid.js adds a ring round it when it's tiny on screen
         return [{ type: 'Circle', center, radius: km * 1000 }];
       }
-      const geo = await ggs.aid.loadGeo(), code = ggs.aid.countryAt(geo, loc);
+      const geo = await ggs.aid.loadGeo();
+      const code = ggs.aid.countryAt(geo, loc);
       if (!code) {
         status('Not in any country this round');
         return [];

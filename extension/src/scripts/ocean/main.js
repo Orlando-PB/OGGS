@@ -18,15 +18,18 @@
     },
     click(latLng, ctx) {
       const p = { lat: latLng.lat(), lng: latLng.lng() };
-      ggs.aid.loadGeo().then(geo => {
-        ctx.sea = !ggs.aid.countryAt(geo, p, { near: false });
-        if (ctx.sea) return ctx.note('');
-        // wait until GeoGuessr has placed the pin
-        setTimeout(() => ggs.maps.clearGuess());
-        ctx.note('Ocean only!');
-        clearTimeout(ctx.noteTimer);
-        ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
-      }, () => ctx.status("Couldn't load the country outlines"));
+      ggs.aid.loadGeo().then(
+        geo => {
+          ctx.sea = !ggs.aid.countryAt(geo, p, { near: false });
+          if (ctx.sea) return ctx.note('');
+          // wait until GeoGuessr has placed the pin
+          setTimeout(() => ggs.maps.clearGuess());
+          ctx.note('Ocean only!');
+          clearTimeout(ctx.noteTimer);
+          ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
+        },
+        () => ctx.status("Couldn't load the country outlines"),
+      );
     },
     beforeGuess(ctx) {
       if (ctx.sea) return null;

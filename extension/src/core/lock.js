@@ -28,7 +28,9 @@
       Object.assign(st.wanted, o);
       const forced = {};
       for (const kind of Object.keys(OPTS)) if (on(kind)) Object.assign(forced, OPTS[kind]);
-      const kept = Object.keys(o).filter(k => k in forced).map(k => [k, forced[k]]);
+      const kept = Object.keys(o)
+        .filter(k => k in forced)
+        .map(k => [k, forced[k]]);
       return setOptions({ ...o, ...Object.fromEntries(kept) });
     };
     apply(p);
@@ -116,16 +118,20 @@
   // ---- input, swallowed at the window in the capture phase ----
   // Registered at document_start, so these run before GeoGuessr's and the Maps API's handlers.
   // Our own sheets over the panorama (core/view.js, scratch's foil) keep their input.
-  const inPano = t => !t?.closest?.('[data-ggs-view]')
-    && [...panos.values()].some(st => st.el?.contains?.(t));
+  const inPano = t =>
+    !t?.closest?.('[data-ggs-view]') && [...panos.values()].some(st => st.el?.contains?.(t));
   const stop = e => {
     e.stopImmediatePropagation();
     e.preventDefault();
   };
-  window.addEventListener('keydown', e => {
-    if (ggs.isTyping(e)) return;
-    for (const kind of Object.keys(KEYS)) if (on(kind) && KEYS[kind].includes(e.key)) return stop(e);
-  }, true);
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (ggs.isTyping(e)) return;
+      for (const kind of Object.keys(KEYS)) if (on(kind) && KEYS[kind].includes(e.key)) return stop(e);
+    },
+    true,
+  );
   // Zoom: the wheel and pinches over the panorama.
   const stopZoom = e => {
     if (on('zoom') && inPano(e.target)) stop(e);
@@ -137,19 +143,31 @@
   // (and clicking to move) work when moving is allowed.
   let dragging = false;
   for (const t of ['pointerdown', 'mousedown', 'touchstart']) {
-    window.addEventListener(t, e => {
-      if (inPano(e.target)) dragging = true;
-    }, true);
+    window.addEventListener(
+      t,
+      e => {
+        if (inPano(e.target)) dragging = true;
+      },
+      true,
+    );
   }
   for (const t of ['pointerup', 'mouseup', 'touchend', 'touchcancel', 'pointercancel']) {
-    window.addEventListener(t, () => {
-      dragging = false;
-    }, true);
+    window.addEventListener(
+      t,
+      () => {
+        dragging = false;
+      },
+      true,
+    );
   }
   for (const t of ['pointermove', 'mousemove', 'touchmove']) {
-    window.addEventListener(t, e => {
-      if (dragging && (on('pan') || (t === 'touchmove' && on('zoom') && e.touches?.length > 1))) stop(e);
-    }, { capture: true, passive: false });
+    window.addEventListener(
+      t,
+      e => {
+        if (dragging && (on('pan') || (t === 'touchmove' && on('zoom') && e.touches?.length > 1))) stop(e);
+      },
+      { capture: true, passive: false },
+    );
   }
 
   const set = kind => (owner, want) => {

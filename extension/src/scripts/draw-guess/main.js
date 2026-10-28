@@ -4,7 +4,8 @@
 // button is pressed.
 (() => {
   const ggs = globalThis.__ggs;
-  const MAX_H = 640, AUTO_GUESS_MS = 6000;
+  const MAX_H = 640;
+  const AUTO_GUESS_MS = 6000;
 
   function start(cfg) {
     let lastToken;
@@ -16,7 +17,8 @@
       app: 'src/scripts/draw-guess/app/index.html',
       size: (roomW, roomH, boardH) => {
         // the board is 52px taller than it is wide
-        const h = Math.min(MAX_H, roomH), w = Math.min(h - 52, roomW);
+        const h = Math.min(MAX_H, roomH);
+        const w = Math.min(h - 52, roomW);
         return { w, h: boardH ? Math.min(boardH, roomH) : h };
       },
       guessDelay: AUTO_GUESS_MS,
@@ -30,10 +32,13 @@
         if (token === lastToken) return;
         // new game: pick the country pool from the map name
         lastToken = token;
-        ggs.game.mapInfo()
-          .then(m => (m?.name
-            ? board.post({ ggs: 'map', name: m.name })
-            : ggs.debug('draw-guess: no map name, using world coverage')))
+        ggs.game
+          .mapInfo()
+          .then(m =>
+            m?.name
+              ? board.post({ ggs: 'map', name: m.name })
+              : ggs.debug('draw-guess: no map name, using world coverage'),
+          )
           .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
       },
     });

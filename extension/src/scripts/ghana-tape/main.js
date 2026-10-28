@@ -24,8 +24,11 @@
 
   function nearEdge([x, y], poly) {
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
-      const dx = xj - xi, dy = yj - yi, len2 = dx * dx + dy * dy || 1;
+      const [xi, yi] = poly[i];
+      const [xj, yj] = poly[j];
+      const dx = xj - xi;
+      const dy = yj - yi;
+      const len2 = dx * dx + dy * dy || 1;
       const t = Math.max(0, Math.min(1, ((x - xi) * dx + (y - yi) * dy) / len2));
       if (Math.hypot(x - (xi + t * dx), y - (yi + t * dy)) < NEAR_DEG) return true;
     }
@@ -34,8 +37,9 @@
   function insidePolygon([x, y], poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      const [xi, yi] = poly[i];
+      const [xj, yj] = poly[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
     }
     return inside;
   }
@@ -45,17 +49,27 @@
   const tileCache = new Map();
   function tiles(id) {
     if (!tileCache.has(id)) {
-      tileCache.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-        .then(({ data }) => ({ width: data.tiles.worldSize.width, centerHeading: data.tiles.centerHeading }))
-        .catch(() => null));
+      tileCache.set(
+        id,
+        new window.google.maps.StreetViewService()
+          .getPanorama({ pano: id })
+          .then(({ data }) => ({
+            width: data.tiles.worldSize.width,
+            centerHeading: data.tiles.centerHeading,
+          }))
+          .catch(() => null),
+      );
     }
     return tileCache.get(id);
   }
 
   const rad = d => (d * Math.PI) / 180;
   function toCamera([x, y, z], pov) {
-    const a = rad(pov.heading), t = rad(pov.pitch);
-    const cx = x * Math.cos(a) - y * Math.sin(a), cy = z, cz = x * Math.sin(a) + y * Math.cos(a);
+    const a = rad(pov.heading);
+    const t = rad(pov.pitch);
+    const cx = x * Math.cos(a) - y * Math.sin(a);
+    const cy = z;
+    const cz = x * Math.sin(a) + y * Math.cos(a);
     return [cx, cy * Math.cos(t) - cz * Math.sin(t), cy * Math.sin(t) + cz * Math.cos(t)];
   }
   // Projects a polygon onto the screen, clipping the part behind the camera.
@@ -64,8 +78,10 @@
     const cam = pts.map(p => toCamera(p, pov));
     const clipped = [];
     for (let i = 0; i < cam.length; i++) {
-      const p = cam[i], q = cam[(i + 1) % cam.length];
-      const pin = p[2] > NEAR, qin = q[2] > NEAR;
+      const p = cam[i];
+      const q = cam[(i + 1) % cam.length];
+      const pin = p[2] > NEAR;
+      const qin = q[2] > NEAR;
       if (pin) clipped.push(p);
       if (pin !== qin) {
         const k = (NEAR - p[2]) / (q[2] - p[2]);
@@ -85,7 +101,9 @@
       if (!st) return;
       const { canvas } = st;
       const div = panos.get(pano);
-      const w = div.clientWidth, h = div.clientHeight, dpr = devicePixelRatio || 1;
+      const w = div.clientWidth;
+      const h = div.clientHeight;
+      const dpr = devicePixelRatio || 1;
       if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
@@ -100,7 +118,13 @@
       const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch };
       const fov = Math.min(127, 180 / 2 ** (pano.getZoom() ?? 1));
       const P = pts => project(pts, rel, fov, w, h);
-      const rect = (x0, x1, y0, y1, z) => P([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]);
+      const rect = (x0, x1, y0, y1, z) =>
+        P([
+          [x0, y0, z],
+          [x1, y0, z],
+          [x1, y1, z],
+          [x0, y1, z],
+        ]);
       const path = pts => {
         ctx.beginPath();
         pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
@@ -115,10 +139,13 @@
         ctx.fill();
         ctx.stroke();
       };
-      const cap = (cx, cy, r, side, z) => P(Array.from({ length: 9 }, (_, i) => {
-        const a = ((i / 8) - 0.5) * Math.PI;
-        return [cx + side * r * Math.cos(a), cy + r * Math.sin(a), z];
-      }));
+      const cap = (cx, cy, r, side, z) =>
+        P(
+          Array.from({ length: 9 }, (_, i) => {
+            const a = (i / 8 - 0.5) * Math.PI;
+            return [cx + side * r * Math.cos(a), cy + r * Math.sin(a), z];
+          }),
+        );
       // strips across a bar's width, lit from above
       const shade = (x0, x1, y, hw, z, colors) => {
         const n = colors.length;
@@ -129,7 +156,11 @@
       // fades the inner end of a bar into the blurred car
       const fade = (x0, x1, y, hw, z) => {
         const r = rect(x0, x1, y - hw, y + hw, z);
-        const ends = P([[x0, y, z], [x1, y, z], [x1, y + 0.001, z]]);
+        const ends = P([
+          [x0, y, z],
+          [x1, y, z],
+          [x1, y + 0.001, z],
+        ]);
         if (!r || !ends || ends.length < 2) return;
         const g = ctx.createLinearGradient(ends[0][0], ends[0][1], ends[1][0], ends[1][1]);
         g.addColorStop(0, 'rgba(0,0,0,1)');
@@ -143,7 +174,9 @@
       const { bars, tape } = CAR;
       bars.ys.forEach((y, i) => {
         for (const side of [-1, 1]) {
-          const x0 = side * bars.inner, x1 = side * bars.outer, hw = bars.w;
+          const x0 = side * bars.inner;
+          const x1 = side * bars.outer;
+          const hw = bars.w;
           if (!rect(x0, x1, y - hw, y + hw, bars.z)) continue;
 
           ctx.save();
@@ -160,7 +193,9 @@
           fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
 
           if (i === tape.bar && side === tape.side) {
-            const tx0 = side * (bars.outer - tape.len), tx1 = x1 + side * 0.015, tw = tape.w;
+            const tx0 = side * (bars.outer - tape.len);
+            const tx1 = x1 + side * 0.015;
+            const tw = tape.w;
             const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
             shade(tx0, tx1, y, tw, bars.z + 0.002, black);
             fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
@@ -179,7 +214,8 @@
       const st = attached.get(pano);
       if (!st) return;
       st.info = null;
-      const pos = pano.getPosition(), id = pano.getPano();
+      const pos = pano.getPosition();
+      const id = pano.getPano();
       if (pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]))) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;

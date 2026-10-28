@@ -9,8 +9,9 @@
     colour: ctx => ggs.aid.hints[ctx.hint]?.colour,
     name: ctx => ggs.registry.find(m => m.id === ctx.hint)?.name,
     shapes(ctx) {
-      const r = ctx.pick(), ids = Object.keys(ggs.aid.hints).sort();
-      const hint = ggs.aid.hints[ctx.hint = ids[Math.floor(r() * ids.length)]];
+      const r = ctx.pick();
+      const ids = Object.keys(ggs.aid.hints).sort();
+      const hint = ggs.aid.hints[(ctx.hint = ids[Math.floor(r() * ids.length)])];
       return hint.shapes({ loc: ctx.loc, rand: ctx.rand, status: ctx.status, cfg: hint.random(r) });
     },
   });

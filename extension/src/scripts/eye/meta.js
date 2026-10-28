@@ -8,8 +8,15 @@
     mic: true, // can't be switched on while the microphone is blocked
     options: [
       // how quiet a sound still opens the eye a crack: 5 is normal talking
-      { key: 'sensitivity', label: '', type: 'slider', min: 1, max: 10, default: 5,
-        marks: ['Louder', 'Quieter'] },
+      {
+        key: 'sensitivity',
+        label: '',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        default: 5,
+        marks: ['Louder', 'Quieter'],
+      },
     ],
   });
 })();

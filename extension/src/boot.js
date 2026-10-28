@@ -5,12 +5,20 @@
 (() => {
   const ggs = globalThis.__ggs;
   const running = new Map(); // id -> { stop, update? }
-  let settings = null, blocked = false, path = null, check = 0;
+  let settings = null;
+  let blocked = false;
+  let path = null;
+  let check = 0;
 
   function apply() {
     if (!settings) return;
-    const chaos = !blocked && ggs.chaos
-      && ggs.config(ggs.registry.find(m => m.id === 'chaos'), settings).enabled;
+    const chaos =
+      !blocked &&
+      ggs.chaos &&
+      ggs.config(
+        ggs.registry.find(m => m.id === 'chaos'),
+        settings,
+      ).enabled;
     const live = chaos ? ggs.chaos.mix(settings) : settings;
     const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
@@ -21,8 +29,9 @@
         continue;
       }
       const cfg = ggs.config(meta, live);
-      const clash = [...on.values()]
-        .some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+      const clash = [...on.values()].some(
+        m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id),
+      );
       const wanted = cfg.enabled && !blocked && !clash;
       if (wanted) on.set(meta.id, meta);
       const inst = running.get(meta.id);
@@ -74,7 +83,7 @@
   setInterval(() => {
     onPath();
     const now = ggs.game.context()?.mode ?? '';
-    if (now !== mode) ggs.status('_mode', mode = now);
+    if (now !== mode) ggs.status('_mode', (mode = now));
   }, 500);
 
   // An empty heartbeat for the "playing now" count on the OGGS stats card (server/card.php):
@@ -82,8 +91,11 @@
   // competitive.
   const ping = () => {
     if (document.visibilityState !== 'visible' || blocked) return;
-    fetch('https://oggs.orlandopb.com/ping.php', { mode: 'no-cors', cache: 'no-store', credentials: 'omit' })
-      .catch(() => {});
+    fetch('https://oggs.orlandopb.com/ping.php', {
+      mode: 'no-cors',
+      cache: 'no-store',
+      credentials: 'omit',
+    }).catch(() => {});
   };
   setTimeout(ping, 5000);
   setInterval(ping, 2 * 60 * 1000);

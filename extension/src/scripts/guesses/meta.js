@@ -9,8 +9,15 @@
     excludes: ['draw-guess', 'flag-guess', 'wobble'],
     options: [
       // index into COUNTS in main.js
-      { key: 'pins', label: 'Pins', type: 'slider', min: 0, max: 7, default: 1,
-        steps: ['2', '3', '4', '5', '6', '8', '10', 'unlimited'] },
+      {
+        key: 'pins',
+        label: 'Pins',
+        type: 'slider',
+        min: 0,
+        max: 7,
+        default: 1,
+        steps: ['2', '3', '4', '5', '6', '8', '10', 'unlimited'],
+      },
     ],
   });
 })();

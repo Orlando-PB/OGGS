@@ -1,6 +1,7 @@
 // Longitude band: a strip from pole to pole between two longitudes (core/aid.js).
 (() => {
-  const ggs = globalThis.__ggs, { aid } = ggs;
+  const ggs = globalThis.__ggs;
+  const { aid } = ggs;
 
   const hint = {
     // its own colour, so it's told apart from other hints (Terrible hints uses it too)

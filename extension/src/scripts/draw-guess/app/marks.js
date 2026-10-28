@@ -5,8 +5,11 @@
   // The pin's tip is at 0,0. Same shape as app.js's PIN_D, which comes from country-matcher.
   const PIN = 'M0,0 C-5,-12 -16,-19 -16,-30 A16,16 0 1 1 16,-30 C16,-19 5,-12 0,0Z';
   const FLAG = 'M-3.5,7 V-7.5 M-3.5,-7.5 L7,-4 L-3.5,-0.5 Z';
-  const INK = '#1f2a44', PIN_RED = '#d9480f', GREEN = '#2b8a3e';
-  const pinPath = new Path2D(PIN), flagPath = new Path2D(FLAG);
+  const INK = '#1f2a44';
+  const PIN_RED = '#d9480f';
+  const GREEN = '#2b8a3e';
+  const pinPath = new Path2D(PIN);
+  const flagPath = new Path2D(FLAG);
 
   // SVG for the answer: the line and a flag in a green disc, placed with setAnswer().
   const answerSvg = `

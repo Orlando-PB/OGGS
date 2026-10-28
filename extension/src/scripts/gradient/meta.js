@@ -7,8 +7,15 @@
     defaultEnabled: false,
     options: [
       // 1 = barely blurred, 10 = a few colours per view
-      { key: 'strength', label: 'How much gradient', type: 'slider', min: 1, max: 10, default: 8,
-        marks: ['Less', 'More'] },
+      {
+        key: 'strength',
+        label: 'How much gradient',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        default: 8,
+        marks: ['Less', 'More'],
+      },
     ],
   });
 })();

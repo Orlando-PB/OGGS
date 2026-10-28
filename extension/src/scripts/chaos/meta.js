@@ -23,8 +23,15 @@
     moreLabel: 'Effects', // the hidden options' fold
     options: [
       // index into EVERY in main.js
-      { key: 'every', label: 'New effect every', type: 'slider', min: 0, max: 7, default: 3,
-        steps: ['10 s', '15 s', '20 s', '30 s', '45 s', '1 min', '90 s', '2 min'] },
+      {
+        key: 'every',
+        label: 'New effect every',
+        type: 'slider',
+        min: 0,
+        max: 7,
+        default: 3,
+        steps: ['10 s', '15 s', '20 s', '30 s', '45 s', '1 min', '90 s', '2 min'],
+      },
       // a warning, shown only while the microphone isn't allowed; clicking it asks again
       { key: 'micNote', label: 'Mic effects disabled · click to allow the microphone', type: 'mic' },
       ...effects.map(e => ({ ...e, type: 'checkbox', default: !OFF.includes(e.key.slice(3)), hidden: true })),

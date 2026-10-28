@@ -7,11 +7,14 @@
 //      { type: 'detect', id, bitmap, size, thresh, boxThresh }
 // out: { type: 'ready', backend } | { type: 'error', message } | { type: 'boxes', id, boxes, ms }
 let session = null;
-const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
+const MEAN = [0.485, 0.456, 0.406];
+const STD = [0.229, 0.224, 0.225];
 
 // One message at a time: the WebGPU session can't run concurrently.
 let chain = Promise.resolve();
-self.onmessage = e => { chain = chain.then(() => handle(e.data)); };
+self.onmessage = e => {
+  chain = chain.then(() => handle(e.data));
+};
 async function handle(m) {
   try {
     if (m.type === 'init') {
@@ -33,17 +36,20 @@ async function handle(m) {
       postMessage({ type: 'boxes', id: m.id, boxes, ms: performance.now() - t0 });
     }
   } catch (err) {
-    postMessage({ type: 'error', id: m.id, message: String(err && err.stack || err) });
+    postMessage({ type: 'error', id: m.id, message: String((err && err.stack) || err) });
   }
 }
 
 async function detect(bmp, size, thresh, boxThresh) {
   const W = bmp.width;
-  const c = new OffscreenCanvas(size, size), g = c.getContext('2d', { willReadFrequently: true });
+  const c = new OffscreenCanvas(size, size);
+  const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(bmp, 0, 0, size, size);
-  const d = g.getImageData(0, 0, size, size).data, n = size * size;
+  const d = g.getImageData(0, 0, size, size).data;
+  const n = size * size;
   const f = new Float32Array(3 * n);
-  for (let i = 0; i < n; i++) { // BGR, NCHW, ImageNet normalisation
+  for (let i = 0; i < n; i++) {
+    // BGR, NCHW, ImageNet normalisation
     f[i] = (d[i * 4 + 2] / 255 - MEAN[2]) / STD[2];
     f[n + i] = (d[i * 4 + 1] / 255 - MEAN[1]) / STD[1];
     f[2 * n + i] = (d[i * 4] / 255 - MEAN[0]) / STD[0];
@@ -53,7 +59,12 @@ async function detect(bmp, size, thresh, boxThresh) {
   const prob = out[session.outputNames[0]].data;
   const s = W / size; // tiles are square
   return boxes(prob, size, size, thresh, boxThresh).map(b => ({
-    cx: b.cx * s, cy: b.cy * s, w: b.w * s, h: b.h * s, angle: b.angle, score: b.score,
+    cx: b.cx * s,
+    cy: b.cy * s,
+    w: b.w * s,
+    h: b.h * s,
+    angle: b.angle,
+    score: b.score,
   }));
 }
 
@@ -64,52 +75,98 @@ async function detect(bmp, size, thresh, boxThresh) {
 function boxes(prob, w, h, thresh, boxThresh, unclip = 1.6, minSize = 3) {
   const bin = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) bin[i] = prob[i] > thresh ? 1 : 0;
-  const seen = new Uint8Array(w * h), out = [], stack = [], px = [];
+  const seen = new Uint8Array(w * h);
+  const out = [];
+  const stack = [];
+  const px = [];
   for (let i = 0; i < w * h; i++) {
     if (!bin[i] || seen[i]) continue;
-    let x0 = w, y0 = h, x1 = 0, y1 = 0, n = 0, sum = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    let x0 = w;
+    let y0 = h;
+    let x1 = 0;
+    let y1 = 0;
+    let n = 0;
+    let sum = 0;
+    let sx = 0;
+    let sy = 0;
+    let sxx = 0;
+    let syy = 0;
+    let sxy = 0;
     px.length = 0;
-    stack.push(i); seen[i] = 1;
+    stack.push(i);
+    seen[i] = 1;
     while (stack.length) {
-      const j = stack.pop(), x = j % w, y = (j / w) | 0;
+      const j = stack.pop();
+      const x = j % w;
+      const y = (j / w) | 0;
       n++;
       sum += prob[j];
       px.push(j);
-      sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+      sx += x;
+      sy += y;
+      sxx += x * x;
+      syy += y * y;
+      sxy += x * y;
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;
       if (y > y1) y1 = y;
-      if (x > 0 && bin[j - 1] && !seen[j - 1]) { seen[j - 1] = 1; stack.push(j - 1); }
-      if (x < w - 1 && bin[j + 1] && !seen[j + 1]) { seen[j + 1] = 1; stack.push(j + 1); }
-      if (y > 0 && bin[j - w] && !seen[j - w]) { seen[j - w] = 1; stack.push(j - w); }
-      if (y < h - 1 && bin[j + w] && !seen[j + w]) { seen[j + w] = 1; stack.push(j + w); }
+      if (x > 0 && bin[j - 1] && !seen[j - 1]) {
+        seen[j - 1] = 1;
+        stack.push(j - 1);
+      }
+      if (x < w - 1 && bin[j + 1] && !seen[j + 1]) {
+        seen[j + 1] = 1;
+        stack.push(j + 1);
+      }
+      if (y > 0 && bin[j - w] && !seen[j - w]) {
+        seen[j - w] = 1;
+        stack.push(j - w);
+      }
+      if (y < h - 1 && bin[j + w] && !seen[j + w]) {
+        seen[j + w] = 1;
+        stack.push(j + w);
+      }
     }
-    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, score = sum / n;
+    const bw = x1 - x0 + 1;
+    const bh = y1 - y0 + 1;
+    const score = sum / n;
     if (Math.min(bw, bh) < minSize || score < boxThresh) continue;
     // principal axis
-    const mx = sx / n, my = sy / n;
-    const cxx = sxx / n - mx * mx, cyy = syy / n - my * my, cxy = sxy / n - mx * my;
+    const mx = sx / n;
+    const my = sy / n;
+    const cxx = sxx / n - mx * mx;
+    const cyy = syy / n - my * my;
+    const cxy = sxy / n - mx * my;
     let angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
-    if (angle > Math.PI / 4) angle -= Math.PI / 2;          // keep the long side "horizontal"
+    if (angle > Math.PI / 4)
+      angle -= Math.PI / 2; // keep the long side "horizontal"
     else if (angle < -Math.PI / 4) angle += Math.PI / 2;
     // extents along that axis
-    const ca = Math.cos(angle), sa = Math.sin(angle);
-    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
     for (const j of px) {
-      const x = j % w, y = (j / w) | 0;
-      const u = x * ca + y * sa, v = -x * sa + y * ca;
+      const x = j % w;
+      const y = (j / w) | 0;
+      const u = x * ca + y * sa;
+      const v = -x * sa + y * ca;
       if (u < u0) u0 = u;
       if (u > u1) u1 = u;
       if (v < v0) v0 = v;
       if (v > v1) v1 = v;
     }
-    let rw = u1 - u0 + 1, rh = v1 - v0 + 1;
+    let rw = u1 - u0 + 1;
+    let rh = v1 - v0 + 1;
     // Shape check: a text line is thin (at most about a quarter of the tile), long (a
     // two-letter word is about square) and fairly solid. Shirts, railings and clouds fail one
     // of these. A vertical line is turned a quarter so its length lies along the box's width,
     // and marked. A blob touching the tile's edge may be a word cut there, so it can be squarer.
-    const um = (u0 + u1) / 2, vm = (v0 + v1) / 2;
+    const um = (u0 + u1) / 2;
+    const vm = (v0 + v1) / 2;
     const atEdge = x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2;
     let vertical = false;
     if (rh > rw * 1.4) {
@@ -122,8 +179,13 @@ function boxes(prob, w, h, thresh, boxThresh, unclip = 1.6, minSize = 3) {
     if (n / (rw * rh) < 0.3) continue;
     const dist = (rw * rh * unclip) / (2 * (rw + rh));
     out.push({
-      cx: um * ca - vm * sa, cy: um * sa + vm * ca, w: rw + 2 * dist, h: rh + 2 * dist,
-      angle, score, vertical,
+      cx: um * ca - vm * sa,
+      cy: um * sa + vm * ca,
+      w: rw + 2 * dist,
+      h: rh + 2 * dist,
+      angle,
+      score,
+      vertical,
     });
   }
   return out;

@@ -5,9 +5,14 @@
   const ggs = globalThis.__ggs;
   const FLIPS = { mirror: [true, false], upside: [false, true] };
   function apply(cfg) {
-    const [x, y] = cfg ? FLIPS[cfg.flip] ?? FLIPS.mirror : [];
+    const [x, y] = cfg ? (FLIPS[cfg.flip] ?? FLIPS.mirror) : [];
     ggs.view.effect('flip', cfg && { transform: `scale(${x ? -1 : 1}, ${y ? -1 : 1})` });
     ggs.view.mirror('flip', cfg && { flipX: x, flipY: y, turn: x });
   }
-  ggs.scripts.flip = { start(cfg) { apply(cfg); return { update: apply, stop: () => apply(null) }; } };
+  ggs.scripts.flip = {
+    start(cfg) {
+      apply(cfg);
+      return { update: apply, stop: () => apply(null) };
+    },
+  };
 })();

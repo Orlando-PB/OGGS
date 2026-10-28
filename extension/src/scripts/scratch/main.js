@@ -8,8 +8,18 @@
   const BRUSH = 22; // px, radius of a scratch
   const INK = '#1c1a2e';
   const BLOCKED = [
-    'pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'click', 'dblclick',
-    'contextmenu', 'wheel', 'touchstart', 'touchmove',
+    'pointerdown',
+    'pointermove',
+    'pointerup',
+    'mousedown',
+    'mousemove',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'touchstart',
+    'touchmove',
   ];
   const CSS = `
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
@@ -33,7 +43,13 @@
   function paintFoil(g, w, h) {
     g.globalCompositeOperation = 'source-over';
     const grad = g.createLinearGradient(0, 0, w, h);
-    const stops = [['#b4b9c3', 0], ['#eceef2', 0.3], ['#a7acb7', 0.5], ['#e2e5ea', 0.72], ['#b0b5bf', 1]];
+    const stops = [
+      ['#b4b9c3', 0],
+      ['#eceef2', 0.3],
+      ['#a7acb7', 0.5],
+      ['#e2e5ea', 0.72],
+      ['#b0b5bf', 1],
+    ];
     stops.forEach(([c, at]) => grad.addColorStop(at, c));
     g.fillStyle = grad;
     g.fillRect(0, 0, w, h);
@@ -46,7 +62,7 @@
     }
     g.stroke();
     const rand = ggs.aid.seeded('scratch-foil');
-    for (let i = 0; i < w * h / 400; i++) {
+    for (let i = 0; i < (w * h) / 400; i++) {
       g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,.5)' : 'rgba(28,26,46,.07)';
       g.fillRect(rand() * w, rand() * h, 1.5, 1.5);
     }
@@ -115,7 +131,7 @@
     };
 
     function newRound(key) {
-      const r = round = { key, id: null, strokes: [], used: 0 };
+      const r = (round = { key, id: null, strokes: [], used: 0 });
       drag = null;
       redraw();
       roundId().then(id => {
@@ -157,8 +173,8 @@
       const left = (1 - round.used) * total();
       if (d > left) {
         // the last bit of the meter
-        x = lx + (x - lx) * left / d;
-        y = ly + (y - ly) * left / d;
+        x = lx + ((x - lx) * left) / d;
+        y = ly + ((y - ly) * left) / d;
       }
       round.used = Math.min(1, round.used + Math.min(d, left) / total());
       drag.last = [x, y];
@@ -201,8 +217,11 @@
         el.style.isolation = 'isolate';
         if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
       }
-      if (canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
-          canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))) redraw();
+      if (
+        canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
+        canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))
+      )
+        redraw();
     }
     const timer = setInterval(tick, 150);
     tick();

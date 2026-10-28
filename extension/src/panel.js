@@ -3,7 +3,10 @@
 // usual "settings" message. settings.panel.hideTab hides the tab for recording.
 (() => {
   const ggs = globalThis.__ggs;
-  let panel = null, form = null, tab = null, settings = null;
+  let panel = null;
+  let form = null;
+  let tab = null;
+  let settings = null;
 
   const save = () => window.postMessage({ ggs: 'save', settings }, location.origin);
   // Uses display, not the hidden attribute, which the tab's inline `all: initial` would beat.
@@ -18,17 +21,21 @@
     }
     if (!settings) return;
     // The popup's stylesheet, inlined by the userscript build or fetched from the extension.
-    const css = ggs.panelCss
-      ?? await fetch(ggs.extBase + 'popup/popup.css').then(r => r.text()).catch(() => '');
+    const css =
+      ggs.panelCss ??
+      (await fetch(ggs.extBase + 'popup/popup.css')
+        .then(r => r.text())
+        .catch(() => ''));
     // Opened twice while the fetch was out.
     if (panel) {
       panel.show(true);
       return;
     }
     // Same look as the popup, with its header (logo and title) as the drag bar.
-    const paper = 'color: #1c1a2e; background-color: #f5f1e8;'
-      + ' background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px);'
-      + ' background-size: 22px 22px; background-position: 11px 11px;';
+    const paper =
+      'color: #1c1a2e; background-color: #f5f1e8;' +
+      ' background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px);' +
+      ' background-size: 22px 22px; background-position: 11px 11px;';
     panel = ggs.ui.panel({
       id: 'settings',
       title: `<img src="${ggs.extBase}icons/icon-128.png" alt=""><h1>Orlando's GeoGuessr Scripts</h1>`,
@@ -50,7 +57,9 @@
       .close:hover { background: rgba(28, 26, 46, .15); }`,
       html: '<div class="scroll"></div>',
     });
-    panel.$('.head').insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
+    panel
+      .$('.head')
+      .insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
     panel.$('.close').addEventListener('click', () => panel.show(false));
     form = ggs.settingsForm(panel.$('.scroll'), { settings, save });
     ggs.onStatus((id, text) => form.setStatus(id, text));
@@ -72,10 +81,11 @@
     tab.textContent = 'OGGS';
     tab.title = 'OGGS settings (Alt+O, Option+O on a Mac)';
     // Bottom-left corner, over the Street View "Google" mark.
-    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000;'
-      + ' padding: 6px 10px 6px 8px; border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e;'
-      + ' font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;'
-      + ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
+    tab.style.cssText =
+      'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000;' +
+      ' padding: 6px 10px 6px 8px; border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e;' +
+      ' font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;' +
+      ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
     tab.addEventListener('click', open);
     showTab();
     document.body.append(tab);

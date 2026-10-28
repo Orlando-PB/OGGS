@@ -15,20 +15,27 @@
     const bulge = 1.5 * h * open;
     const l = -0.3 * w;
     const r = 1.3 * w;
-    return `M${n(l)} ${n(y)}Q${n(w / 2)} ${n(y - bulge)} ${n(r)} ${n(y)}` +
-      `Q${n(w / 2)} ${n(y + bulge)} ${n(l)} ${n(y)}Z`;
+    return (
+      `M${n(l)} ${n(y)}Q${n(w / 2)} ${n(y - bulge)} ${n(r)} ${n(y)}` +
+      `Q${n(w / 2)} ${n(y + bulge)} ${n(l)} ${n(y)}Z`
+    );
   }
 
   function start(cfg) {
     let sensitivity = cfg.sensitivity ?? 5;
     let open = 0;
     let stopped = false;
-    let stream = null, audio = null, analyser = null, raf = 0;
+    let stream = null;
+    let audio = null;
+    let analyser = null;
+    let raf = 0;
     const status = text => ggs.status('eye', text);
 
     // no sheet until there's a microphone to open the eye with
     const mask = ggs.view.mask({
-      over: 'pano', look: 'paper', cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
+      over: 'pano',
+      look: 'paper',
+      cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
     });
 
     const resume = () => {

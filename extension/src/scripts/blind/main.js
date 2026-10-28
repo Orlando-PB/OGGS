@@ -27,7 +27,9 @@
   }
 
   function lockView(ctx) {
-    const { map } = ctx, div = map.getDiv(), size = `${div.offsetWidth}x${div.offsetHeight}`;
+    const { map } = ctx;
+    const div = map.getDiv();
+    const size = `${div.offsetWidth}x${div.offsetHeight}`;
     if (size !== ctx.size || map.get('draggable') !== false) {
       ctx.size = size;
       map.setOptions(LOCKED);
@@ -53,7 +55,9 @@
       };
     },
     // a new round has cleared the lines
-    round(ctx) { ctx.grid = null; },
+    round(ctx) {
+      ctx.grid = null;
+    },
     tick(ctx) {
       lockView(ctx);
       // grid lines follow the option live
@@ -63,7 +67,7 @@
         ctx.grid = null;
         return;
       }
-      const faint = { strokeOpacity: .18, strokeWeight: 1 };
+      const faint = { strokeOpacity: 0.18, strokeWeight: 1 };
       const line = shape => ctx.grid.push(ctx.add({ ...shape, ...faint }));
       ctx.grid = [];
       for (let lat = -60; lat <= 60; lat += 30) line(ggs.aid.latLine(lat));

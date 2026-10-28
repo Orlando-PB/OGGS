@@ -11,8 +11,13 @@
     options: [
       { key: 'hq', label: 'High quality (limited)', type: 'checkbox', default: false },
       {
-        key: 'code', label: 'Extra usage', type: 'text', default: '',
-        placeholder: 'Code', secret: true, hidden: true,
+        key: 'code',
+        label: 'Extra usage',
+        type: 'text',
+        default: '',
+        placeholder: 'Code',
+        secret: true,
+        hidden: true,
       },
     ],
   });

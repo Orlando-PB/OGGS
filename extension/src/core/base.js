@@ -32,9 +32,10 @@
     return m && { pano: m[1], x: +m[2], y: +m[3], z: +m[4] };
   };
   // [bind target, binding parameter] for a texImage2D target.
-  ggs.glBinding = (gl, target) => target === gl.TEXTURE_2D
-    ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D]
-    : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
+  ggs.glBinding = (gl, target) =>
+    target === gl.TEXTURE_2D
+      ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D]
+      : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
 
   // ---- settings, relayed from bridge.js ----
   const listeners = [];
@@ -52,7 +53,8 @@
   window.postMessage({ ggs: 'hello' }, location.origin);
 
   // ---- status lines: one line per script, shown under its options in the settings UI ----
-  const status = {}, statusFns = [];
+  const status = {};
+  const statusFns = [];
   ggs.status = (id, text) => {
     status[id] = text;
     statusFns.forEach(fn => fn(id, text));
@@ -79,21 +81,26 @@
     ggs.status('_mic', s);
   };
   try {
-    navigator.permissions.query({ name: 'microphone' }).then(p => {
-      setMic(p.state);
-      p.onchange = () => setMic(p.state);
-    }, () => {});
+    navigator.permissions.query({ name: 'microphone' }).then(
+      p => {
+        setMic(p.state);
+        p.onchange = () => setMic(p.state);
+      },
+      () => {},
+    );
   } catch {}
-  ggs.mic.ask = () => navigator.mediaDevices.getUserMedia({ audio: true }).then(
-    s => {
-      s.getTracks().forEach(t => t.stop());
-      setMic('granted');
-      return true;
-    },
-    err => {
-      if (err?.name === 'NotAllowedError') setMic('denied');
-      return false;
-    });
+  ggs.mic.ask = () =>
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(
+      s => {
+        s.getTracks().forEach(t => t.stop());
+        setMic('granted');
+        return true;
+      },
+      err => {
+        if (err?.name === 'NotAllowedError') setMic('denied');
+        return false;
+      },
+    );
   // The first settings only set the baseline, so a reload doesn't ask again.
   let askSeen;
   ggs.onSettings(all => {
@@ -105,11 +112,15 @@
   // ---- keys ----
   // Key events inside our panels (data-ggs-ui) stop here, so GeoGuessr's hotkeys don't fire.
   for (const type of ['keydown', 'keyup', 'keypress']) {
-    window.addEventListener(type, e => {
-      const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
-      if (!host) return;
-      e.stopImmediatePropagation();
-    }, true);
+    window.addEventListener(
+      type,
+      e => {
+        const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
+        if (!host) return;
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
   }
   ggs.isTyping = e => {
     const t = e.composedPath()[0];
@@ -122,14 +133,18 @@
     hotkeys.add(h);
     return () => hotkeys.delete(h);
   };
-  window.addEventListener('keydown', e => {
-    if (ggs.isTyping(e)) return;
-    for (const h of hotkeys) {
-      if (!h.match(e)) continue;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      h.fn(e);
-      return;
-    }
-  }, true);
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (ggs.isTyping(e)) return;
+      for (const h of hotkeys) {
+        if (!h.match(e)) continue;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        h.fn(e);
+        return;
+      }
+    },
+    true,
+  );
 })();

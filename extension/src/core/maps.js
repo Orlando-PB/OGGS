@@ -3,8 +3,8 @@
 (() => {
   const ggs = globalThis.__ggs;
 
-  const isGoogleMap = o => o != null && typeof o === 'object'
-    && typeof o.getDiv === 'function' && typeof o.panTo === 'function';
+  const isGoogleMap = o =>
+    o != null && typeof o === 'object' && typeof o.getDiv === 'function' && typeof o.panTo === 'function';
 
   // Class names are CSS-module hashed (guess-map_canvas__cvpqv), so match on the prefix.
   const GUESS_MAP_SELECTORS = [
@@ -16,8 +16,8 @@
   const first = sels => sels.map(s => document.querySelector(s)).find(Boolean) ?? null;
   const guessMapElement = () => first(GUESS_MAP_SELECTORS);
   // Fallback for layouts whose button lost those markers: a button labelled Guess near the map.
-  const GUESS_AREA = '[class*="guess-map_guessMap"], [class*="guess-map_container"],'
-    + ' [class*="guess-map_root"]';
+  const GUESS_AREA =
+    '[class*="guess-map_guessMap"], [class*="guess-map_container"],' + ' [class*="guess-map_root"]';
   const labelledGuess = () => {
     const area = guessMapElement()?.closest(GUESS_AREA) ?? document;
     return [...area.querySelectorAll('button')].find(b => /^\s*guess\s*$/i.test(b.textContent)) ?? null;
@@ -76,14 +76,14 @@
         : { lat: e.latLng.lat(), lng: e.latLng.lng(), round: ggs.game?.roundKey() };
     });
   });
-  const lastGuess = () => (last && last.round === ggs.game?.roundKey()
-    ? { lat: last.lat, lng: last.lng }
-    : null);
+  const lastGuess = () =>
+    last && last.round === ggs.game?.roundKey() ? { lat: last.lat, lng: last.lng } : null;
 
   // Walk up from the guess-map node through GeoGuessr's React fibers to a prop or hook
   // state holding the map.
   function mapFromFiber(el) {
-    let node = el, key;
+    let node = el;
+    let key;
     while (node && !(key = Object.keys(node).find(k => k.startsWith('__reactFiber$')))) {
       node = node.parentElement;
     }
@@ -105,9 +105,7 @@
   function findGuessMap() {
     const el = guessMapElement();
     if (!el) return null;
-    return mapFromFiber(el)
-      ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el))
-      ?? null;
+    return mapFromFiber(el) ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null;
   }
 
   // placing() is true during our own click, so map-click listeners (core/aid.js) can tell
@@ -117,7 +115,9 @@
   function placeGuess(lat, lng, { pan = true } = {}) {
     const map = findGuessMap();
     if (!map) {
-      throw new Error(guessMapElement() ? 'Found the guess map but not its Google Map' : 'No guess map on screen');
+      throw new Error(
+        guessMapElement() ? 'Found the guess map but not its Google Map' : 'No guess map on screen',
+      );
     }
     const gm = window.google.maps;
     const latLng = new gm.LatLng(lat, lng);
@@ -169,9 +169,13 @@
       mapsSeenByHook: created.length,
       guessButton: guessButton(),
       guessPin: first(GUESS_PIN_SELECTORS),
-      buttonsNearMap: [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
-        .map(b => `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`)
-        .join(' | ') || null,
+      buttonsNearMap:
+        [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
+          .map(
+            b =>
+              `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`,
+          )
+          .join(' | ') || null,
       path: location.pathname,
     };
     const shown = v => (v ? (v instanceof Element ? v.className || v.tagName : String(v)) : v);
@@ -180,7 +184,18 @@
   }
 
   ggs.maps = {
-    guessMapElement, findGuessMap, lastGuess, placeGuess, clearGuess, placing, submitGuess, pressSpace,
-    guessButton, GUESS_AREA, GUESS_PIN_SELECTORS, hook, debug,
+    guessMapElement,
+    findGuessMap,
+    lastGuess,
+    placeGuess,
+    clearGuess,
+    placing,
+    submitGuess,
+    pressSpace,
+    guessButton,
+    GUESS_AREA,
+    GUESS_PIN_SELECTORS,
+    hook,
+    debug,
   };
 })();

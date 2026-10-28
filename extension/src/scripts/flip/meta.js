@@ -6,10 +6,16 @@
     section: 'streetview',
     defaultEnabled: false,
     options: [
-      { key: 'flip', label: 'Flip', type: 'buttons', default: 'mirror', choices: [
-        { value: 'mirror', label: 'Mirror' },
-        { value: 'upside', label: 'Upside down' },
-      ] },
+      {
+        key: 'flip',
+        label: 'Flip',
+        type: 'buttons',
+        default: 'mirror',
+        choices: [
+          { value: 'mirror', label: 'Mirror' },
+          { value: 'upside', label: 'Upside down' },
+        ],
+      },
     ],
   });
 })();

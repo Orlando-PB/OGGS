@@ -44,17 +44,29 @@
     const tex = gl.getParameter(param);
     if (!tex) return null;
     return {
-      gl, name, args, url, img, tex, target, key: ggs.tileKey(url),
-      crossOrigin: img.crossOrigin, referrerPolicy: img.referrerPolicy,
+      gl,
+      name,
+      args,
+      url,
+      img,
+      tex,
+      target,
+      key: ggs.tileKey(url),
+      crossOrigin: img.crossOrigin,
+      referrerPolicy: img.referrerPolicy,
       flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
       premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
     };
   }
   function remember(rec) {
     // One record per (texture, face, level, offset). A re-upload replaces the older one.
-    const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name
-      && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
-      && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
+    const same = r =>
+      r.gl === rec.gl &&
+      r.tex === rec.tex &&
+      r.name === rec.name &&
+      r.args[0] === rec.args[0] &&
+      r.args[1] === rec.args[1] &&
+      (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
     if (i >= 0) records.splice(i, 1)[0].stale = true;
     records.push(rec);
@@ -86,9 +98,10 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
     try {
-      const proto = gl instanceof WebGL2RenderingContext
-        ? WebGL2RenderingContext.prototype
-        : WebGLRenderingContext.prototype;
+      const proto =
+        gl instanceof WebGL2RenderingContext
+          ? WebGL2RenderingContext.prototype
+          : WebGLRenderingContext.prototype;
       orig.get(proto)[rec.name].call(gl, ...rec.args, source);
       if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
     } finally {
@@ -179,7 +192,13 @@
       if (r.crossOrigin != null) img.crossOrigin = r.crossOrigin;
       if (r.referrerPolicy) img.referrerPolicy = r.referrerPolicy;
       img.src = r.url;
-      loaded.set(r.url, img.decode().then(() => img, () => null));
+      loaded.set(
+        r.url,
+        img.decode().then(
+          () => img,
+          () => null,
+        ),
+      );
       if (loaded.size > MAX) loaded.delete(loaded.keys().next().value);
     }
     return loaded.get(r.url);
@@ -192,16 +211,23 @@
   function onScreen() {
     const all = records.filter(r => r.key && live(r));
     const pano = all.at(-1)?.key.pano;
-    return all.filter(r => r.key.pano === pano).reverse().sort((a, b) => b.key.z - a.key.z);
+    return all
+      .filter(r => r.key.pano === pano)
+      .reverse()
+      .sort((a, b) => b.key.z - a.key.z);
   }
   // The game's spare time between frames, or short timer slices without idle callbacks.
-  const idle = () => new Promise(res => (window.requestIdleCallback
-    ? requestIdleCallback(res, { timeout: 100 })
-    : setTimeout(() => res({ timeRemaining: () => 8 }))));
+  const idle = () =>
+    new Promise(res =>
+      window.requestIdleCallback
+        ? requestIdleCallback(res, { timeout: 100 })
+        : setTimeout(() => res({ timeRemaining: () => 8 })),
+    );
   // prerender(fn(img, key) -> source) -> { ready(), get(url), cancel() }
   function prerender(fn) {
     const out = new Map();
-    let stopped = false, done = false;
+    let stopped = false;
+    let done = false;
     (async () => {
       const list = onScreen();
       // Fetched together, drawn one by one.
@@ -239,11 +265,13 @@
   // replay of hundreds of tiles never holds up the game's frames or a click. A repaint now and
   // then shows the ones done. A newer replay stops the running one. Records it hadn't reached
   // are still live, so the new one picks them up.
-  const SLICE = 8, PIXELS = 8 * 512 * 512;
-  const nextFrame = () => new Promise(r => (document.hidden
-    ? setTimeout(r)
-    : requestAnimationFrame(() => setTimeout(r))));
-  let scheduled = null, current = null, painting = null;
+  const SLICE = 8;
+  const PIXELS = 8 * 512 * 512;
+  const nextFrame = () =>
+    new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  let scheduled = null;
+  let current = null;
+  let painting = null;
   const showSoFar = () => {
     painting ??= repaint().finally(() => {
       painting = null;
@@ -254,14 +282,17 @@
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
       if (current) current.stopped = true;
-      const run = current = { stopped: false };
+      const run = (current = { stopped: false });
       const old = records.filter(live).reverse();
       const ready = new Set(loaded.keys());
       const first = old.filter(r => ready.has(r.url));
       const rest = old.filter(r => !ready.has(r.url));
       // Fetched together, put up one by one.
       rest.forEach(load);
-      let n = 0, spent = 0, pixels = 0, shown = performance.now();
+      let n = 0;
+      let spent = 0;
+      let pixels = 0;
+      let shown = performance.now();
       for (const [i, r] of [...first, ...rest].entries()) {
         // The loaded ones are up. The rest may take a while.
         if (i === first.length && n) showSoFar();

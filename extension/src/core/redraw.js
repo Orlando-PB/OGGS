@@ -20,9 +20,7 @@
   function clientId() {
     let id = ggs.store.get('ggs-client');
     if (!id) {
-      id = [...crypto.getRandomValues(new Uint8Array(12))]
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+      id = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
       ggs.store.set('ggs-client', id);
     }
     return id;
@@ -46,17 +44,20 @@
   const keyOf = id => `${id}/${active.style}/${modeOf(active.cfg)}`;
 
   // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
-  const meta = new Map(), metaSync = new Map();
+  const meta = new Map();
+  const metaSync = new Map();
   function panoMeta(id) {
     if (!meta.has(id)) {
-      meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-        .then(({ data }) => {
+      meta.set(
+        id,
+        new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
           const worldWidth = data.tiles.worldSize.width;
           const tileWidth = data.tiles.tileSize.width;
           const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
           metaSync.set(id, m);
           return m;
-        }));
+        }),
+      );
     }
     return meta.get(id);
   }
@@ -65,7 +66,8 @@
   // `${panoId}/${style}/${mode}` -> { image, pending: [uploads waiting], error, ctrl, mode, t0 }
   const gens = new Map();
   // active is { id, style, label, cfg } while a script is on.
-  let active = null, overlay = null;
+  let active = null;
+  let overlay = null;
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
   function shownPano() {
@@ -84,7 +86,8 @@
   const SETTLE = 800;
   // panoId -> [{ rec, img, tw, th }]
   const waitingPanos = new Map();
-  let settleTimer = null, latestPano = null;
+  let settleTimer = null;
+  let latestPano = null;
   function waitFor(id, entry) {
     if (!waitingPanos.has(id)) waitingPanos.set(id, []);
     // The bar shows from the first blue tile.
@@ -126,10 +129,12 @@
   // is the truth. A copy is kept here so a round isn't started once today's limit is used up.
   // Generations in flight are added on top until the server's answer, which includes them,
   // replaces the copy. So nothing is counted twice.
-  const DAY = 24 * 3600 * 1000, QKEY = 'ggs-minecraft-quota';
+  const DAY = 24 * 3600 * 1000;
+  const QKEY = 'ggs-minecraft-quota';
   const Q = {
     tidy(log, other) {
-      const now = Date.now(), out = {};
+      const now = Date.now();
+      const out = {};
       for (const k of ['normal', 'hq']) {
         const all = new Set([...(log?.[k] ?? []), ...(other?.[k] ?? [])].filter(t => now - t < DAY));
         out[k] = [...all].sort((a, b) => a - b);
@@ -145,14 +150,18 @@
       return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
     },
   };
-  let serverLog = {}, log = {}, caps = { normal: 100, hq: 10 }, limitShownFor = null;
+  let serverLog = {};
+  let log = {};
+  let caps = { normal: 100, hq: 10 };
+  let limitShownFor = null;
   // t0 of generations the server hasn't answered yet.
   const inFlight = { normal: [], hq: [] };
   function saveLog(fromServer) {
     if (fromServer) serverLog = Q.tidy(fromServer);
     log = Q.tidy(serverLog, inFlight);
     ggs.store.set(QKEY, serverLog);
-    const part = (label, x) => (x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`);
+    const part = (label, x) =>
+      x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`;
     if (!active) return;
     const normal = part('rounds', Q.left(log, 'normal', caps.normal));
     const hq = part('high quality', Q.left(log, 'hq', caps.hq));
@@ -178,7 +187,10 @@
       tiles: ggs.tiles.count(),
       ...stats,
       gens: [...gens].map(([id, g]) => ({
-        id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null,
+        id,
+        image: !!g.image,
+        pending: g.pending.length,
+        error: g.error?.message ?? null,
       })),
     }),
   };
@@ -248,14 +260,19 @@
 
   // Crop of the generated picture for tile x,y at this zoom.
   function crop(g, m, x, y, zoom, tw, th) {
-    const W = widthAt(m, zoom), H = Math.ceil(W / 2), img = g.image;
-    const sx = (x * tw / W) * img.width, sy = (y * th / H) * img.height;
+    const W = widthAt(m, zoom);
+    const H = Math.ceil(W / 2);
+    const img = g.image;
+    const sx = ((x * tw) / W) * img.width;
+    const sy = ((y * th) / H) * img.height;
     const sw = Math.min(img.width - sx, (tw / W) * img.width);
     const sh = Math.min(img.height - sy, (th / H) * img.height);
-    const c = new OffscreenCanvas(tw, th), ctx = c.getContext('2d');
+    const c = new OffscreenCanvas(tw, th);
+    const ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     if (sw > 0 && sh > 0) {
-      const dw = tw * sw / ((tw / W) * img.width), dh = th * sh / ((th / H) * img.height);
+      const dw = (tw * sw) / ((tw / W) * img.width);
+      const dh = (th * sh) / ((th / H) * img.height);
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
     }
     return c;
@@ -267,9 +284,12 @@
   ggs.tiles.filter((rec, source) => {
     stats.uploads++;
     if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
-    const k = rec.key, img = source;
+    const k = rec.key;
+    const img = source;
     stats.tiles++;
-    const id = k.pano, mode = modeOf(active.cfg), gkey = `${id}/${active.style}/${mode}`;
+    const id = k.pano;
+    const mode = modeOf(active.cfg);
+    const gkey = `${id}/${active.style}/${mode}`;
     if (!gens.has(gkey) && !allowed(mode)) {
       if (limitShownFor !== id) {
         limitShownFor = id;
@@ -279,7 +299,8 @@
       }
       return img;
     }
-    const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
+    const tw = img.naturalWidth || 512;
+    const th = img.naturalHeight || 512;
     const g = gens.get(gkey);
     if (!g) {
       waitFor(id, { rec, img, tw, th });
@@ -338,7 +359,9 @@
   // The bar belongs to the latest generation started (`owner`). An older one finishing or
   // failing later leaves it alone. hideTimer is the fade-out after one finished, cancelled
   // when the next one starts.
-  let progressTimer = null, owner = null, hideTimer = null;
+  let progressTimer = null;
+  let owner = null;
+  let hideTimer = null;
   function progressStart(seconds, key, t0 = Date.now()) {
     // Already showing this one.
     if (!overlay || key === owner) return;
@@ -366,9 +389,12 @@
       overlay.text.textContent = 'Could not redraw this round';
     }
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      if (overlay) delete overlay.host.dataset.on;
-    }, failed ? 4000 : 400);
+    hideTimer = setTimeout(
+      () => {
+        if (overlay) delete overlay.host.dataset.on;
+      },
+      failed ? 4000 : 400,
+    );
   }
   function progressHide() {
     owner = null;
@@ -408,7 +434,9 @@
   // Starts a generation ahead for the panorama on screen. Returns { ready(), failed(), cancel() },
   // or null when there's nothing to start (no panorama, today's limit used).
   function prepare(style, cfg) {
-    const id = shownPano(), mode = modeOf(cfg), key = `${id}/${style}/${mode}`;
+    const id = shownPano();
+    const mode = modeOf(cfg);
+    const key = `${id}/${style}/${mode}`;
     if (active || !id || !allowed(mode)) return null;
     const g = generation(id, style, mode);
     return {
@@ -427,8 +455,9 @@
     active = { id, style, label, cfg };
     const host = document.createElement('div');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>`
-      + '<div class="bar"><div class="fill"></div></div></div>';
+    root.innerHTML =
+      `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
+      '<div class="bar"><div class="fill"></div></div></div>';
     document.body.append(host);
     overlay = {
       host,
@@ -440,7 +469,8 @@
     // left running by switching off and on) gets the bar from when it started. The tiles go
     // through at once on the local copy of today's limits. The server checks them anyway,
     // and its answer comes in behind.
-    const key = keyOf(shownPano()), g = gens.get(key);
+    const key = keyOf(shownPano());
+    const g = gens.get(key);
     if (g && !g.image && !g.error) progressStart(etaOf(style, g.mode), key, g.t0);
     loadQuota();
     ggs.tiles.replay();

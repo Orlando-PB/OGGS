@@ -8,7 +8,11 @@
   const ggs = (globalThis.__ggs ??= {});
 
   const SECTIONS = {
-    chaos: 'Chaos mode', guessing: 'Guessing', streetview: 'Street View', misc: 'Misc', controls: 'Controls',
+    chaos: 'Chaos mode',
+    guessing: 'Guessing',
+    streetview: 'Street View',
+    misc: 'Misc',
+    controls: 'Controls',
     ui: 'UI',
   };
   // Sections shown as their card alone, without a fold.
@@ -28,7 +32,9 @@
     let settings = initial;
     const { registry, config } = ggs;
     // hideable: options with a hideIn, hidden by game mode.
-    const statusEls = {}, refreshers = [], hideable = [];
+    const statusEls = {};
+    const refreshers = [];
+    const hideable = [];
     // The page's microphone permission (its '_mic' status line).
     let micState = '';
     const micNotes = [];
@@ -43,9 +49,11 @@
       if (o.type === 'mic') return `<button type="button" class="micnote" hidden>${o.label}</button>`;
       if (o.type === 'text') {
         const type = o.secret ? 'password' : 'text';
-        return `<label class="row"><span class="text">${o.label}</span>
-             <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"`
-          + ' autocomplete="off"></label>';
+        return (
+          `<label class="row"><span class="text">${o.label}</span>
+             <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"` +
+          ' autocomplete="off"></label>'
+        );
       }
       if (o.type === 'select') {
         const choices = o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('');
@@ -55,10 +63,12 @@
       // A label per stop: the stops sit under their labels.
       if (o.type === 'slider' && o.marks?.length === o.max - o.min + 1) {
         const marks = o.marks.map(m => `<span data-t="${m}">${m}</span>`).join('');
-        return `<div class="row slider"><span class="text">${o.label}</span>
-             <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">`
-          + `<span class="track"><i></i><b></b></span>
-             <span class="marks">${marks}</span></span></div>`;
+        return (
+          `<div class="row slider"><span class="text">${o.label}</span>
+             <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">` +
+          `<span class="track"><i></i><b></b></span>
+             <span class="marks">${marks}</span></span></div>`
+        );
       }
       if (o.type === 'slider') {
         return `<label class="row slider"><span class="text">${o.label}${o.steps ? ': <b class="val"></b>' : ''}</span>
@@ -67,8 +77,10 @@
       }
       // One of a few, as a row of buttons.
       if (o.type === 'buttons') {
-        const buttons = o.choices.map(c =>
-          `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`);
+        const buttons = o.choices.map(
+          c =>
+            `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`,
+        );
         return `<div class="row boxes">${buttons.join('')}</div>`;
       }
       return `<button type="button" class="tog opt" data-key="${o.key}">${o.label}</button>`;
@@ -80,14 +92,21 @@
       return `<span class="marks">${ends.map(m => `<span>${m}</span>`).join('')}</span>`;
     }
     // Checkboxes are buttons that light up. Side-by-side ones share a row.
-    const options = list => list.map(option).join('')
-      .replace(/(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
-        row => `<div class="row boxes">${row}</div>`);
+    const options = list =>
+      list
+        .map(option)
+        .join('')
+        .replace(
+          /(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
+          row => `<div class="row boxes">${row}</div>`,
+        );
 
     // Metas sharing a `group` render inside one card, each as a .part. The card is off when
     // none of its parts is enabled.
-    const groups = {}, parts = {};
-    const reflect = (card, metas) => card.classList.toggle('off', !metas.some(m => config(m, settings).enabled));
+    const groups = {};
+    const parts = {};
+    const reflect = (card, metas) =>
+      card.classList.toggle('off', !metas.some(m => config(m, settings).enabled));
     // A flat script is on while any of its options is.
     const setFlat = (meta, key, value) => {
       const cfg = config(meta, settings);
@@ -103,9 +122,13 @@
     // that still have some. The suggestions are the scripts' names.
     const search = document.createElement('div');
     search.className = 'search';
-    const names = registry.filter(m => !m.flat).map(m => `<option value="${m.name}">`).join('');
-    search.innerHTML = '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"'
-      + ` list="ggs-names" autocomplete="off">
+    const names = registry
+      .filter(m => !m.flat)
+      .map(m => `<option value="${m.name}">`)
+      .join('');
+    search.innerHTML =
+      '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
+      ` list="ggs-names" autocomplete="off">
       <datalist id="ggs-names">${names}</datalist>`;
     container.append(search);
 
@@ -128,8 +151,9 @@
       el.className = 'sec';
       el.dataset.section = key;
       el.open = opened()[key] ?? metas.some(m => config(m, initial).enabled);
-      el.innerHTML = `<summary><span class="title">${title}</span><span class="count"></span></summary>`
-        + '<div class="cards"></div>';
+      el.innerHTML =
+        `<summary><span class="title">${title}</span><span class="count"></span></summary>` +
+        '<div class="cards"></div>';
       // A click, not 'toggle', which also fires for the default set just above.
       el.querySelector('summary').addEventListener('click', () => {
         try {
@@ -183,7 +207,8 @@
     // label's centre, so the stops aren't evenly spaced. The end ones sit at the track's ends,
     // thumb flush with the edge like a native range. Click, drag or arrow keys pick one.
     function stops(el, meta, opt) {
-      const key = el.dataset.key, labels = [...el.querySelectorAll('.marks span')];
+      const key = el.dataset.key;
+      const labels = [...el.querySelectorAll('.marks span')];
       let value = config(meta, settings)[key];
       // Half the thumb's width.
       const THUMB = 8;
@@ -210,7 +235,8 @@
         refreshers.forEach(fn => fn());
       };
       const at = e => {
-        const x = e.clientX - el.getBoundingClientRect().left, c = centres();
+        const x = e.clientX - el.getBoundingClientRect().left;
+        const c = centres();
         const nearest = c.reduce((best, cx, i) => (Math.abs(cx - x) < Math.abs(c[best] - x) ? i : best), 0);
         set(opt.min + nearest);
       };
@@ -264,8 +290,8 @@
         </div><div class="status"></div>`;
       } else {
         const more = meta.options.some(o => o.hidden)
-          ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>`
-            + `${options(meta.options.filter(o => o.hidden))}</details>`
+          ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>` +
+            `${options(meta.options.filter(o => o.hidden))}</details>`
           : '';
         part.innerHTML = `
         <label class="row">
@@ -288,9 +314,11 @@
       }
       // Option buttons: a checkbox flips, or one of a 'buttons' choice is picked.
       for (const btn of part.querySelectorAll('button.opt')) {
-        const key = btn.dataset.key, pick = btn.dataset.value;
+        const key = btn.dataset.key;
+        const pick = btn.dataset.value;
         const value = () => config(meta, settings)[key];
-        const show = () => btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
+        const show = () =>
+          btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
         show();
         refreshers.push(show);
         btn.addEventListener('click', () => {
@@ -310,10 +338,16 @@
         if (el) hideable.push({ el, hideIn: o.hideIn });
       }
       for (const el of part.querySelectorAll('.stops[data-key]')) {
-        stops(el, meta, meta.options.find(o => o.key === el.dataset.key));
+        stops(
+          el,
+          meta,
+          meta.options.find(o => o.key === el.dataset.key),
+        );
       }
       for (const box of part.querySelectorAll('input[data-key], select[data-key]')) {
-        const key = box.dataset.key, range = box.type === 'range', select = box.tagName === 'SELECT';
+        const key = box.dataset.key;
+        const range = box.type === 'range';
+        const select = box.tagName === 'SELECT';
         const text = box.type === 'text' || box.type === 'password';
         const opt = meta.options.find(o => o.key === key);
         const show = () => {
@@ -331,14 +365,17 @@
           // Microphone blocked, so it stays off.
           if (key === 'enabled' && value && meta.mic && micState === 'denied') {
             box.checked = false;
-            statusEls[meta.id].textContent = 'Microphone blocked: allow it for geoguessr.com from the address bar';
+            statusEls[meta.id].textContent =
+              'Microphone blocked: allow it for geoguessr.com from the address bar';
             return;
           }
           settings[meta.id] = { ...settings[meta.id], [key]: value };
           save(meta.id, key, value);
           if (key === 'enabled' && value) {
             // Switching this one on switches off the scripts it can't run beside...
-            const clashes = registry.filter(m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id));
+            const clashes = registry.filter(
+              m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id),
+            );
             for (const ex of clashes) {
               if (!config(ex, settings).enabled) continue;
               settings[ex.id] = { ...settings[ex.id], enabled: false };
@@ -357,7 +394,8 @@
 
     // While Chaos mode is on it picks the other scripts itself, so their sections are greyed out.
     const chaos = byId.chaos;
-    if (chaos) refreshers.push(() => container.classList.toggle('chaos-on', !!config(chaos, settings).enabled));
+    if (chaos)
+      refreshers.push(() => container.classList.toggle('chaos-on', !!config(chaos, settings).enabled));
 
     const box = search.querySelector('input');
     // The sections' open state before the search, put back when it's cleared.
@@ -383,7 +421,8 @@
       if (!q) openBefore = null;
       // A suggestion picked whole: bring its card into view.
       const exact = registry.find(m => m.name.toLowerCase() === q);
-      if (exact) container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
+      if (exact)
+        container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
     });
 
     // Fills in the section counts.

@@ -12,8 +12,10 @@
     ui: true,
     options: [
       {
-        key: 'hideTab', label: 'Hide OGGS tab · Alt+O / Option+O reopens',
-        type: 'checkbox', default: false,
+        key: 'hideTab',
+        label: 'Hide OGGS tab · Alt+O / Option+O reopens',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });

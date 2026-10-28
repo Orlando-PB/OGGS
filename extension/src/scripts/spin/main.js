@@ -8,8 +8,10 @@
 
   function start(cfg) {
     // base: degrees turned before `from`
-    let speed = cfg.speed, from = performance.now(), base = 0;
-    const angle = now => (base + (now - from) * 360 / (SECS[speed - 1] ?? 60) / 1000) % 360;
+    let speed = cfg.speed;
+    let from = performance.now();
+    let base = 0;
+    const angle = now => (base + ((now - from) * 360) / (SECS[speed - 1] ?? 60) / 1000) % 360;
     ggs.view.effect('spin', {
       transform(now, w, h) {
         const grow = Math.hypot(w, h) / Math.max(1, Math.min(w, h));
@@ -17,7 +19,9 @@
       },
     });
     return {
-      stop() { ggs.view.effect('spin', null); },
+      stop() {
+        ggs.view.effect('spin', null);
+      },
       update(next) {
         const now = performance.now();
         base = angle(now);

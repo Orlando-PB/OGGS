@@ -282,9 +282,10 @@ section.flat .status:empty { display: none; }
     return m && { pano: m[1], x: +m[2], y: +m[3], z: +m[4] };
   };
   // [bind target, binding parameter] for a texImage2D target.
-  ggs.glBinding = (gl, target) => target === gl.TEXTURE_2D
-    ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D]
-    : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
+  ggs.glBinding = (gl, target) =>
+    target === gl.TEXTURE_2D
+      ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D]
+      : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
 
   // ---- settings, relayed from bridge.js ----
   const listeners = [];
@@ -302,7 +303,8 @@ section.flat .status:empty { display: none; }
   window.postMessage({ ggs: 'hello' }, location.origin);
 
   // ---- status lines: one line per script, shown under its options in the settings UI ----
-  const status = {}, statusFns = [];
+  const status = {};
+  const statusFns = [];
   ggs.status = (id, text) => {
     status[id] = text;
     statusFns.forEach(fn => fn(id, text));
@@ -329,21 +331,26 @@ section.flat .status:empty { display: none; }
     ggs.status('_mic', s);
   };
   try {
-    navigator.permissions.query({ name: 'microphone' }).then(p => {
-      setMic(p.state);
-      p.onchange = () => setMic(p.state);
-    }, () => {});
+    navigator.permissions.query({ name: 'microphone' }).then(
+      p => {
+        setMic(p.state);
+        p.onchange = () => setMic(p.state);
+      },
+      () => {},
+    );
   } catch {}
-  ggs.mic.ask = () => navigator.mediaDevices.getUserMedia({ audio: true }).then(
-    s => {
-      s.getTracks().forEach(t => t.stop());
-      setMic('granted');
-      return true;
-    },
-    err => {
-      if (err?.name === 'NotAllowedError') setMic('denied');
-      return false;
-    });
+  ggs.mic.ask = () =>
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(
+      s => {
+        s.getTracks().forEach(t => t.stop());
+        setMic('granted');
+        return true;
+      },
+      err => {
+        if (err?.name === 'NotAllowedError') setMic('denied');
+        return false;
+      },
+    );
   // The first settings only set the baseline, so a reload doesn't ask again.
   let askSeen;
   ggs.onSettings(all => {
@@ -355,11 +362,15 @@ section.flat .status:empty { display: none; }
   // ---- keys ----
   // Key events inside our panels (data-ggs-ui) stop here, so GeoGuessr's hotkeys don't fire.
   for (const type of ['keydown', 'keyup', 'keypress']) {
-    window.addEventListener(type, e => {
-      const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
-      if (!host) return;
-      e.stopImmediatePropagation();
-    }, true);
+    window.addEventListener(
+      type,
+      e => {
+        const host = e.composedPath().find(n => n instanceof Element && n.hasAttribute('data-ggs-ui'));
+        if (!host) return;
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
   }
   ggs.isTyping = e => {
     const t = e.composedPath()[0];
@@ -372,16 +383,20 @@ section.flat .status:empty { display: none; }
     hotkeys.add(h);
     return () => hotkeys.delete(h);
   };
-  window.addEventListener('keydown', e => {
-    if (ggs.isTyping(e)) return;
-    for (const h of hotkeys) {
-      if (!h.match(e)) continue;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      h.fn(e);
-      return;
-    }
-  }, true);
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (ggs.isTyping(e)) return;
+      for (const h of hotkeys) {
+        if (!h.match(e)) continue;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        h.fn(e);
+        return;
+      }
+    },
+    true,
+  );
 })();
 
 // ==================== src/core/maps.js ============================================
@@ -390,8 +405,8 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
 
-  const isGoogleMap = o => o != null && typeof o === 'object'
-    && typeof o.getDiv === 'function' && typeof o.panTo === 'function';
+  const isGoogleMap = o =>
+    o != null && typeof o === 'object' && typeof o.getDiv === 'function' && typeof o.panTo === 'function';
 
   // Class names are CSS-module hashed (guess-map_canvas__cvpqv), so match on the prefix.
   const GUESS_MAP_SELECTORS = [
@@ -403,8 +418,8 @@ section.flat .status:empty { display: none; }
   const first = sels => sels.map(s => document.querySelector(s)).find(Boolean) ?? null;
   const guessMapElement = () => first(GUESS_MAP_SELECTORS);
   // Fallback for layouts whose button lost those markers: a button labelled Guess near the map.
-  const GUESS_AREA = '[class*="guess-map_guessMap"], [class*="guess-map_container"],'
-    + ' [class*="guess-map_root"]';
+  const GUESS_AREA =
+    '[class*="guess-map_guessMap"], [class*="guess-map_container"],' + ' [class*="guess-map_root"]';
   const labelledGuess = () => {
     const area = guessMapElement()?.closest(GUESS_AREA) ?? document;
     return [...area.querySelectorAll('button')].find(b => /^\s*guess\s*$/i.test(b.textContent)) ?? null;
@@ -463,14 +478,14 @@ section.flat .status:empty { display: none; }
         : { lat: e.latLng.lat(), lng: e.latLng.lng(), round: ggs.game?.roundKey() };
     });
   });
-  const lastGuess = () => (last && last.round === ggs.game?.roundKey()
-    ? { lat: last.lat, lng: last.lng }
-    : null);
+  const lastGuess = () =>
+    last && last.round === ggs.game?.roundKey() ? { lat: last.lat, lng: last.lng } : null;
 
   // Walk up from the guess-map node through GeoGuessr's React fibers to a prop or hook
   // state holding the map.
   function mapFromFiber(el) {
-    let node = el, key;
+    let node = el;
+    let key;
     while (node && !(key = Object.keys(node).find(k => k.startsWith('__reactFiber$')))) {
       node = node.parentElement;
     }
@@ -492,9 +507,7 @@ section.flat .status:empty { display: none; }
   function findGuessMap() {
     const el = guessMapElement();
     if (!el) return null;
-    return mapFromFiber(el)
-      ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el))
-      ?? null;
+    return mapFromFiber(el) ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null;
   }
 
   // placing() is true during our own click, so map-click listeners (core/aid.js) can tell
@@ -504,7 +517,9 @@ section.flat .status:empty { display: none; }
   function placeGuess(lat, lng, { pan = true } = {}) {
     const map = findGuessMap();
     if (!map) {
-      throw new Error(guessMapElement() ? 'Found the guess map but not its Google Map' : 'No guess map on screen');
+      throw new Error(
+        guessMapElement() ? 'Found the guess map but not its Google Map' : 'No guess map on screen',
+      );
     }
     const gm = window.google.maps;
     const latLng = new gm.LatLng(lat, lng);
@@ -556,9 +571,13 @@ section.flat .status:empty { display: none; }
       mapsSeenByHook: created.length,
       guessButton: guessButton(),
       guessPin: first(GUESS_PIN_SELECTORS),
-      buttonsNearMap: [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
-        .map(b => `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`)
-        .join(' | ') || null,
+      buttonsNearMap:
+        [...(guessMapElement()?.closest(GUESS_AREA)?.querySelectorAll('button') ?? [])]
+          .map(
+            b =>
+              `${b.dataset.qa ?? ''} "${b.textContent.trim().slice(0, 30)}"${b.disabled ? ' disabled' : ''}`,
+          )
+          .join(' | ') || null,
       path: location.pathname,
     };
     const shown = v => (v ? (v instanceof Element ? v.className || v.tagName : String(v)) : v);
@@ -567,8 +586,19 @@ section.flat .status:empty { display: none; }
   }
 
   ggs.maps = {
-    guessMapElement, findGuessMap, lastGuess, placeGuess, clearGuess, placing, submitGuess, pressSpace,
-    guessButton, GUESS_AREA, GUESS_PIN_SELECTORS, hook, debug,
+    guessMapElement,
+    findGuessMap,
+    lastGuess,
+    placeGuess,
+    clearGuess,
+    placing,
+    submitGuess,
+    pressSpace,
+    guessButton,
+    GUESS_AREA,
+    GUESS_PIN_SELECTORS,
+    hook,
+    debug,
   };
 })();
 
@@ -603,7 +633,9 @@ section.flat .status:empty { display: none; }
       Object.assign(st.wanted, o);
       const forced = {};
       for (const kind of Object.keys(OPTS)) if (on(kind)) Object.assign(forced, OPTS[kind]);
-      const kept = Object.keys(o).filter(k => k in forced).map(k => [k, forced[k]]);
+      const kept = Object.keys(o)
+        .filter(k => k in forced)
+        .map(k => [k, forced[k]]);
       return setOptions({ ...o, ...Object.fromEntries(kept) });
     };
     apply(p);
@@ -691,16 +723,20 @@ section.flat .status:empty { display: none; }
   // ---- input, swallowed at the window in the capture phase ----
   // Registered at document_start, so these run before GeoGuessr's and the Maps API's handlers.
   // Our own sheets over the panorama (core/view.js, scratch's foil) keep their input.
-  const inPano = t => !t?.closest?.('[data-ggs-view]')
-    && [...panos.values()].some(st => st.el?.contains?.(t));
+  const inPano = t =>
+    !t?.closest?.('[data-ggs-view]') && [...panos.values()].some(st => st.el?.contains?.(t));
   const stop = e => {
     e.stopImmediatePropagation();
     e.preventDefault();
   };
-  window.addEventListener('keydown', e => {
-    if (ggs.isTyping(e)) return;
-    for (const kind of Object.keys(KEYS)) if (on(kind) && KEYS[kind].includes(e.key)) return stop(e);
-  }, true);
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (ggs.isTyping(e)) return;
+      for (const kind of Object.keys(KEYS)) if (on(kind) && KEYS[kind].includes(e.key)) return stop(e);
+    },
+    true,
+  );
   // Zoom: the wheel and pinches over the panorama.
   const stopZoom = e => {
     if (on('zoom') && inPano(e.target)) stop(e);
@@ -712,19 +748,31 @@ section.flat .status:empty { display: none; }
   // (and clicking to move) work when moving is allowed.
   let dragging = false;
   for (const t of ['pointerdown', 'mousedown', 'touchstart']) {
-    window.addEventListener(t, e => {
-      if (inPano(e.target)) dragging = true;
-    }, true);
+    window.addEventListener(
+      t,
+      e => {
+        if (inPano(e.target)) dragging = true;
+      },
+      true,
+    );
   }
   for (const t of ['pointerup', 'mouseup', 'touchend', 'touchcancel', 'pointercancel']) {
-    window.addEventListener(t, () => {
-      dragging = false;
-    }, true);
+    window.addEventListener(
+      t,
+      () => {
+        dragging = false;
+      },
+      true,
+    );
   }
   for (const t of ['pointermove', 'mousemove', 'touchmove']) {
-    window.addEventListener(t, e => {
-      if (dragging && (on('pan') || (t === 'touchmove' && on('zoom') && e.touches?.length > 1))) stop(e);
-    }, { capture: true, passive: false });
+    window.addEventListener(
+      t,
+      e => {
+        if (dragging && (on('pan') || (t === 'touchmove' && on('zoom') && e.touches?.length > 1))) stop(e);
+      },
+      { capture: true, passive: false },
+    );
   }
 
   const set = kind => (owner, want) => {
@@ -779,8 +827,11 @@ section.flat .status:empty { display: none; }
     [/\/game\/([^/?#]+)/, 'standard', t => `/api/v3/games/${t}`],
     [/\/challenge\/([^/?#]+)/, 'challenge', t => `/api/v3/challenges/${t}`],
     [/\/(?:team-)?duels\/([^/?#]+)/, 'duels', t => `https://game-server.geoguessr.com/api/duels/${t}`],
-    [/\/battle-royale\/([^/?#]+)/, 'battle-royale',
-      t => `https://game-server.geoguessr.com/api/battle-royale/${t}`],
+    [
+      /\/battle-royale\/([^/?#]+)/,
+      'battle-royale',
+      t => `https://game-server.geoguessr.com/api/battle-royale/${t}`,
+    ],
   ];
 
   // Party games play under /party/... without the game id in the address. The id is taken
@@ -837,7 +888,10 @@ section.flat .status:empty { display: none; }
   // GeoGuessr's round counter markup keeps changing, so it isn't read. The map can blink out
   // for a moment mid-round, so it only counts as gone after GONE_MS.
   const GONE_MS = 1000;
-  let entries = 0, entryToken = null, hadMap = false, goneSince = 0;
+  let entries = 0;
+  let entryToken = null;
+  let hadMap = false;
+  let goneSince = 0;
   setInterval(() => {
     const token = context()?.token ?? null;
     const hasMap = !!ggs.maps.guessMapElement();
@@ -869,13 +923,19 @@ section.flat .status:empty { display: none; }
   function round() {
     const key = roundKey();
     if (!roundCache.has(key)) {
-      roundCache.set(key, lookupRound(key).then(r => {
-        if (!r) roundCache.delete(key);
-        return r;
-      }, err => {
-        roundCache.delete(key);
-        return noRound(`game data: ${err.message}`);
-      }));
+      roundCache.set(
+        key,
+        lookupRound(key).then(
+          r => {
+            if (!r) roundCache.delete(key);
+            return r;
+          },
+          err => {
+            roundCache.delete(key);
+            return noRound(`game data: ${err.message}`);
+          },
+        ),
+      );
     }
     return roundCache.get(key);
   }
@@ -931,8 +991,8 @@ section.flat .status:empty { display: none; }
     duelRounds.set(ctx.token, { n: last.n, key });
     return last;
   }
-  const roundLocation = () => round()
-    .then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
+  const roundLocation = () =>
+    round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
 
   // ---- competitive guard ----
   // Party and ranked duels share /duels/<id> URLs, so two signals decide. One is the lobby you
@@ -961,25 +1021,31 @@ section.flat .status:empty { display: none; }
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, (async () => {
-      let lobby = null;
-      try {
-        lobby = sessionStorage.getItem(LOBBY_KEY);
-      } catch {}
-      const j = await fetchGame(ctx).catch(() => null);
-      const o = j?.options ?? {};
-      const types = [j?.gameContext?.type, o.gameContext?.type];
-      const rated = [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked]
-        .some(v => v === true)
-        || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
-      const party = [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId]
-        .some(Boolean)
-        || types.some(t => /party|private|friend/i.test(t ?? ''));
-      const why = `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}`
-        + (j ? '' : ' (no game data)');
-      if (rated) return { competitive: true, why };
-      return { competitive: !(party || lobby === 'party'), why };
-    })());
+    if (!guardCache.has(ctx.token))
+      guardCache.set(
+        ctx.token,
+        (async () => {
+          let lobby = null;
+          try {
+            lobby = sessionStorage.getItem(LOBBY_KEY);
+          } catch {}
+          const j = await fetchGame(ctx).catch(() => null);
+          const o = j?.options ?? {};
+          const types = [j?.gameContext?.type, o.gameContext?.type];
+          const rated =
+            [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked].some(
+              v => v === true,
+            ) || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
+          const party =
+            [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId].some(Boolean) ||
+            types.some(t => /party|private|friend/i.test(t ?? ''));
+          const why =
+            `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
+            (j ? '' : ' (no game data)');
+          if (rated) return { competitive: true, why };
+          return { competitive: !(party || lobby === 'party'), why };
+        })(),
+      );
     return guardCache.get(ctx.token);
   }
 
@@ -1012,7 +1078,9 @@ section.flat .status:empty { display: none; }
   function panel({ id, title, html = '', css = '', pos = { x: 16, y: 120 } }) {
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', id);
-    const front = () => { host.style.zIndex = String(++zTop); };
+    const front = () => {
+      host.style.zIndex = String(++zTop);
+    };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `<style>${BASE_CSS}${css}</style>
@@ -1032,7 +1100,8 @@ section.flat .status:empty { display: none; }
       // A button in the header (close) gets the click, not a drag.
       if (e.target.closest('button')) return;
       const r = host.getBoundingClientRect();
-      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
       head.setPointerCapture(e.pointerId);
       const move = ev => place(ev.clientX - dx, ev.clientY - dy);
       const up = () => {
@@ -1049,15 +1118,21 @@ section.flat .status:empty { display: none; }
       host,
       root,
       $: sel => root.querySelector(sel),
-      show(visible) { host.hidden = !visible; },
+      show(visible) {
+        host.hidden = !visible;
+      },
       front,
       // Pulls the panel back on screen, e.g. after it grew.
       clamp() {
         const r = host.getBoundingClientRect();
         place(r.left, Math.min(r.top, innerHeight - host.offsetHeight - 8));
       },
-      get visible() { return !host.hidden; },
-      destroy() { host.remove(); },
+      get visible() {
+        return !host.hidden;
+      },
+      destroy() {
+        host.remove();
+      },
     };
   }
 
@@ -1111,17 +1186,29 @@ section.flat .status:empty { display: none; }
     const tex = gl.getParameter(param);
     if (!tex) return null;
     return {
-      gl, name, args, url, img, tex, target, key: ggs.tileKey(url),
-      crossOrigin: img.crossOrigin, referrerPolicy: img.referrerPolicy,
+      gl,
+      name,
+      args,
+      url,
+      img,
+      tex,
+      target,
+      key: ggs.tileKey(url),
+      crossOrigin: img.crossOrigin,
+      referrerPolicy: img.referrerPolicy,
       flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
       premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
     };
   }
   function remember(rec) {
     // One record per (texture, face, level, offset). A re-upload replaces the older one.
-    const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name
-      && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
-      && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
+    const same = r =>
+      r.gl === rec.gl &&
+      r.tex === rec.tex &&
+      r.name === rec.name &&
+      r.args[0] === rec.args[0] &&
+      r.args[1] === rec.args[1] &&
+      (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
     if (i >= 0) records.splice(i, 1)[0].stale = true;
     records.push(rec);
@@ -1153,9 +1240,10 @@ section.flat .status:empty { display: none; }
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
     try {
-      const proto = gl instanceof WebGL2RenderingContext
-        ? WebGL2RenderingContext.prototype
-        : WebGLRenderingContext.prototype;
+      const proto =
+        gl instanceof WebGL2RenderingContext
+          ? WebGL2RenderingContext.prototype
+          : WebGLRenderingContext.prototype;
       orig.get(proto)[rec.name].call(gl, ...rec.args, source);
       if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
     } finally {
@@ -1246,7 +1334,13 @@ section.flat .status:empty { display: none; }
       if (r.crossOrigin != null) img.crossOrigin = r.crossOrigin;
       if (r.referrerPolicy) img.referrerPolicy = r.referrerPolicy;
       img.src = r.url;
-      loaded.set(r.url, img.decode().then(() => img, () => null));
+      loaded.set(
+        r.url,
+        img.decode().then(
+          () => img,
+          () => null,
+        ),
+      );
       if (loaded.size > MAX) loaded.delete(loaded.keys().next().value);
     }
     return loaded.get(r.url);
@@ -1259,16 +1353,23 @@ section.flat .status:empty { display: none; }
   function onScreen() {
     const all = records.filter(r => r.key && live(r));
     const pano = all.at(-1)?.key.pano;
-    return all.filter(r => r.key.pano === pano).reverse().sort((a, b) => b.key.z - a.key.z);
+    return all
+      .filter(r => r.key.pano === pano)
+      .reverse()
+      .sort((a, b) => b.key.z - a.key.z);
   }
   // The game's spare time between frames, or short timer slices without idle callbacks.
-  const idle = () => new Promise(res => (window.requestIdleCallback
-    ? requestIdleCallback(res, { timeout: 100 })
-    : setTimeout(() => res({ timeRemaining: () => 8 }))));
+  const idle = () =>
+    new Promise(res =>
+      window.requestIdleCallback
+        ? requestIdleCallback(res, { timeout: 100 })
+        : setTimeout(() => res({ timeRemaining: () => 8 })),
+    );
   // prerender(fn(img, key) -> source) -> { ready(), get(url), cancel() }
   function prerender(fn) {
     const out = new Map();
-    let stopped = false, done = false;
+    let stopped = false;
+    let done = false;
     (async () => {
       const list = onScreen();
       // Fetched together, drawn one by one.
@@ -1306,11 +1407,13 @@ section.flat .status:empty { display: none; }
   // replay of hundreds of tiles never holds up the game's frames or a click. A repaint now and
   // then shows the ones done. A newer replay stops the running one. Records it hadn't reached
   // are still live, so the new one picks them up.
-  const SLICE = 8, PIXELS = 8 * 512 * 512;
-  const nextFrame = () => new Promise(r => (document.hidden
-    ? setTimeout(r)
-    : requestAnimationFrame(() => setTimeout(r))));
-  let scheduled = null, current = null, painting = null;
+  const SLICE = 8;
+  const PIXELS = 8 * 512 * 512;
+  const nextFrame = () =>
+    new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  let scheduled = null;
+  let current = null;
+  let painting = null;
   const showSoFar = () => {
     painting ??= repaint().finally(() => {
       painting = null;
@@ -1321,14 +1424,17 @@ section.flat .status:empty { display: none; }
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
       if (current) current.stopped = true;
-      const run = current = { stopped: false };
+      const run = (current = { stopped: false });
       const old = records.filter(live).reverse();
       const ready = new Set(loaded.keys());
       const first = old.filter(r => ready.has(r.url));
       const rest = old.filter(r => !ready.has(r.url));
       // Fetched together, put up one by one.
       rest.forEach(load);
-      let n = 0, spent = 0, pixels = 0, shown = performance.now();
+      let n = 0;
+      let spent = 0;
+      let pixels = 0;
+      let shown = performance.now();
       for (const [i, r] of [...first, ...rest].entries()) {
         // The loaded ones are up. The rest may take a while.
         if (i === first.length && n) showSoFar();
@@ -1395,9 +1501,7 @@ section.flat .status:empty { display: none; }
   function clientId() {
     let id = ggs.store.get('ggs-client');
     if (!id) {
-      id = [...crypto.getRandomValues(new Uint8Array(12))]
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+      id = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
       ggs.store.set('ggs-client', id);
     }
     return id;
@@ -1421,17 +1525,20 @@ section.flat .status:empty { display: none; }
   const keyOf = id => `${id}/${active.style}/${modeOf(active.cfg)}`;
 
   // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
-  const meta = new Map(), metaSync = new Map();
+  const meta = new Map();
+  const metaSync = new Map();
   function panoMeta(id) {
     if (!meta.has(id)) {
-      meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-        .then(({ data }) => {
+      meta.set(
+        id,
+        new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
           const worldWidth = data.tiles.worldSize.width;
           const tileWidth = data.tiles.tileSize.width;
           const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
           metaSync.set(id, m);
           return m;
-        }));
+        }),
+      );
     }
     return meta.get(id);
   }
@@ -1440,7 +1547,8 @@ section.flat .status:empty { display: none; }
   // `${panoId}/${style}/${mode}` -> { image, pending: [uploads waiting], error, ctrl, mode, t0 }
   const gens = new Map();
   // active is { id, style, label, cfg } while a script is on.
-  let active = null, overlay = null;
+  let active = null;
+  let overlay = null;
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
   function shownPano() {
@@ -1459,7 +1567,8 @@ section.flat .status:empty { display: none; }
   const SETTLE = 800;
   // panoId -> [{ rec, img, tw, th }]
   const waitingPanos = new Map();
-  let settleTimer = null, latestPano = null;
+  let settleTimer = null;
+  let latestPano = null;
   function waitFor(id, entry) {
     if (!waitingPanos.has(id)) waitingPanos.set(id, []);
     // The bar shows from the first blue tile.
@@ -1501,10 +1610,12 @@ section.flat .status:empty { display: none; }
   // is the truth. A copy is kept here so a round isn't started once today's limit is used up.
   // Generations in flight are added on top until the server's answer, which includes them,
   // replaces the copy. So nothing is counted twice.
-  const DAY = 24 * 3600 * 1000, QKEY = 'ggs-minecraft-quota';
+  const DAY = 24 * 3600 * 1000;
+  const QKEY = 'ggs-minecraft-quota';
   const Q = {
     tidy(log, other) {
-      const now = Date.now(), out = {};
+      const now = Date.now();
+      const out = {};
       for (const k of ['normal', 'hq']) {
         const all = new Set([...(log?.[k] ?? []), ...(other?.[k] ?? [])].filter(t => now - t < DAY));
         out[k] = [...all].sort((a, b) => a - b);
@@ -1520,14 +1631,18 @@ section.flat .status:empty { display: none; }
       return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
     },
   };
-  let serverLog = {}, log = {}, caps = { normal: 100, hq: 10 }, limitShownFor = null;
+  let serverLog = {};
+  let log = {};
+  let caps = { normal: 100, hq: 10 };
+  let limitShownFor = null;
   // t0 of generations the server hasn't answered yet.
   const inFlight = { normal: [], hq: [] };
   function saveLog(fromServer) {
     if (fromServer) serverLog = Q.tidy(fromServer);
     log = Q.tidy(serverLog, inFlight);
     ggs.store.set(QKEY, serverLog);
-    const part = (label, x) => (x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`);
+    const part = (label, x) =>
+      x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`;
     if (!active) return;
     const normal = part('rounds', Q.left(log, 'normal', caps.normal));
     const hq = part('high quality', Q.left(log, 'hq', caps.hq));
@@ -1553,7 +1668,10 @@ section.flat .status:empty { display: none; }
       tiles: ggs.tiles.count(),
       ...stats,
       gens: [...gens].map(([id, g]) => ({
-        id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null,
+        id,
+        image: !!g.image,
+        pending: g.pending.length,
+        error: g.error?.message ?? null,
       })),
     }),
   };
@@ -1623,14 +1741,19 @@ section.flat .status:empty { display: none; }
 
   // Crop of the generated picture for tile x,y at this zoom.
   function crop(g, m, x, y, zoom, tw, th) {
-    const W = widthAt(m, zoom), H = Math.ceil(W / 2), img = g.image;
-    const sx = (x * tw / W) * img.width, sy = (y * th / H) * img.height;
+    const W = widthAt(m, zoom);
+    const H = Math.ceil(W / 2);
+    const img = g.image;
+    const sx = ((x * tw) / W) * img.width;
+    const sy = ((y * th) / H) * img.height;
     const sw = Math.min(img.width - sx, (tw / W) * img.width);
     const sh = Math.min(img.height - sy, (th / H) * img.height);
-    const c = new OffscreenCanvas(tw, th), ctx = c.getContext('2d');
+    const c = new OffscreenCanvas(tw, th);
+    const ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     if (sw > 0 && sh > 0) {
-      const dw = tw * sw / ((tw / W) * img.width), dh = th * sh / ((th / H) * img.height);
+      const dw = (tw * sw) / ((tw / W) * img.width);
+      const dh = (th * sh) / ((th / H) * img.height);
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
     }
     return c;
@@ -1642,9 +1765,12 @@ section.flat .status:empty { display: none; }
   ggs.tiles.filter((rec, source) => {
     stats.uploads++;
     if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
-    const k = rec.key, img = source;
+    const k = rec.key;
+    const img = source;
     stats.tiles++;
-    const id = k.pano, mode = modeOf(active.cfg), gkey = `${id}/${active.style}/${mode}`;
+    const id = k.pano;
+    const mode = modeOf(active.cfg);
+    const gkey = `${id}/${active.style}/${mode}`;
     if (!gens.has(gkey) && !allowed(mode)) {
       if (limitShownFor !== id) {
         limitShownFor = id;
@@ -1654,7 +1780,8 @@ section.flat .status:empty { display: none; }
       }
       return img;
     }
-    const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
+    const tw = img.naturalWidth || 512;
+    const th = img.naturalHeight || 512;
     const g = gens.get(gkey);
     if (!g) {
       waitFor(id, { rec, img, tw, th });
@@ -1713,7 +1840,9 @@ section.flat .status:empty { display: none; }
   // The bar belongs to the latest generation started (`owner`). An older one finishing or
   // failing later leaves it alone. hideTimer is the fade-out after one finished, cancelled
   // when the next one starts.
-  let progressTimer = null, owner = null, hideTimer = null;
+  let progressTimer = null;
+  let owner = null;
+  let hideTimer = null;
   function progressStart(seconds, key, t0 = Date.now()) {
     // Already showing this one.
     if (!overlay || key === owner) return;
@@ -1741,9 +1870,12 @@ section.flat .status:empty { display: none; }
       overlay.text.textContent = 'Could not redraw this round';
     }
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      if (overlay) delete overlay.host.dataset.on;
-    }, failed ? 4000 : 400);
+    hideTimer = setTimeout(
+      () => {
+        if (overlay) delete overlay.host.dataset.on;
+      },
+      failed ? 4000 : 400,
+    );
   }
   function progressHide() {
     owner = null;
@@ -1783,7 +1915,9 @@ section.flat .status:empty { display: none; }
   // Starts a generation ahead for the panorama on screen. Returns { ready(), failed(), cancel() },
   // or null when there's nothing to start (no panorama, today's limit used).
   function prepare(style, cfg) {
-    const id = shownPano(), mode = modeOf(cfg), key = `${id}/${style}/${mode}`;
+    const id = shownPano();
+    const mode = modeOf(cfg);
+    const key = `${id}/${style}/${mode}`;
     if (active || !id || !allowed(mode)) return null;
     const g = generation(id, style, mode);
     return {
@@ -1802,8 +1936,9 @@ section.flat .status:empty { display: none; }
     active = { id, style, label, cfg };
     const host = document.createElement('div');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>`
-      + '<div class="bar"><div class="fill"></div></div></div>';
+    root.innerHTML =
+      `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
+      '<div class="bar"><div class="fill"></div></div></div>';
     document.body.append(host);
     overlay = {
       host,
@@ -1815,7 +1950,8 @@ section.flat .status:empty { display: none; }
     // left running by switching off and on) gets the bar from when it started. The tiles go
     // through at once on the local copy of today's limits. The server checks them anyway,
     // and its answer comes in behind.
-    const key = keyOf(shownPano()), g = gens.get(key);
+    const key = keyOf(shownPano());
+    const g = gens.get(key);
     if (g && !g.image && !g.error) progressStart(etaOf(style, g.mode), key, g.t0);
     loadQuota();
     ggs.tiles.replay();
@@ -1880,18 +2016,32 @@ section.flat .status:empty { display: none; }
     .status:empty { display: none; }`;
   const MARGIN = 16;
   // Small until hovered, like GeoGuessr's map.
-  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600;
-  const RETRY_MS = 500, TRIES = 10;
+  const COLLAPSED_W = 320;
+  const COLLAPSE_DELAY = 600;
+  const RETRY_MS = 500;
+  const TRIES = 10;
   // The guess map gone this long means a result screen, so the board clears.
   const AWAY_MS = 1500;
 
   ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
-    let host = null, frame, statusEl, ready = false, queued = [];
-    let expanded = false, collapseTimer = 0, pressTimer = 0, boardH = 0;
-    let wasInRound = false, awaySince = 0, placed = false, answerRound, lastGuess = null;
+    let host = null;
+    let frame;
+    let statusEl;
+    let ready = false;
+    const queued = [];
+    let expanded = false;
+    let collapseTimer = 0;
+    let pressTimer = 0;
+    let boardH = 0;
+    let wasInRound = false;
+    let awaySince = 0;
+    let placed = false;
+    let answerRound;
+    let lastGuess = null;
     // Where the board sits. Measured once per round and window size.
-    let spot = null, spotKey = '';
+    let spot = null;
+    let spotKey = '';
 
     const hideMap = document.createElement('style');
     hideMap.textContent = HIDE_MAP_CSS;
@@ -2014,9 +2164,11 @@ section.flat .status:empty { display: none; }
       if (round === answerRound) return;
       answerRound = round;
       post({ ggs: 'answer', lat: null });
-      ggs.game.roundLocation()
-        .then(loc => loc && ggs.game.roundKey() === round
-          && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
+      ggs.game
+        .roundLocation()
+        .then(
+          loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }),
+        )
         .catch(() => {});
     }
 
@@ -2042,8 +2194,13 @@ section.flat .status:empty { display: none; }
     }, 500);
 
     return {
-      post, place, press, status,
-      get created() { return !!host; },
+      post,
+      place,
+      press,
+      status,
+      get created() {
+        return !!host;
+      },
       stop() {
         clearInterval(tick);
         clearTimeout(collapseTimer);
@@ -2085,7 +2242,8 @@ section.flat .status:empty { display: none; }
 // player's own pins. It's never drawn itself.
 (() => {
   const ggs = globalThis.__ggs;
-  const KM_PER_DEG = 111.32, EARTH_KM = 6371;
+  const KM_PER_DEG = 111.32;
+  const EARTH_KM = 6371;
   // km. The band sliders' marks, then the hemisphere.
   const BANDS = [0, 5, 25, 50, 100, 500, 1000, 2500];
   // km. The radius slider's first marks.
@@ -2093,14 +2251,21 @@ section.flat .status:empty { display: none; }
   const RING_PX = 9;
   // Not clickable, so clicks still reach the map to place the guess.
   const STYLE = {
-    strokeColor: '#2b8a3e', strokeOpacity: .9, strokeWeight: 2, fillColor: '#40c057', fillOpacity: .3,
-    clickable: false, zIndex: 1,
+    strokeColor: '#2b8a3e',
+    strokeOpacity: 0.9,
+    strokeWeight: 2,
+    fillColor: '#40c057',
+    fillOpacity: 0.3,
+    clickable: false,
+    zIndex: 1,
   };
   // Notes from every script stack in one corner of the map.
-  const NOTES_CSS = 'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;'
-    + 'align-items:flex-start;gap:6px;pointer-events:none;';
-  const NOTE_CSS = 'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;'
-    + 'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
+  const NOTES_CSS =
+    'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;' +
+    'align-items:flex-start;gap:6px;pointer-events:none;';
+  const NOTE_CSS =
+    'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;' +
+    'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
   function notesIn(div) {
     let box = div.querySelector(':scope > [data-ggs-notes]');
     if (!box) {
@@ -2131,10 +2296,12 @@ section.flat .status:empty { display: none; }
   // Widths are km along the axis. For longitude that's at the equator, so a band's width
   // can't give the latitude away.
   function band(x, rand, index, half) {
-    let lo = x < 0 ? -half : 0, hi = lo + half;
+    let lo = x < 0 ? -half : 0;
+    let hi = lo + half;
     for (let i = BANDS.length - 1; i >= index; i--) {
       const w = BANDS[i] / KM_PER_DEG;
-      const min = Math.max(lo, x - w), max = Math.min(hi - w, x);
+      const min = Math.max(lo, x - w);
+      const max = Math.min(hi - w, x);
       lo = min + rand() * (max - min);
       hi = lo + w;
     }
@@ -2145,17 +2312,20 @@ section.flat .status:empty { display: none; }
   // close enough to the bigger circle's centre to sit inside it. Offsets are km east and north.
   // If 50 tries miss, the point on the line from the bigger centre towards the location fits.
   function circle(loc, rand, index) {
-    let c = [0, 0], room = Infinity;
+    let c = [0, 0];
+    let room = Infinity;
     for (let i = RADII.length - 1; i >= index; i--) {
       const r = 0.95 * RADII[i];
       let p = null;
       for (let t = 0; t < 50 && !p; t++) {
-        const d = r * Math.sqrt(rand()), a = 2 * Math.PI * rand();
+        const d = r * Math.sqrt(rand());
+        const a = 2 * Math.PI * rand();
         const q = [d * Math.sin(a), d * Math.cos(a)];
         if (Math.hypot(q[0] - c[0], q[1] - c[1]) <= room) p = q;
       }
       if (!p) {
-        const d = Math.hypot(...c), k = Math.max(0, 1 - room / d);
+        const d = Math.hypot(...c);
+        const k = Math.max(0, 1 - room / d);
         p = [c[0] * k, c[1] * k];
       }
       c = p;
@@ -2170,46 +2340,63 @@ section.flat .status:empty { display: none; }
     const out = [];
     for (let x = w; x < e; x += 90) {
       const x2 = Math.min(e, x + 90);
-      const paths = [{ lat: s, lng: x }, { lat: n, lng: x }, { lat: n, lng: x2 }, { lat: s, lng: x2 }];
+      const paths = [
+        { lat: s, lng: x },
+        { lat: n, lng: x },
+        { lat: n, lng: x2 },
+        { lat: s, lng: x2 },
+      ];
       out.push({ type: 'Polygon', strokeWeight: 0, paths });
     }
     return out;
   }
   const latLine = lat => ({ type: 'Polyline', path: [-180, -90, 0, 90, 180].map(lng => ({ lat, lng })) });
-  const lngLine = lng => ({ type: 'Polyline', path: [{ lat: -85, lng }, { lat: 85, lng }] });
+  const lngLine = lng => ({
+    type: 'Polyline',
+    path: [
+      { lat: -85, lng },
+      { lat: 85, lng },
+    ],
+  });
 
   // The point km away from a spot along a bearing (radians from north), on a sphere.
   function destination({ lat, lng }, km, bearing) {
-    const rad = Math.PI / 180, d = km / EARTH_KM, p1 = lat * rad;
+    const rad = Math.PI / 180;
+    const d = km / EARTH_KM;
+    const p1 = lat * rad;
     const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(bearing));
-    const l2 = lng * rad + Math.atan2(Math.sin(bearing) * Math.sin(d) * Math.cos(p1),
-      Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    const l2 =
+      lng * rad +
+      Math.atan2(Math.sin(bearing) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
     return { lat: p2 / rad, lng: ((l2 / rad + 540) % 360) - 180 };
   }
 
   // Great-circle distance in km.
   function distance(a, b) {
     const rad = Math.PI / 180;
-    const h = Math.sin((b.lat - a.lat) * rad / 2) ** 2
-      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin((b.lng - a.lng) * rad / 2) ** 2;
+    const h =
+      Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
     return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
   // Country outlines from draw-guess's geo.json (code -> [[outer ring, ...holes], ...] in
   // [lng, lat]). Fetched once, the first time a script asks.
   let geo = null;
-  const loadGeo = () => (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
-    .then(r => r.json())
-    .catch(err => {
-      geo = null;
-      throw err;
-    }));
+  const loadGeo = () =>
+    (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
+      .then(r => r.json())
+      .catch(err => {
+        geo = null;
+        throw err;
+      }));
 
   function inside([x, y], ring) {
     let hit = false;
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i], [xj, yj] = ring[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
     }
     return hit;
   }
@@ -2217,12 +2404,16 @@ section.flat .status:empty { display: none; }
   // Failing that, with `near`, the nearest vertex within ~1.5 degrees. That catches coastal
   // roads outside the simplified coastlines.
   function countryAt(geo, { lat, lng }, { near: useNear = true } = {}) {
-    let best = null, bestArea = Infinity, near = null, nearD = 1.5 ** 2;
-    const k = Math.cos(lat * Math.PI / 180);
+    let best = null;
+    let bestArea = Infinity;
+    let near = null;
+    let nearD = 1.5 ** 2;
+    const k = Math.cos((lat * Math.PI) / 180);
     for (const [code, polys] of Object.entries(geo)) {
       for (const [outer, ...holes] of polys) {
         if (inside([lng, lat], outer) && !holes.some(h => inside([lng, lat], h))) {
-          const xs = outer.map(p => p[0]), ys = outer.map(p => p[1]);
+          const xs = outer.map(p => p[0]);
+          const ys = outer.map(p => p[1]);
           const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
           if (area < bestArea) {
             bestArea = area;
@@ -2248,17 +2439,20 @@ section.flat .status:empty { display: none; }
     return specs.some(s => {
       if (s.type === 'Circle') return distance(s.center, p) <= s.radius / 1000;
       if (s.type !== 'Polygon') return false;
-      const rings = (s.paths[0]?.lat === undefined ? s.paths : [s.paths])
-        .map(r => r.map(q => [q.lng, q.lat]));
-      return [p.lng, p.lng - 360, p.lng + 360]
-        .some(x => rings.filter(r => inside([x, p.lat], r)).length % 2 === 1);
+      const rings = (s.paths[0]?.lat === undefined ? s.paths : [s.paths]).map(r =>
+        r.map(q => [q.lng, q.lat]),
+      );
+      return [p.lng, p.lng - 360, p.lng + 360].some(
+        x => rings.filter(r => inside([x, p.lat], r)).length % 2 === 1,
+      );
     });
   }
 
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
   const guessHooks = new Set();
-  let passing = false, swallowUp = false;
+  let passing = false;
+  let swallowUp = false;
   function onPress(e) {
     if (passing || !guessHooks.size) return;
     if (e.type === 'keyup') {
@@ -2268,11 +2462,13 @@ section.flat .status:empty { display: none; }
       }
       return;
     }
-    const isPress = e.type === 'keydown'
-      ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
-      : !!ggs.maps.guessButton()?.contains(e.target);
+    const isPress =
+      e.type === 'keydown'
+        ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
+        : !!ggs.maps.guessButton()?.contains(e.target);
     if (!isPress) return;
-    let p = null, block = false;
+    let p = null;
+    let block = false;
     for (const fn of guessHooks) {
       const r = fn();
       if (r === false) block = true;
@@ -2302,19 +2498,28 @@ section.flat .status:empty { display: none; }
   const guessed = () => {
     if (ggs.maps.lastGuess()) owners.forEach(fn => fn());
   };
-  window.addEventListener('click', e => {
-    if (ggs.maps.guessButton()?.contains(e.target)) guessed();
-  }, true);
-  window.addEventListener('keydown', e => {
-    if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.guessMapElement()) guessed();
-  }, true);
+  window.addEventListener(
+    'click',
+    e => {
+      if (ggs.maps.guessButton()?.contains(e.target)) guessed();
+    },
+    true,
+  );
+  window.addEventListener(
+    'keydown',
+    e => {
+      if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.guessMapElement()) guessed();
+    },
+    true,
+  );
 
   // Lying (an aid with `lies`): each round there's a 50% chance it works from a made-up spot
   // instead of the real one. The coin and the spots are seeded like the shapes, so a reload
   // doesn't flip them. Made-up spots are points on random countries' outlines. For aids that
   // draw shapes, the first spot whose shapes leave the real location out is used.
   async function fakes(rand) {
-    const geo = await loadGeo(), codes = Object.keys(geo).sort();
+    const geo = await loadGeo();
+    const codes = Object.keys(geo).sort();
     const pick = list => list[Math.floor(rand() * list.length)];
     return Array.from({ length: 20 }, () => {
       const [lng, lat] = pick(pick(pick(geo[pick(codes)])));
@@ -2324,8 +2529,19 @@ section.flat .status:empty { display: none; }
 
   ggs.aid = (id, hooks) => ({
     start(cfg) {
-      let map = null, round = null, real = null, loc = null, lying = null, lies = null, stopped = false;
-      let shapes = [], shapesKey = '', extras = [], listener = null, note = null, detach = null;
+      let map = null;
+      let round = null;
+      let real = null;
+      let loc = null;
+      let lying = null;
+      let lies = null;
+      let stopped = false;
+      const shapes = [];
+      let shapesKey = '';
+      let extras = [];
+      let listener = null;
+      let note = null;
+      let detach = null;
       const gm = () => window.google.maps;
       const colour = () => (typeof hooks.colour === 'function' ? hooks.colour(ctx) : hooks.colour);
       const look = () => {
@@ -2339,10 +2555,18 @@ section.flat .status:empty { display: none; }
       };
       const seed = (what, p) => seeded(`${id}|${what}|${ggs.game.context()?.token}|${p?.lat}|${p?.lng}`);
       const ctx = {
-        get cfg() { return cfg; },
-        get map() { return map; },
-        get loc() { return loc; },
-        get gm() { return gm(); },
+        get cfg() {
+          return cfg;
+        },
+        get map() {
+          return map;
+        },
+        get loc() {
+          return loc;
+        },
+        get gm() {
+          return gm();
+        },
         rand: () => seed('shape', loc),
         pick: () => seed('pick', real),
         // Takes a spec or a ready-made overlay.
@@ -2376,7 +2600,8 @@ section.flat .status:empty { display: none; }
       // The key for a coloured hint: its name on its colour.
       const name = () => hooks.name?.(ctx) ?? ggs.registry.find(m => m.id === id)?.name ?? id;
       // owned is the round whose lie was owned up to.
-      let goneSince = 0, owned = null;
+      let goneSince = 0;
+      let owned = null;
       function ownUp() {
         if (!lying || !loc || loc === real || !note?.textContent) return;
         owned = round;
@@ -2394,7 +2619,7 @@ section.flat .status:empty { display: none; }
         const z = map?.getZoom();
         for (const o of shapes) {
           if (!o.ring || z == null) continue;
-          const px = o.getRadius() / (156543 * Math.cos(o.getCenter().lat() * Math.PI / 180) / 2 ** z);
+          const px = o.getRadius() / ((156543 * Math.cos((o.getCenter().lat() * Math.PI) / 180)) / 2 ** z);
           o.ring.setVisible(px < RING_PX);
         }
       }
@@ -2461,15 +2686,18 @@ section.flat .status:empty { display: none; }
           loc = lie ? null : real;
           shapesKey = '';
           if (lie) {
-            fakes(seed('fake', real)).then(list => {
-              if (round === key && lying === lie) {
-                lies = list;
-                loc = list[0];
-              }
-            }, () => {
-              // No outlines to lie with, so tell the truth.
-              if (round === key && lying === lie) loc = real;
-            });
+            fakes(seed('fake', real)).then(
+              list => {
+                if (round === key && lying === lie) {
+                  lies = list;
+                  loc = list[0];
+                }
+              },
+              () => {
+                // No outlines to lie with, so tell the truth.
+                if (round === key && lying === lie) loc = real;
+              },
+            );
           }
         }
         // A redraw after the guess put the plain name back.
@@ -2478,27 +2706,34 @@ section.flat .status:empty { display: none; }
         if (!loc || !hooks.shapes || want === shapesKey) return;
         shapesKey = want;
         if (lies) loc = lies[0];
-        draw(want).then(specs => {
-          // The settings or round moved on (or it stopped) while it loaded.
-          if (!specs || shapesKey !== want) return;
-          clear(shapes);
-          shapes.push(...specs.map(make));
-          // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
-          // rings() shows it only while the circle itself is smaller than that.
-          for (const o of [...shapes]) {
-            if (!(o instanceof gm().Circle)) continue;
-            const icon = {
-              path: 0, scale: RING_PX, strokeColor: look().strokeColor, strokeWeight: 3,
-              fillColor: look().fillColor, fillOpacity: .3,
-            };
-            o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
-            shapes.push(o.ring);
-          }
-          rings();
-          if (hooks.colour) label();
-        }, err => {
-          if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
-        });
+        draw(want).then(
+          specs => {
+            // The settings or round moved on (or it stopped) while it loaded.
+            if (!specs || shapesKey !== want) return;
+            clear(shapes);
+            shapes.push(...specs.map(make));
+            // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
+            // rings() shows it only while the circle itself is smaller than that.
+            for (const o of [...shapes]) {
+              if (!(o instanceof gm().Circle)) continue;
+              const icon = {
+                path: 0,
+                scale: RING_PX,
+                strokeColor: look().strokeColor,
+                strokeWeight: 3,
+                fillColor: look().fillColor,
+                fillOpacity: 0.3,
+              };
+              o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
+              shapes.push(o.ring);
+            }
+            rings();
+            if (hooks.colour) label();
+          },
+          err => {
+            if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
+          },
+        );
       }, 300);
 
       return {
@@ -2532,7 +2767,17 @@ section.flat .status:empty { display: none; }
     },
   });
   Object.assign(ggs.aid, {
-    seeded, band, circle, box, latLine, lngLine, destination, distance, loadGeo, countryAt, covers,
+    seeded,
+    band,
+    circle,
+    box,
+    latLine,
+    lngLine,
+    destination,
+    distance,
+    loadGeo,
+    countryAt,
+    covers,
     hints: {},
   });
 })();
@@ -2577,13 +2822,15 @@ section.flat .status:empty { display: none; }
   function panoElement() {
     const map = ggs.maps.guessMapElement();
     const ok = el => el?.isConnected && el.offsetWidth > 0 && !(map && el.contains(map));
-    return [...hooked].reverse().find(ok)
-      ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok)
-      ?? null;
+    return (
+      [...hooked].reverse().find(ok) ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok) ?? null
+    );
   }
   // The picture inside it: Google's .gm-style layer, or its first child that isn't ours.
-  const sceneOf = pano => [...pano.children].find(c => c.classList.contains('gm-style'))
-    ?? [...pano.children].find(c => !c.hasAttribute(HOST)) ?? null;
+  const sceneOf = pano =>
+    [...pano.children].find(c => c.classList.contains('gm-style')) ??
+    [...pano.children].find(c => !c.hasAttribute(HOST)) ??
+    null;
 
   // The guess map's area: the smallest element holding both the map and its Guess button,
   // so the map's own size buttons are in it too. If that is most of the window, the two
@@ -2597,8 +2844,10 @@ section.flat .status:empty { display: none; }
     const r = box?.getBoundingClientRect();
     if (r && r.width * r.height < innerWidth * innerHeight * 0.6) return r;
     const rects = [map, btn].filter(Boolean).map(e => e.getBoundingClientRect());
-    const left = Math.min(...rects.map(q => q.left)), top = Math.min(...rects.map(q => q.top));
-    const right = Math.max(...rects.map(q => q.right)), bottom = Math.max(...rects.map(q => q.bottom));
+    const left = Math.min(...rects.map(q => q.left));
+    const top = Math.min(...rects.map(q => q.top));
+    const right = Math.max(...rects.map(q => q.right));
+    const bottom = Math.max(...rects.map(q => q.bottom));
     return { left, top, right, bottom, width: right - left, height: bottom - top };
   }
 
@@ -2614,14 +2863,22 @@ section.flat .status:empty { display: none; }
   const n = v => Math.round(v * 10) / 10;
   const shape = {
     poly: pts => `M${pts.map(([x, y]) => `${n(x)} ${n(y)}`).join('L')}Z`,
-    circle: (cx, cy, r) => `M${n(cx - r)} ${n(cy)}`
-      + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
+    circle: (cx, cy, r) =>
+      `M${n(cx - r)} ${n(cy)}` + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
     rect(x, y, w, h, r = 0) {
       r = Math.min(r, w / 2, h / 2);
-      if (!r) return shape.poly([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+      if (!r)
+        return shape.poly([
+          [x, y],
+          [x + w, y],
+          [x + w, y + h],
+          [x, y + h],
+        ]);
       const arc = (dx, dy) => `a${n(r)} ${n(r)} 0 0 1 ${n(dx)} ${n(dy)}`;
-      return `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}`
-        + `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`;
+      return (
+        `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}` +
+        `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`
+      );
     },
   };
 
@@ -2650,7 +2907,10 @@ section.flat .status:empty { display: none; }
     }
     const { width: w, height: h } = pano.getBoundingClientRect();
     const all = [...effects.values()];
-    const filter = all.map(e => e.filter).filter(Boolean).join(' ');
+    const filter = all
+      .map(e => e.filter)
+      .filter(Boolean)
+      .join(' ');
     const transform = all
       .map(e => (typeof e.transform === 'function' ? e.transform(now, w, h) : e.transform))
       .filter(Boolean)
@@ -2683,24 +2943,42 @@ section.flat .status:empty { display: none; }
   const LOOKS = {
     // Cream paper with a faint dot grid and an ink edge with a hard shadow, like the popup.
     paper: {
-      paper: '#f5f1e8', dot: 'rgba(28,26,46,.09)', edge: '#1c1a2e', width: 3, shadow: 'rgba(28,26,46,.3)',
+      paper: '#f5f1e8',
+      dot: 'rgba(28,26,46,.09)',
+      edge: '#1c1a2e',
+      width: 3,
+      shadow: 'rgba(28,26,46,.3)',
     },
     // Near-black with a barely-there dot grid and a thin cream edge round the holes.
     night: {
-      paper: '#0b0a12', dot: 'rgba(245,241,232,.06)', edge: 'rgba(245,241,232,.8)', width: 2, shadow: null,
+      paper: '#0b0a12',
+      dot: 'rgba(245,241,232,.06)',
+      edge: 'rgba(245,241,232,.8)',
+      width: 2,
+      shadow: null,
     },
   };
   const BLOCKED = [
-    'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu',
-    'wheel', 'touchstart', 'touchmove',
+    'pointerdown',
+    'pointerup',
+    'mousedown',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'touchstart',
+    'touchmove',
   ];
 
   function mask({ over, look: lookName, cut }) {
-    const look = LOOKS[lookName] ?? LOOKS.paper, screen = over === 'screen';
+    const look = LOOKS[lookName] ?? LOOKS.paper;
+    const screen = over === 'screen';
     const host = document.createElement('div');
     host.setAttribute(HOST, '');
-    host.style.cssText = `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;`
-      + ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
+    host.style.cssText =
+      `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;` +
+      ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
     // Events on the painted sheet stop here, so neither Street View nor GeoGuessr see them.
     for (const type of BLOCKED) host.addEventListener(type, e => e.stopPropagation());
     const root = host.attachShadow({ mode: 'open' });
@@ -2748,7 +3026,9 @@ section.flat .status:empty { display: none; }
           if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
         }
       }
-      const w = host.clientWidth, h = host.clientHeight, holes = cut(w, h);
+      const w = host.clientWidth;
+      const h = host.clientHeight;
+      const holes = cut(w, h);
       host.hidden = holes === null;
       // The outer edge is 20px past the box so its stroke is off screen. Only the holes' edges show.
       const d = holes === null ? '' : `M-20 -20H${w + 20}V${h + 20}H-20Z${holes}`;
@@ -2798,29 +3078,79 @@ section.flat .status:empty { display: none; }
   const key = (k, code, keyCode) => ({ key: k, code, keyCode });
   const SWAP = {
     move: {
-      ArrowUp: key('ArrowDown', 'ArrowDown', 40), ArrowDown: key('ArrowUp', 'ArrowUp', 38),
-      w: key('s', 'KeyS', 83), s: key('w', 'KeyW', 87), W: key('S', 'KeyS', 83), S: key('W', 'KeyW', 87),
+      ArrowUp: key('ArrowDown', 'ArrowDown', 40),
+      ArrowDown: key('ArrowUp', 'ArrowUp', 38),
+      w: key('s', 'KeyS', 83),
+      s: key('w', 'KeyW', 87),
+      W: key('S', 'KeyS', 83),
+      S: key('W', 'KeyW', 87),
     },
     turn: {
-      ArrowLeft: key('ArrowRight', 'ArrowRight', 39), ArrowRight: key('ArrowLeft', 'ArrowLeft', 37),
-      a: key('d', 'KeyD', 68), d: key('a', 'KeyA', 65), A: key('D', 'KeyD', 68), D: key('A', 'KeyA', 65),
+      ArrowLeft: key('ArrowRight', 'ArrowRight', 39),
+      ArrowRight: key('ArrowLeft', 'ArrowLeft', 37),
+      a: key('d', 'KeyD', 68),
+      d: key('a', 'KeyA', 65),
+      A: key('D', 'KeyD', 68),
+      D: key('A', 'KeyA', 65),
     },
     zoom: {
-      '+': key('-', 'Minus', 189), '=': key('-', 'Minus', 189),
-      '-': key('=', 'Equal', 187), '_': key('=', 'Equal', 187),
+      '+': key('-', 'Minus', 189),
+      '=': key('-', 'Minus', 189),
+      '-': key('=', 'Equal', 187),
+      _: key('=', 'Equal', 187),
     },
   };
   // Every event field the copies need. The constructor ignores the ones its type lacks.
   const FIELDS = [
-    'bubbles', 'cancelable', 'composed', 'view', 'detail', 'ctrlKey', 'shiftKey', 'altKey', 'metaKey',
-    'key', 'code', 'location', 'repeat', 'keyCode', 'which', 'charCode',
-    'screenX', 'screenY', 'clientX', 'clientY', 'movementX', 'movementY', 'button', 'buttons', 'relatedTarget',
-    'pointerId', 'pointerType', 'isPrimary', 'width', 'height', 'pressure', 'tiltX', 'tiltY', 'twist',
-    'deltaX', 'deltaY', 'deltaZ', 'deltaMode',
+    'bubbles',
+    'cancelable',
+    'composed',
+    'view',
+    'detail',
+    'ctrlKey',
+    'shiftKey',
+    'altKey',
+    'metaKey',
+    'key',
+    'code',
+    'location',
+    'repeat',
+    'keyCode',
+    'which',
+    'charCode',
+    'screenX',
+    'screenY',
+    'clientX',
+    'clientY',
+    'movementX',
+    'movementY',
+    'button',
+    'buttons',
+    'relatedTarget',
+    'pointerId',
+    'pointerType',
+    'isPrimary',
+    'width',
+    'height',
+    'pressure',
+    'tiltX',
+    'tiltY',
+    'twist',
+    'deltaX',
+    'deltaY',
+    'deltaZ',
+    'deltaMode',
   ];
   const POINTER = [
-    'pointerdown', 'mousedown', 'pointermove', 'mousemove', 'pointerup', 'mouseup', 'pointercancel',
-    'click', 'dblclick',
+    'pointerdown',
+    'mousedown',
+    'pointermove',
+    'mousemove',
+    'pointerup',
+    'mouseup',
+    'pointercancel',
+    'click',
+    'dblclick',
   ];
   // owner -> wanted flips
   const mirrors = new Map();
@@ -2872,7 +3202,8 @@ section.flat .status:empty { display: none; }
   // Click-to-move with `move` flipped. Google's own is off (clickToGo), and a click that wasn't
   // a drag walks to the link pointing furthest from where you clicked.
   // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
-  let pressAt = null, noClickTo = null;
+  let pressAt = null;
+  let noClickTo = null;
   function clickToGo() {
     const p = panoOf.get(panoElement());
     const off = want('move') ? p : null;
@@ -2882,12 +3213,15 @@ section.flat .status:empty { display: none; }
     noClickTo = off;
   }
   function walkBack(x) {
-    const el = panoElement(), p = panoOf.get(el), links = p?.getLinks?.();
+    const el = panoElement();
+    const p = panoOf.get(el);
+    const links = p?.getLinks?.();
     if (!links?.length) return;
-    const r = el.getBoundingClientRect(), pov = p.getPov();
+    const r = el.getBoundingClientRect();
+    const pov = p.getPov();
     const fov = 180 / 2 ** (p.getZoom?.() ?? 1);
     const away = pov.heading + ((x - r.left) / r.width - 0.5) * fov + 180;
-    const off = l => Math.abs(((l.heading - away) % 360 + 540) % 360 - 180);
+    const off = l => Math.abs(((((l.heading - away) % 360) + 540) % 360) - 180);
     p.setPano(links.reduce((a, b) => (off(b) < off(a) ? b : a)).pano);
   }
 
@@ -2913,7 +3247,8 @@ section.flat .status:empty { display: none; }
     const flip = (v, c, on) => (on ? 2 * c - v : v);
     const inPano = onPano(e.target) || from;
     if (!r || !inPano) return;
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
     let x = flip(e.clientX, cx, want('flipX'));
     let y = flip(e.clientY, cy, want('flipY'));
     if (from && !down) {
@@ -2928,13 +3263,18 @@ section.flat .status:empty { display: none; }
         from = null;
       });
     }
-    const dx = x - e.clientX, dy = y - e.clientY;
+    const dx = x - e.clientX;
+    const dy = y - e.clientY;
     if (!dx && !dy) return;
-    const sx = (want('flipX') !== (!!from && want('dragX'))) ? -1 : 1;
-    const sy = (want('flipY') !== (!!from && want('dragY'))) ? -1 : 1;
+    const sx = want('flipX') !== (!!from && want('dragX')) ? -1 : 1;
+    const sy = want('flipY') !== (!!from && want('dragY')) ? -1 : 1;
     resend(e, {
-      clientX: x, clientY: y, screenX: e.screenX + dx, screenY: e.screenY + dy,
-      movementX: sx * e.movementX, movementY: sy * e.movementY,
+      clientX: x,
+      clientY: y,
+      screenX: e.screenX + dx,
+      screenY: e.screenY + dy,
+      movementX: sx * e.movementX,
+      movementY: sy * e.movementY,
     });
   }
   const onBlur = e => {
@@ -2943,7 +3283,10 @@ section.flat .status:empty { display: none; }
     sent.clear();
   };
   const LISTENERS = [
-    ['keydown', onKey], ['keyup', onKey], ['wheel', onWheel], ['blur', onBlur],
+    ['keydown', onKey],
+    ['keyup', onKey],
+    ['wheel', onWheel],
+    ['blur', onBlur],
     ...POINTER.map(t => [t, onPointer]),
   ];
   // Added once, at document_start, so they run before GeoGuessr's and the Maps API's own
@@ -2977,7 +3320,11 @@ section.flat .status:empty { display: none; }
   const ggs = (globalThis.__ggs ??= {});
 
   const SECTIONS = {
-    chaos: 'Chaos mode', guessing: 'Guessing', streetview: 'Street View', misc: 'Misc', controls: 'Controls',
+    chaos: 'Chaos mode',
+    guessing: 'Guessing',
+    streetview: 'Street View',
+    misc: 'Misc',
+    controls: 'Controls',
     ui: 'UI',
   };
   // Sections shown as their card alone, without a fold.
@@ -2997,7 +3344,9 @@ section.flat .status:empty { display: none; }
     let settings = initial;
     const { registry, config } = ggs;
     // hideable: options with a hideIn, hidden by game mode.
-    const statusEls = {}, refreshers = [], hideable = [];
+    const statusEls = {};
+    const refreshers = [];
+    const hideable = [];
     // The page's microphone permission (its '_mic' status line).
     let micState = '';
     const micNotes = [];
@@ -3012,9 +3361,11 @@ section.flat .status:empty { display: none; }
       if (o.type === 'mic') return `<button type="button" class="micnote" hidden>${o.label}</button>`;
       if (o.type === 'text') {
         const type = o.secret ? 'password' : 'text';
-        return `<label class="row"><span class="text">${o.label}</span>
-             <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"`
-          + ' autocomplete="off"></label>';
+        return (
+          `<label class="row"><span class="text">${o.label}</span>
+             <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"` +
+          ' autocomplete="off"></label>'
+        );
       }
       if (o.type === 'select') {
         const choices = o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('');
@@ -3024,10 +3375,12 @@ section.flat .status:empty { display: none; }
       // A label per stop: the stops sit under their labels.
       if (o.type === 'slider' && o.marks?.length === o.max - o.min + 1) {
         const marks = o.marks.map(m => `<span data-t="${m}">${m}</span>`).join('');
-        return `<div class="row slider"><span class="text">${o.label}</span>
-             <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">`
-          + `<span class="track"><i></i><b></b></span>
-             <span class="marks">${marks}</span></span></div>`;
+        return (
+          `<div class="row slider"><span class="text">${o.label}</span>
+             <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">` +
+          `<span class="track"><i></i><b></b></span>
+             <span class="marks">${marks}</span></span></div>`
+        );
       }
       if (o.type === 'slider') {
         return `<label class="row slider"><span class="text">${o.label}${o.steps ? ': <b class="val"></b>' : ''}</span>
@@ -3036,8 +3389,10 @@ section.flat .status:empty { display: none; }
       }
       // One of a few, as a row of buttons.
       if (o.type === 'buttons') {
-        const buttons = o.choices.map(c =>
-          `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`);
+        const buttons = o.choices.map(
+          c =>
+            `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`,
+        );
         return `<div class="row boxes">${buttons.join('')}</div>`;
       }
       return `<button type="button" class="tog opt" data-key="${o.key}">${o.label}</button>`;
@@ -3049,14 +3404,21 @@ section.flat .status:empty { display: none; }
       return `<span class="marks">${ends.map(m => `<span>${m}</span>`).join('')}</span>`;
     }
     // Checkboxes are buttons that light up. Side-by-side ones share a row.
-    const options = list => list.map(option).join('')
-      .replace(/(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
-        row => `<div class="row boxes">${row}</div>`);
+    const options = list =>
+      list
+        .map(option)
+        .join('')
+        .replace(
+          /(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
+          row => `<div class="row boxes">${row}</div>`,
+        );
 
     // Metas sharing a `group` render inside one card, each as a .part. The card is off when
     // none of its parts is enabled.
-    const groups = {}, parts = {};
-    const reflect = (card, metas) => card.classList.toggle('off', !metas.some(m => config(m, settings).enabled));
+    const groups = {};
+    const parts = {};
+    const reflect = (card, metas) =>
+      card.classList.toggle('off', !metas.some(m => config(m, settings).enabled));
     // A flat script is on while any of its options is.
     const setFlat = (meta, key, value) => {
       const cfg = config(meta, settings);
@@ -3072,9 +3434,13 @@ section.flat .status:empty { display: none; }
     // that still have some. The suggestions are the scripts' names.
     const search = document.createElement('div');
     search.className = 'search';
-    const names = registry.filter(m => !m.flat).map(m => `<option value="${m.name}">`).join('');
-    search.innerHTML = '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"'
-      + ` list="ggs-names" autocomplete="off">
+    const names = registry
+      .filter(m => !m.flat)
+      .map(m => `<option value="${m.name}">`)
+      .join('');
+    search.innerHTML =
+      '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
+      ` list="ggs-names" autocomplete="off">
       <datalist id="ggs-names">${names}</datalist>`;
     container.append(search);
 
@@ -3097,8 +3463,9 @@ section.flat .status:empty { display: none; }
       el.className = 'sec';
       el.dataset.section = key;
       el.open = opened()[key] ?? metas.some(m => config(m, initial).enabled);
-      el.innerHTML = `<summary><span class="title">${title}</span><span class="count"></span></summary>`
-        + '<div class="cards"></div>';
+      el.innerHTML =
+        `<summary><span class="title">${title}</span><span class="count"></span></summary>` +
+        '<div class="cards"></div>';
       // A click, not 'toggle', which also fires for the default set just above.
       el.querySelector('summary').addEventListener('click', () => {
         try {
@@ -3152,7 +3519,8 @@ section.flat .status:empty { display: none; }
     // label's centre, so the stops aren't evenly spaced. The end ones sit at the track's ends,
     // thumb flush with the edge like a native range. Click, drag or arrow keys pick one.
     function stops(el, meta, opt) {
-      const key = el.dataset.key, labels = [...el.querySelectorAll('.marks span')];
+      const key = el.dataset.key;
+      const labels = [...el.querySelectorAll('.marks span')];
       let value = config(meta, settings)[key];
       // Half the thumb's width.
       const THUMB = 8;
@@ -3179,7 +3547,8 @@ section.flat .status:empty { display: none; }
         refreshers.forEach(fn => fn());
       };
       const at = e => {
-        const x = e.clientX - el.getBoundingClientRect().left, c = centres();
+        const x = e.clientX - el.getBoundingClientRect().left;
+        const c = centres();
         const nearest = c.reduce((best, cx, i) => (Math.abs(cx - x) < Math.abs(c[best] - x) ? i : best), 0);
         set(opt.min + nearest);
       };
@@ -3233,8 +3602,8 @@ section.flat .status:empty { display: none; }
         </div><div class="status"></div>`;
       } else {
         const more = meta.options.some(o => o.hidden)
-          ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>`
-            + `${options(meta.options.filter(o => o.hidden))}</details>`
+          ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>` +
+            `${options(meta.options.filter(o => o.hidden))}</details>`
           : '';
         part.innerHTML = `
         <label class="row">
@@ -3257,9 +3626,11 @@ section.flat .status:empty { display: none; }
       }
       // Option buttons: a checkbox flips, or one of a 'buttons' choice is picked.
       for (const btn of part.querySelectorAll('button.opt')) {
-        const key = btn.dataset.key, pick = btn.dataset.value;
+        const key = btn.dataset.key;
+        const pick = btn.dataset.value;
         const value = () => config(meta, settings)[key];
-        const show = () => btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
+        const show = () =>
+          btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
         show();
         refreshers.push(show);
         btn.addEventListener('click', () => {
@@ -3279,10 +3650,16 @@ section.flat .status:empty { display: none; }
         if (el) hideable.push({ el, hideIn: o.hideIn });
       }
       for (const el of part.querySelectorAll('.stops[data-key]')) {
-        stops(el, meta, meta.options.find(o => o.key === el.dataset.key));
+        stops(
+          el,
+          meta,
+          meta.options.find(o => o.key === el.dataset.key),
+        );
       }
       for (const box of part.querySelectorAll('input[data-key], select[data-key]')) {
-        const key = box.dataset.key, range = box.type === 'range', select = box.tagName === 'SELECT';
+        const key = box.dataset.key;
+        const range = box.type === 'range';
+        const select = box.tagName === 'SELECT';
         const text = box.type === 'text' || box.type === 'password';
         const opt = meta.options.find(o => o.key === key);
         const show = () => {
@@ -3300,14 +3677,17 @@ section.flat .status:empty { display: none; }
           // Microphone blocked, so it stays off.
           if (key === 'enabled' && value && meta.mic && micState === 'denied') {
             box.checked = false;
-            statusEls[meta.id].textContent = 'Microphone blocked: allow it for geoguessr.com from the address bar';
+            statusEls[meta.id].textContent =
+              'Microphone blocked: allow it for geoguessr.com from the address bar';
             return;
           }
           settings[meta.id] = { ...settings[meta.id], [key]: value };
           save(meta.id, key, value);
           if (key === 'enabled' && value) {
             // Switching this one on switches off the scripts it can't run beside...
-            const clashes = registry.filter(m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id));
+            const clashes = registry.filter(
+              m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id),
+            );
             for (const ex of clashes) {
               if (!config(ex, settings).enabled) continue;
               settings[ex.id] = { ...settings[ex.id], enabled: false };
@@ -3326,7 +3706,8 @@ section.flat .status:empty { display: none; }
 
     // While Chaos mode is on it picks the other scripts itself, so their sections are greyed out.
     const chaos = byId.chaos;
-    if (chaos) refreshers.push(() => container.classList.toggle('chaos-on', !!config(chaos, settings).enabled));
+    if (chaos)
+      refreshers.push(() => container.classList.toggle('chaos-on', !!config(chaos, settings).enabled));
 
     const box = search.querySelector('input');
     // The sections' open state before the search, put back when it's cleared.
@@ -3352,7 +3733,8 @@ section.flat .status:empty { display: none; }
       if (!q) openBefore = null;
       // A suggestion picked whole: bring its card into view.
       const exact = registry.find(m => m.name.toLowerCase() === q);
-      if (exact) container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
+      if (exact)
+        container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
     });
 
     // Fills in the section counts.
@@ -3383,7 +3765,10 @@ section.flat .status:empty { display: none; }
 // usual "settings" message. settings.panel.hideTab hides the tab for recording.
 (() => {
   const ggs = globalThis.__ggs;
-  let panel = null, form = null, tab = null, settings = null;
+  let panel = null;
+  let form = null;
+  let tab = null;
+  let settings = null;
 
   const save = () => window.postMessage({ ggs: 'save', settings }, location.origin);
   // Uses display, not the hidden attribute, which the tab's inline `all: initial` would beat.
@@ -3398,17 +3783,21 @@ section.flat .status:empty { display: none; }
     }
     if (!settings) return;
     // The popup's stylesheet, inlined by the userscript build or fetched from the extension.
-    const css = ggs.panelCss
-      ?? await fetch(ggs.extBase + 'popup/popup.css').then(r => r.text()).catch(() => '');
+    const css =
+      ggs.panelCss ??
+      (await fetch(ggs.extBase + 'popup/popup.css')
+        .then(r => r.text())
+        .catch(() => ''));
     // Opened twice while the fetch was out.
     if (panel) {
       panel.show(true);
       return;
     }
     // Same look as the popup, with its header (logo and title) as the drag bar.
-    const paper = 'color: #1c1a2e; background-color: #f5f1e8;'
-      + ' background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px);'
-      + ' background-size: 22px 22px; background-position: 11px 11px;';
+    const paper =
+      'color: #1c1a2e; background-color: #f5f1e8;' +
+      ' background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px);' +
+      ' background-size: 22px 22px; background-position: 11px 11px;';
     panel = ggs.ui.panel({
       id: 'settings',
       title: `<img src="${ggs.extBase}icons/icon-128.png" alt=""><h1>Orlando's GeoGuessr Scripts</h1>`,
@@ -3430,7 +3819,9 @@ section.flat .status:empty { display: none; }
       .close:hover { background: rgba(28, 26, 46, .15); }`,
       html: '<div class="scroll"></div>',
     });
-    panel.$('.head').insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
+    panel
+      .$('.head')
+      .insertAdjacentHTML('beforeend', '<button class="close" title="Close (Alt+O)">✕</button>');
     panel.$('.close').addEventListener('click', () => panel.show(false));
     form = ggs.settingsForm(panel.$('.scroll'), { settings, save });
     ggs.onStatus((id, text) => form.setStatus(id, text));
@@ -3452,10 +3843,11 @@ section.flat .status:empty { display: none; }
     tab.textContent = 'OGGS';
     tab.title = 'OGGS settings (Alt+O, Option+O on a Mac)';
     // Bottom-left corner, over the Street View "Google" mark.
-    tab.style.cssText = 'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000;'
-      + ' padding: 6px 10px 6px 8px; border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e;'
-      + ' font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;'
-      + ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
+    tab.style.cssText =
+      'all: initial; position: fixed; left: 0; bottom: 6px; z-index: 2147483000;' +
+      ' padding: 6px 10px 6px 8px; border-radius: 0 8px 8px 0; background: #fecd19; color: #1c1a2e;' +
+      ' font: 800 11px/1 system-ui, sans-serif; letter-spacing: .04em;' +
+      ' cursor: pointer; box-shadow: 3px 3px 0 #1c1a2e; opacity: .85;';
     tab.addEventListener('click', open);
     showTab();
     document.body.append(tab);
@@ -3518,8 +3910,10 @@ section.flat .status:empty { display: none; }
     ui: true,
     options: [
       {
-        key: 'hideTab', label: 'Hide OGGS tab · Alt+O / Option+O reopens',
-        type: 'checkbox', default: false,
+        key: 'hideTab',
+        label: 'Hide OGGS tab · Alt+O / Option+O reopens',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });
@@ -3556,8 +3950,10 @@ section.flat .status:empty { display: none; }
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
       {
-        key: 'hardMode', label: 'Hard mode: all 199 countries and territories',
-        type: 'checkbox', default: false,
+        key: 'hardMode',
+        label: 'Hard mode: all 199 countries and territories',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });
@@ -3570,7 +3966,8 @@ section.flat .status:empty { display: none; }
 // button is pressed.
 (() => {
   const ggs = globalThis.__ggs;
-  const MAX_H = 640, AUTO_GUESS_MS = 6000;
+  const MAX_H = 640;
+  const AUTO_GUESS_MS = 6000;
 
   function start(cfg) {
     let lastToken;
@@ -3582,7 +3979,8 @@ section.flat .status:empty { display: none; }
       app: 'src/scripts/draw-guess/app/index.html',
       size: (roomW, roomH, boardH) => {
         // the board is 52px taller than it is wide
-        const h = Math.min(MAX_H, roomH), w = Math.min(h - 52, roomW);
+        const h = Math.min(MAX_H, roomH);
+        const w = Math.min(h - 52, roomW);
         return { w, h: boardH ? Math.min(boardH, roomH) : h };
       },
       guessDelay: AUTO_GUESS_MS,
@@ -3596,10 +3994,13 @@ section.flat .status:empty { display: none; }
         if (token === lastToken) return;
         // new game: pick the country pool from the map name
         lastToken = token;
-        ggs.game.mapInfo()
-          .then(m => (m?.name
-            ? board.post({ ggs: 'map', name: m.name })
-            : ggs.debug('draw-guess: no map name, using world coverage')))
+        ggs.game
+          .mapInfo()
+          .then(m =>
+            m?.name
+              ? board.post({ ggs: 'map', name: m.name })
+              : ggs.debug('draw-guess: no map name, using world coverage'),
+          )
           .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
       },
     });
@@ -3631,8 +4032,10 @@ section.flat .status:empty { display: none; }
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
       {
-        key: 'forceInside', label: 'Guess must go inside the matched country',
-        type: 'checkbox', default: true,
+        key: 'forceInside',
+        label: 'Guess must go inside the matched country',
+        type: 'checkbox',
+        default: true,
       },
     ],
   });
@@ -3645,7 +4048,8 @@ section.flat .status:empty { display: none; }
 // GeoGuessr's own Guess button is pressed.
 (() => {
   const ggs = globalThis.__ggs;
-  const MAX_W = 620, AUTO_GUESS_MS = 1500;
+  const MAX_W = 620;
+  const AUTO_GUESS_MS = 1500;
 
   function start(cfg) {
     const board = ggs.board({
@@ -3683,8 +4087,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // index into BANDS in core/aid.js
-      { key: 'size', label: 'Width (km)', type: 'slider', min: 0, max: 8, default: 5,
-        marks: ['Exact', '5', '25', '50', '100', '500', '1000', '2500', 'Hemi'] },
+      {
+        key: 'size',
+        label: 'Width (km)',
+        type: 'slider',
+        min: 0,
+        max: 8,
+        default: 5,
+        marks: ['Exact', '5', '25', '50', '100', '500', '1000', '2500', 'Hemi'],
+      },
     ],
   });
 })();
@@ -3692,7 +4103,8 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/lat-band/main.js ================================
 // Latitude band: a strip right round the world between two latitudes (core/aid.js).
 (() => {
-  const ggs = globalThis.__ggs, { aid } = ggs;
+  const ggs = globalThis.__ggs;
+  const { aid } = ggs;
   // the map's Mercator edge
   const clamp = lat => Math.max(-85, Math.min(85, lat));
 
@@ -3720,8 +4132,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // index into BANDS in core/aid.js
-      { key: 'size', label: 'Width (km)', type: 'slider', min: 0, max: 8, default: 5,
-        marks: ['Exact', '5', '25', '50', '100', '500', '1000', '2500', 'Hemi'] },
+      {
+        key: 'size',
+        label: 'Width (km)',
+        type: 'slider',
+        min: 0,
+        max: 8,
+        default: 5,
+        marks: ['Exact', '5', '25', '50', '100', '500', '1000', '2500', 'Hemi'],
+      },
     ],
   });
 })();
@@ -3729,7 +4148,8 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/lng-band/main.js ================================
 // Longitude band: a strip from pole to pole between two longitudes (core/aid.js).
 (() => {
-  const ggs = globalThis.__ggs, { aid } = ggs;
+  const ggs = globalThis.__ggs;
+  const { aid } = ggs;
 
   const hint = {
     // its own colour, so it's told apart from other hints (Terrible hints uses it too)
@@ -3755,9 +4175,29 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // biggest to smallest; main.js turns the stop into continent / countries / RADII in core/aid.js
-      { key: 'area', label: 'Area', type: 'slider', min: 0, max: 12, default: 8,
-        steps: ['continent', '5 countries', '4 countries', '3 countries', '2 countries', 'the country',
-          '2500 km', '1000 km', '500 km', '100 km', '50 km', '25 km', '5 km'] },
+      {
+        key: 'area',
+        label: 'Area',
+        type: 'slider',
+        min: 0,
+        max: 12,
+        default: 8,
+        steps: [
+          'continent',
+          '5 countries',
+          '4 countries',
+          '3 countries',
+          '2 countries',
+          'the country',
+          '2500 km',
+          '1000 km',
+          '500 km',
+          '100 km',
+          '50 km',
+          '25 km',
+          '5 km',
+        ],
+      },
     ],
   });
 })();
@@ -3769,15 +4209,19 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const LIST = {
-    Europe: 'ALB AND AUT BEL BGR BIH BLR CHE CYP CZE DEU DNK ESP EST FIN FRA FRO GBR GRC HRV HUN IMN IRL ISL ITA JEY LIE LTU LUX LVA MCO MDA MKD MLT MNE NLD NOR POL PRT ROU RUS SMR SRB SVK SVN SWE TUR UKR VAT',
+    Europe:
+      'ALB AND AUT BEL BGR BIH BLR CHE CYP CZE DEU DNK ESP EST FIN FRA FRO GBR GRC HRV HUN IMN IRL ISL ITA JEY LIE LTU LUX LVA MCO MDA MKD MLT MNE NLD NOR POL PRT ROU RUS SMR SRB SVK SVN SWE TUR UKR VAT',
     Asia: 'AFG ARE ARM AZE BGD BHR BRN BTN CHN CXR GEO HKG IDN IND IRN IRQ ISR JOR JPN KAZ KGZ KHM KOR KWT LAO LBN LKA MAC MDV MMR MNG MYS NPL OMN PAK PHL PRK PSE QAT SAU SGP SYR THA TJK TKM TLS TWN UZB VNM YEM',
-    Africa: 'AGO BDI BEN BFA BWA CAF CIV CMR COD COG COM CPV DJI DZA EGY ERI ETH GAB GHA GIN GMB GNB GNQ KEN LBR LBY LSO MAR MDG MLI MOZ MRT MUS MWI NAM NER NGA RWA SDN SEN SLE SOM SSD STP SWZ SYC TCD TGO TUN TZA UGA ZAF ZMB ZWE',
-    'North America': 'ATG BHS BLZ BMU BRB CAN CRI CUB CUW DMA DOM GRD GRL GTM HND HTI JAM KNA LCA MEX NIC PAN PRI SLV SPM TTO USA VCT VIR',
+    Africa:
+      'AGO BDI BEN BFA BWA CAF CIV CMR COD COG COM CPV DJI DZA EGY ERI ETH GAB GHA GIN GMB GNB GNQ KEN LBR LBY LSO MAR MDG MLI MOZ MRT MUS MWI NAM NER NGA RWA SDN SEN SLE SOM SSD STP SWZ SYC TCD TGO TUN TZA UGA ZAF ZMB ZWE',
+    'North America':
+      'ATG BHS BLZ BMU BRB CAN CRI CUB CUW DMA DOM GRD GRL GTM HND HTI JAM KNA LCA MEX NIC PAN PRI SLV SPM TTO USA VCT VIR',
     'South America': 'ARG BOL BRA CHL COL ECU FLK GUY PER PRY SGS SUR URY VEN',
     Oceania: 'ASM AUS FJI FSM GUM KIR MHL MNP NRU NZL PCN PLW PNG SLB TON TUV VUT WSM',
   };
   ggs.CONTINENTS = {};
-  for (const [name, codes] of Object.entries(LIST)) for (const c of codes.split(' ')) ggs.CONTINENTS[c] = name;
+  for (const [name, codes] of Object.entries(LIST))
+    for (const c of codes.split(' ')) ggs.CONTINENTS[c] = name;
 })();
 
 // ==================== src/scripts/radius/main.js ==================================
@@ -3802,13 +4246,15 @@ section.flat .status:empty { display: none; }
     colour: '#2b8a3e',
     async shapes({ loc, rand, cfg, status }) {
       // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to 5 km
-      const area = cfg.area ?? 8, continentOnly = area === 0;
+      const area = cfg.area ?? 8;
+      const continentOnly = area === 0;
       if (area >= 6) {
         const { center, km } = ggs.aid.circle(loc, rand(), 12 - area);
         // core/aid.js adds a ring round it when it's tiny on screen
         return [{ type: 'Circle', center, radius: km * 1000 }];
       }
-      const geo = await ggs.aid.loadGeo(), code = ggs.aid.countryAt(geo, loc);
+      const geo = await ggs.aid.loadGeo();
+      const code = ggs.aid.countryAt(geo, loc);
       if (!code) {
         status('Not in any country this round');
         return [];
@@ -3841,8 +4287,15 @@ section.flat .status:empty { display: none; }
     excludes: ['draw-guess', 'flag-guess', 'wobble'],
     options: [
       // index into COUNTS in main.js
-      { key: 'pins', label: 'Pins', type: 'slider', min: 0, max: 7, default: 1,
-        steps: ['2', '3', '4', '5', '6', '8', '10', 'unlimited'] },
+      {
+        key: 'pins',
+        label: 'Pins',
+        type: 'slider',
+        min: 0,
+        max: 7,
+        default: 1,
+        steps: ['2', '3', '4', '5', '6', '8', '10', 'unlimited'],
+      },
     ],
   });
 })();
@@ -3858,34 +4311,41 @@ section.flat .status:empty { display: none; }
   // the boards' pin (marks.js)
   const PIN = 'M0,0 C-5,-12 -16,-19 -16,-30 A16,16 0 1 1 16,-30 C16,-19 5,-12 0,0Z';
   const OURS = 'data-ggs-pin';
-  const FALLBACK = '<svg width="32" height="46" viewBox="-17 -47 34 48">' +
+  const FALLBACK =
+    '<svg width="32" height="46" viewBox="-17 -47 34 48">' +
     `<path d="${PIN}" fill="#d9480f" stroke="#fff" stroke-width="2"/></svg>`;
   // GeoGuessr's pin as last seen: its element and its offset from its spot (px)
   let look = null;
 
-  const realPin = () => document.querySelector(
-    ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', '));
+  const realPin = () =>
+    document.querySelector(ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', '));
 
   // Copy GeoGuessr's pin for a click, once it has drawn it (a couple of frames later).
   function copyLook(map, latLng, done) {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const el = realPin();
-      const proj = done.projection;
-      if (el && proj) {
-        // the outermost marker element, and its offset from the clicked spot
-        let root = el;
-        while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
-          root = root.parentElement;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = realPin();
+        const proj = done.projection;
+        if (el && proj) {
+          // the outermost marker element, and its offset from the clicked spot
+          let root = el;
+          while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
+            root = root.parentElement;
+          }
+          const r = root.getBoundingClientRect();
+          const m = map.getDiv().getBoundingClientRect();
+          const p = proj.fromLatLngToContainerPixel(latLng);
+          look = {
+            html: root.outerHTML,
+            dx: r.left - m.left - p.x,
+            dy: r.top - m.top - p.y,
+            w: r.width,
+            h: r.height,
+          };
         }
-        const r = root.getBoundingClientRect();
-        const m = map.getDiv().getBoundingClientRect();
-        const p = proj.fromLatLngToContainerPixel(latLng);
-        look = {
-          html: root.outerHTML, dx: r.left - m.left - p.x, dy: r.top - m.top - p.y, w: r.width, h: r.height,
-        };
-      }
-      done(look);
-    }));
+        done(look);
+      }),
+    );
   }
 
   // A pin on the map: an OverlayView holding the copy (or the fallback pin), clickable to remove.
@@ -3904,8 +4364,13 @@ section.flat .status:empty { display: none; }
       node.innerHTML = l ? l.html : FALLBACK;
       // the copy sits in our box, which is already where the original was drawn
       if (l) {
-        Object.assign(node.firstElementChild.style,
-          { position: 'relative', left: '0', top: '0', margin: '0', transform: 'none' });
+        Object.assign(node.firstElementChild.style, {
+          position: 'relative',
+          left: '0',
+          top: '0',
+          margin: '0',
+          transform: 'none',
+        });
       }
       const size = l ? { width: `${l.w}px`, height: `${l.h}px` } : { width: '32px', height: '46px' };
       Object.assign(node.style, size);
@@ -3936,11 +4401,13 @@ section.flat .status:empty { display: none; }
   };
 
   function addPin(ctx, latLng) {
-    const pin = ctx.add(makePin(ctx, latLng, () => {
-      ctx.remove(pin);
-      ctx.pins = ctx.pins.filter(p => p !== pin);
-      show(ctx);
-    }));
+    const pin = ctx.add(
+      makePin(ctx, latLng, () => {
+        ctx.remove(pin);
+        ctx.pins = ctx.pins.filter(p => p !== pin);
+        show(ctx);
+      }),
+    );
     ctx.pins.push(pin);
   }
 
@@ -3951,7 +4418,8 @@ section.flat .status:empty { display: none; }
   }
 
   ggs.scripts.guesses = ggs.aid('guesses', {
-    css: `${ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', ')} ` +
+    css:
+      `${ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', ')} ` +
       '{ visibility: hidden !important; }',
     round(ctx) {
       ctx.pins = [];
@@ -3988,8 +4456,16 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     options: [
-      { key: 'units', label: 'Units', type: 'buttons', default: 'km',
-        choices: [{ value: 'km', label: 'Kilometres' }, { value: 'mi', label: 'Miles' }] },
+      {
+        key: 'units',
+        label: 'Units',
+        type: 'buttons',
+        default: 'km',
+        choices: [
+          { value: 'km', label: 'Kilometres' },
+          { value: 'mi', label: 'Miles' },
+        ],
+      },
     ],
   });
 })();
@@ -4002,15 +4478,14 @@ section.flat .status:empty { display: none; }
   const KM_PER_MILE = 1.609344;
 
   function format(km, units) {
-    const [n, big, small, per] = units === 'mi'
-      ? [km / KM_PER_MILE, 'mi', 'yd', 1760]
-      : [km, 'km', 'm', 1000];
+    const [n, big, small, per] =
+      units === 'mi' ? [km / KM_PER_MILE, 'mi', 'yd', 1760] : [km, 'km', 'm', 1000];
     if (n < 1) return `${Math.round(n * per).toLocaleString('en')} ${small}`;
     return `${n < 100 ? n.toFixed(1) : Math.round(n).toLocaleString('en')} ${big}`;
   }
 
   // the last distance is kept, so switching units rewrites the note straight away
-  const show = ctx => ctx.note(format(ctx.km, ctx.shownIn = ctx.cfg.units));
+  const show = ctx => ctx.note(format(ctx.km, (ctx.shownIn = ctx.cfg.units)));
 
   // the clicked spot is kept and measured once the round's location is known
   ggs.scripts.distance = ggs.aid('distance', {
@@ -4047,8 +4522,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // index into KM in main.js
-      { key: 'size', label: 'How far (km)', type: 'slider', min: 0, max: 6, default: 4,
-        marks: ['10', '50', '100', '250', '500', '1000', '2500'] },
+      {
+        key: 'size',
+        label: 'How far (km)',
+        type: 'slider',
+        min: 0,
+        max: 6,
+        default: 4,
+        marks: ['10', '50', '100', '250', '500', '1000', '2500'],
+      },
     ],
   });
 })();
@@ -4065,9 +4547,15 @@ section.flat .status:empty { display: none; }
     click(latLng, { cfg }) {
       // the square root spreads spots evenly over the disc
       const km = KM[cfg.size] * Math.sqrt(Math.random());
-      const p = ggs.aid.destination({ lat: latLng.lat(), lng: latLng.lng() }, km, 2 * Math.PI * Math.random());
+      const p = ggs.aid.destination(
+        { lat: latLng.lat(), lng: latLng.lng() },
+        km,
+        2 * Math.PI * Math.random(),
+      );
       setTimeout(() => {
-        try { ggs.maps.placeGuess(p.lat, p.lng, { pan: false }); } catch {}
+        try {
+          ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+        } catch {}
       });
     },
   });
@@ -4097,8 +4585,9 @@ section.flat .status:empty { display: none; }
     colour: ctx => ggs.aid.hints[ctx.hint]?.colour,
     name: ctx => ggs.registry.find(m => m.id === ctx.hint)?.name,
     shapes(ctx) {
-      const r = ctx.pick(), ids = Object.keys(ggs.aid.hints).sort();
-      const hint = ggs.aid.hints[ctx.hint = ids[Math.floor(r() * ids.length)]];
+      const r = ctx.pick();
+      const ids = Object.keys(ggs.aid.hints).sort();
+      const hint = ggs.aid.hints[(ctx.hint = ids[Math.floor(r() * ids.length)])];
       return hint.shapes({ loc: ctx.loc, rand: ctx.rand, status: ctx.status, cfg: hint.random(r) });
     },
   });
@@ -4139,15 +4628,18 @@ section.flat .status:empty { display: none; }
     },
     click(latLng, ctx) {
       const p = { lat: latLng.lat(), lng: latLng.lng() };
-      ggs.aid.loadGeo().then(geo => {
-        ctx.sea = !ggs.aid.countryAt(geo, p, { near: false });
-        if (ctx.sea) return ctx.note('');
-        // wait until GeoGuessr has placed the pin
-        setTimeout(() => ggs.maps.clearGuess());
-        ctx.note('Ocean only!');
-        clearTimeout(ctx.noteTimer);
-        ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
-      }, () => ctx.status("Couldn't load the country outlines"));
+      ggs.aid.loadGeo().then(
+        geo => {
+          ctx.sea = !ggs.aid.countryAt(geo, p, { near: false });
+          if (ctx.sea) return ctx.note('');
+          // wait until GeoGuessr has placed the pin
+          setTimeout(() => ggs.maps.clearGuess());
+          ctx.note('Ocean only!');
+          clearTimeout(ctx.noteTimer);
+          ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
+        },
+        () => ctx.status("Couldn't load the country outlines"),
+      );
     },
     beforeGuess(ctx) {
       if (ctx.sea) return null;
@@ -4160,6 +4652,7 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/in-country/meta.js ==============================
 (() => {
   // Every country in draw-guess's geo.json, by its code there.
+  // biome-ignore format: generated list
   const COUNTRIES = [
     ['AFG', 'Afghanistan'], ['ALB', 'Albania'], ['DZA', 'Algeria'], ['ASM', 'American Samoa'],
     ['AND', 'Andorra'], ['AGO', 'Angola'], ['ATG', 'Antigua and Barbuda'], ['ARG', 'Argentina'],
@@ -4227,13 +4720,30 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     // the boards hide the map; the others move, add or score pins on the real world map
-    excludes: ['draw-guess', 'flag-guess', 'ocean', 'guesses', 'wobble', 'drift', 'distance',
-      'lat-band', 'lng-band', 'radius', 'liar'],
+    excludes: [
+      'draw-guess',
+      'flag-guess',
+      'ocean',
+      'guesses',
+      'wobble',
+      'drift',
+      'distance',
+      'lat-band',
+      'lng-band',
+      'radius',
+      'liar',
+    ],
     options: [
-      { key: 'country', label: 'Country', type: 'select', default: 'AUS', choices: [
-        { value: 'random', label: 'Random each round' },
-        ...COUNTRIES.map(([value, label]) => ({ value, label })),
-      ] },
+      {
+        key: 'country',
+        label: 'Country',
+        type: 'select',
+        default: 'AUS',
+        choices: [
+          { value: 'random', label: 'Random each round' },
+          ...COUNTRIES.map(([value, label]) => ({ value, label })),
+        ],
+      },
       { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: true },
     ],
   });
@@ -4249,15 +4759,18 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   // The world's latitudes that are squashed in: Tierra del Fuego to Greenland.
-  const WORLD_S = -56, WORLD_N = 84;
+  const WORLD_S = -56;
+  const WORLD_N = 84;
   const ROWS = 2048; // the country's rows cached for squashing the world outlines
   const MAX_STEP = 1; // degrees: world edges are split this fine before squashing, so they bend
   const GREY = '#dee2e6';
   const rad = Math.PI / 180;
-  const mercY = lat => Math.log(Math.tan(Math.PI / 4 + lat * rad / 2));
+  const mercY = lat => Math.log(Math.tan(Math.PI / 4 + (lat * rad) / 2));
   const fromMercY = y => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / rad;
-  const names = () => Object.fromEntries(ggs.registry.find(m => m.id === 'in-country').options[0].choices
-    .map(c => [c.value, c.label]));
+  const names = () =>
+    Object.fromEntries(
+      ggs.registry.find(m => m.id === 'in-country').options[0].choices.map(c => [c.value, c.label]),
+    );
 
   // Land pieces under this share of the country's biggest are left out (greyed like the rest of
   // the world): Australia's Macquarie and Heard Islands would otherwise stretch its rows to
@@ -4285,15 +4798,24 @@ section.flat .status:empty { display: none; }
       return Math.max(...xs) - Math.min(...xs);
     };
     const mean = r => r.reduce((s, p) => s + p[0], 0) / r.length;
-    const shift = by => rings.map(r => (Math.sign(mean(r)) === -Math.sign(by) ? r.map(([x, y]) => [x + by, y]) : r));
+    const shift = by =>
+      rings.map(r => (Math.sign(mean(r)) === -Math.sign(by) ? r.map(([x, y]) => [x + by, y]) : r));
     let best = rings;
     if (span(rings) > 180) best = [shift(360), shift(-360)].sort((a, b) => span(a) - span(b))[0];
     const merc = best.map(r => r.map(([x, y]) => [x, mercY(y)]));
-    const ys = merc.flat().map(p => p[1]), xs = best.flat().map(p => p[0]);
+    const ys = merc.flat().map(p => p[1]);
+    const xs = best.flat().map(p => p[0]);
     return {
-      polys, rings: merc, y0: Math.min(...ys), y1: Math.max(...ys),
-      bounds: { south: Math.min(...best.flat().map(p => p[1])), north: Math.max(...best.flat().map(p => p[1])),
-        west: Math.min(...xs), east: Math.max(...xs) },
+      polys,
+      rings: merc,
+      y0: Math.min(...ys),
+      y1: Math.max(...ys),
+      bounds: {
+        south: Math.min(...best.flat().map(p => p[1])),
+        north: Math.max(...best.flat().map(p => p[1])),
+        west: Math.min(...xs),
+        east: Math.max(...xs),
+      },
       rowCache: new Map(),
     };
   }
@@ -4303,8 +4825,9 @@ section.flat .status:empty { display: none; }
     const xs = [];
     for (const r of shape.rings) {
       for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
-        const [xa, ya] = r[i], [xb, yb] = r[j];
-        if ((ya > y) !== (yb > y)) xs.push(xa + ((y - ya) / (yb - ya)) * (xb - xa));
+        const [xa, ya] = r[i];
+        const [xb, yb] = r[j];
+        if (ya > y !== yb > y) xs.push(xa + ((y - ya) / (yb - ya)) * (xb - xa));
       }
     }
     xs.sort((a, b) => a - b);
@@ -4372,7 +4895,8 @@ section.flat .status:empty { display: none; }
   function densify(ring) {
     const out = [];
     for (let i = 0; i < ring.length; i++) {
-      const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
+      const [x0, y0] = ring[i];
+      const [x1, y1] = ring[(i + 1) % ring.length];
       const n = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / MAX_STEP));
       for (let k = 0; k < n; k++) out.push([x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n]);
     }
@@ -4385,28 +4909,49 @@ section.flat .status:empty { display: none; }
     const ring = r => [...r, r[0]];
     // The grey goes right round the world from the country's far side, in steps under 180
     // degrees since Google Maps joins two points the short way. A hair at the far side is left.
-    const b = shape.bounds, c = (b.west + b.east) / 2;
-    const sea = [-179.9, -90, 0, 90, 179.9].map(d => [wrap(c + d), 85])
+    const b = shape.bounds;
+    const c = (b.west + b.east) / 2;
+    const sea = [-179.9, -90, 0, 90, 179.9]
+      .map(d => [wrap(c + d), 85])
       .concat([179.9, 90, 0, -90, -179.9].map(d => [wrap(c + d), -85]));
     sea.push(sea[0]);
     const out = [
-      { type: 'Feature', properties: { kind: 'mask' },
-        geometry: { type: 'Polygon', coordinates: [sea, ...own.map(([outer]) => ring(outer))] } },
+      {
+        type: 'Feature',
+        properties: { kind: 'mask' },
+        geometry: { type: 'Polygon', coordinates: [sea, ...own.map(([outer]) => ring(outer))] },
+      },
       // the country's own holes (lakes, Lesotho) stay grey
-      ...own.flatMap(([, ...holes]) => holes.map(h => ({ type: 'Feature', properties: { kind: 'mask' },
-        geometry: { type: 'Polygon', coordinates: [ring(h)] } }))),
-      { type: 'Feature', properties: { kind: 'outline' },
-        geometry: { type: 'MultiLineString', coordinates: own.flat().map(ring) } },
+      ...own.flatMap(([, ...holes]) =>
+        holes.map(h => ({
+          type: 'Feature',
+          properties: { kind: 'mask' },
+          geometry: { type: 'Polygon', coordinates: [ring(h)] },
+        })),
+      ),
+      {
+        type: 'Feature',
+        properties: { kind: 'outline' },
+        geometry: { type: 'MultiLineString', coordinates: own.flat().map(ring) },
+      },
     ];
     if (world) {
-      const land = Object.values(geo).flatMap(polys => polys.map(([outer]) => outer))
+      const land = Object.values(geo)
+        .flatMap(polys => polys.map(([outer]) => outer))
         .filter(r => area(r) >= MIN_WORLD_PIECE && r.some(([, lat]) => lat > WORLD_S && lat < WORLD_N))
-        .map(r => ring(densify(r).map(([lng, lat]) => {
-          const p = squash(shape, lat, lng);
-          return [p.lng, p.lat];
-        })));
-      out.push({ type: 'Feature', properties: { kind: 'world' },
-        geometry: { type: 'MultiPolygon', coordinates: land.map(r => [r]) } });
+        .map(r =>
+          ring(
+            densify(r).map(([lng, lat]) => {
+              const p = squash(shape, lat, lng);
+              return [p.lng, p.lat];
+            }),
+          ),
+        );
+      out.push({
+        type: 'Feature',
+        properties: { kind: 'world' },
+        geometry: { type: 'MultiPolygon', coordinates: land.map(r => [r]) },
+      });
     }
     return { type: 'FeatureCollection', features: out };
   }
@@ -4414,8 +4959,14 @@ section.flat .status:empty { display: none; }
   // The grey goes over the squashed world, which hides where a squashed shape jumps a gap
   // between two parts of the country (a bay, the strait to Tasmania).
   const STYLES = {
-    world: { fillColor: '#ffffff', fillOpacity: 0.45, strokeColor: '#1c1a2e', strokeWeight: 1, strokeOpacity: 0.55,
-      zIndex: 1 },
+    world: {
+      fillColor: '#ffffff',
+      fillOpacity: 0.45,
+      strokeColor: '#1c1a2e',
+      strokeWeight: 1,
+      strokeOpacity: 0.55,
+      zIndex: 1,
+    },
     mask: { fillColor: GREY, fillOpacity: 0.94, strokeWeight: 0, zIndex: 2 },
     outline: { strokeColor: '#1c1a2e', strokeWeight: 2, strokeOpacity: 0.9, zIndex: 3 },
   };
@@ -4429,10 +4980,12 @@ section.flat .status:empty { display: none; }
   let big = null;
   function countryFor(geo, cfg) {
     if (cfg.country !== 'random') return geo[cfg.country] ? cfg.country : 'AUS';
-    big ??= Object.keys(geo).sort().filter(c => {
-      const b = shape(geo, c).bounds;
-      return (b.east - b.west) * (b.north - b.south) >= MIN_RANDOM_AREA;
-    });
+    big ??= Object.keys(geo)
+      .sort()
+      .filter(c => {
+        const b = shape(geo, c).bounds;
+        return (b.east - b.west) * (b.north - b.south) >= MIN_RANDOM_AREA;
+      });
     const r = ggs.aid.seeded(`in-country|${ggs.game.context()?.token}|${ggs.game.roundKey()}`)();
     return big[Math.floor(r * big.length)];
   }
@@ -4463,32 +5016,46 @@ section.flat .status:empty { display: none; }
       const want = `${ggs.game.roundKey()}|${ctx.cfg.country}|${ctx.cfg.world}`;
       if (ctx.guessed || ctx.drawn === want || ctx.loading) return;
       ctx.loading = true;
-      ggs.aid.loadGeo().then(geo => {
-        ctx.loading = false;
-        if (ctx.guessed || !ctx.map) return;
-        const code = countryFor(geo, ctx.cfg);
-        const s = shape(geo, code);
-        const gm = ctx.gm;
-        ctx.layer?.setMap(null);
-        ctx.layer = new gm.Data({ map: ctx.map });
-        ctx.layer.addGeoJson(features(geo, code, s, ctx.cfg.world));
-        ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
-        const b = s.bounds, padLat = (b.north - b.south) * 0.6, padLng = (b.east - b.west) * 0.6;
-        ctx.map.setOptions({ restriction: { strictBounds: false, latLngBounds: {
-          south: Math.max(-85, b.south - padLat), north: Math.min(85, b.north + padLat),
-          west: wrap(b.west - padLng), east: wrap(b.east + padLng) } } });
-        ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
-        ctx.code = code;
-        ctx.shape = s;
-        ctx.drawn = want;
-      }, () => {
-        ctx.loading = false;
-        ctx.status("Couldn't load the country outlines");
-      });
+      ggs.aid.loadGeo().then(
+        geo => {
+          ctx.loading = false;
+          if (ctx.guessed || !ctx.map) return;
+          const code = countryFor(geo, ctx.cfg);
+          const s = shape(geo, code);
+          const gm = ctx.gm;
+          ctx.layer?.setMap(null);
+          ctx.layer = new gm.Data({ map: ctx.map });
+          ctx.layer.addGeoJson(features(geo, code, s, ctx.cfg.world));
+          ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
+          const b = s.bounds;
+          const padLat = (b.north - b.south) * 0.6;
+          const padLng = (b.east - b.west) * 0.6;
+          ctx.map.setOptions({
+            restriction: {
+              strictBounds: false,
+              latLngBounds: {
+                south: Math.max(-85, b.south - padLat),
+                north: Math.min(85, b.north + padLat),
+                west: wrap(b.west - padLng),
+                east: wrap(b.east + padLng),
+              },
+            },
+          });
+          ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
+          ctx.code = code;
+          ctx.shape = s;
+          ctx.drawn = want;
+        },
+        () => {
+          ctx.loading = false;
+          ctx.status("Couldn't load the country outlines");
+        },
+      );
     },
     click(latLng, ctx) {
       if (!ctx.shape || ctx.guessed) return;
-      const lat = latLng.lat(), lng = latLng.lng();
+      const lat = latLng.lat();
+      const lng = latLng.lng();
       const p = unsquash(ctx.shape, lat, lng);
       ctx.pin = p;
       if (p) return ctx.note('');
@@ -4527,9 +5094,7 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     excludes: ['draw-guess', 'flag-guess', 'drift'],
-    options: [
-      { key: 'grid', label: 'Grid lines', type: 'checkbox', default: true },
-    ],
+    options: [{ key: 'grid', label: 'Grid lines', type: 'checkbox', default: true }],
   });
 })();
 
@@ -4563,7 +5128,9 @@ section.flat .status:empty { display: none; }
   }
 
   function lockView(ctx) {
-    const { map } = ctx, div = map.getDiv(), size = `${div.offsetWidth}x${div.offsetHeight}`;
+    const { map } = ctx;
+    const div = map.getDiv();
+    const size = `${div.offsetWidth}x${div.offsetHeight}`;
     if (size !== ctx.size || map.get('draggable') !== false) {
       ctx.size = size;
       map.setOptions(LOCKED);
@@ -4589,7 +5156,9 @@ section.flat .status:empty { display: none; }
       };
     },
     // a new round has cleared the lines
-    round(ctx) { ctx.grid = null; },
+    round(ctx) {
+      ctx.grid = null;
+    },
     tick(ctx) {
       lockView(ctx);
       // grid lines follow the option live
@@ -4599,7 +5168,7 @@ section.flat .status:empty { display: none; }
         ctx.grid = null;
         return;
       }
-      const faint = { strokeOpacity: .18, strokeWeight: 1 };
+      const faint = { strokeOpacity: 0.18, strokeWeight: 1 };
       const line = shape => ctx.grid.push(ctx.add({ ...shape, ...faint }));
       ctx.grid = [];
       for (let lat = -60; lat <= 60; lat += 30) line(ggs.aid.latLine(lat));
@@ -4640,7 +5209,8 @@ section.flat .status:empty { display: none; }
     attach(ctx) {
       // This map, not ctx.map: by the time cleanup runs, ctx.map may already be the next one.
       const map = ctx.map;
-      let angle = Math.random() * 2 * Math.PI, frame;
+      let angle = Math.random() * 2 * Math.PI;
+      let frame;
       const saved = Object.fromEntries(LOCK.map(k => [k, map.get(k)]));
       const z0 = map.getZoom();
       map.setOptions({
@@ -4652,7 +5222,8 @@ section.flat .status:empty { display: none; }
       });
       const step = () => {
         frame = requestAnimationFrame(step);
-        const c = map.getCenter(), z = map.getZoom();
+        const c = map.getCenter();
+        const z = map.getZoom();
         if (!c || z == null) return;
         angle += (Math.random() - 0.5) * 0.15;
         // turn back near the poles (screen y points down)
@@ -4660,7 +5231,7 @@ section.flat .status:empty { display: none; }
         const v = SPEED[ctx.cfg.speed] ?? SPEED[1];
         const deg = 360 / (256 * 2 ** z); // degrees of longitude per pixel
         map.setCenter({
-          lat: c.lat() - v * Math.sin(angle) * deg * Math.cos(c.lat() * Math.PI / 180),
+          lat: c.lat() - v * Math.sin(angle) * deg * Math.cos((c.lat() * Math.PI) / 180),
           lng: c.lng() + v * Math.cos(angle) * deg,
         });
       };
@@ -4684,8 +5255,10 @@ section.flat .status:empty { display: none; }
     options: [
       { key: 'showStreetView', label: 'Show Street View', type: 'checkbox', default: false },
       {
-        key: 'streamerMode', label: 'Streamer / YouTube mode: talk & news stations only',
-        type: 'checkbox', default: false,
+        key: 'streamerMode',
+        label: 'Streamer / YouTube mode: talk & news stations only',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });
@@ -4714,11 +5287,17 @@ section.flat .status:empty { display: none; }
   const AD_STREAMS = /zeno\.fm|zenomedia|adswizz|streamtheworld\.com|tritondigital|[?&]aw_0_/i;
 
   // Streamer mode: talk stations only, by Radio Browser's tags.
-  const TALK_TAGS = new RegExp('\\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|'
-    + 'informa|notizie|public radio|comedy|debate|politics)', 'i');
-  const MUSIC_TAGS = new RegExp('\\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|'
-    + 'country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|'
-    + 'soul|funk|blues|folk|indie|christian|gospel)\\b', 'i');
+  const TALK_TAGS = new RegExp(
+    '\\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|' +
+      'informa|notizie|public radio|comedy|debate|politics)',
+    'i',
+  );
+  const MUSIC_TAGS = new RegExp(
+    '\\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|' +
+      'country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|' +
+      'soul|funk|blues|folk|indie|christian|gospel)\\b',
+    'i',
+  );
   const isTalk = s => TALK_TAGS.test(s.tags) && !MUSIC_TAGS.test(s.tags);
 
   const START_MS = 8000; // a stream that hasn't started playing by now is skipped
@@ -4728,7 +5307,8 @@ section.flat .status:empty { display: none; }
   // Wrapped at document_start so every AudioContext and media element the page makes is
   // seen. While `muting`, contexts are suspended and other <audio>/<video> elements muted.
   const RealAudioContext = window.AudioContext;
-  const contexts = new Set(), ours = new WeakSet();
+  const contexts = new Set();
+  const ours = new WeakSet();
   let muting = false;
   for (const name of ['AudioContext', 'webkitAudioContext']) {
     const Orig = window[name];
@@ -4759,7 +5339,11 @@ section.flat .status:empty { display: none; }
 
   async function search(params) {
     const q = new URLSearchParams({
-      is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params,
+      is_https: 'true',
+      hidebroken: 'true',
+      order: 'clickcount',
+      reverse: 'true',
+      ...params,
     });
     const r = await fetch(`${API}?${q}`);
     if (!r.ok) throw new Error(`Radio Browser: HTTP ${r.status}`);
@@ -4794,7 +5378,10 @@ section.flat .status:empty { display: none; }
     // one entry per station (many are listed once per bitrate)
     const seen = new Set();
     list = list.filter(s => {
-      const k = s.name.split(/\s[|–-]\s|\(/)[0].trim().toLowerCase();
+      const k = s.name
+        .split(/\s[|–-]\s|\(/)[0]
+        .trim()
+        .toLowerCase();
       return !seen.has(k) && seen.add(k);
     });
     const ads = s => AD_STREAMS.test(s.url_resolved) || AD_STREAMS.test(s.url);
@@ -4803,16 +5390,18 @@ section.flat .status:empty { display: none; }
   }
 
   const km = (a, b) => {
-    const rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
-    const h = Math.sin(dLat / 2) ** 2
-      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    const rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad;
+    const dLng = (b.lng - a.lng) * rad;
+    const h =
+      Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
     return Math.round(12742 * Math.asin(Math.sqrt(h)));
   };
   const esc = ggs.esc;
   const describe = (s, loc) => {
     const where = [s.state, s.country].filter(Boolean).join(', ');
-    const dist = s.geo_lat != null && loc
-      ? ` · ${km(loc, { lat: s.geo_lat, lng: s.geo_long })} km from the spot` : '';
+    const dist =
+      s.geo_lat != null && loc ? ` · ${km(loc, { lat: s.geo_lat, lng: s.geo_long })} km from the spot` : '';
     return where + dist;
   };
 
@@ -4822,10 +5411,12 @@ section.flat .status:empty { display: none; }
     pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
     next: '<svg viewBox="0 0 24 24"><path d="M6 5l9 7-9 7zM16 5h2v14h-2z"/></svg>',
     prev: '<svg viewBox="0 0 24 24"><path d="M18 5l-9 7 9 7zM6 5h2v14H6z"/></svg>',
-    vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/>'
-      + '<path d="M16 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+    vol:
+      '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/>' +
+      '<path d="M16 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   };
-  const YELLOW = '#fecd19', GREEN = '#6cb928';
+  const YELLOW = '#fecd19';
+  const GREEN = '#6cb928';
   const CSS = `
     :host { all: initial; visibility: visible !important; color: #fff;
             font: 14px/1.3 neo-sans, var(--default-font, system-ui), system-ui, -apple-system, sans-serif; }
@@ -4885,25 +5476,68 @@ section.flat .status:empty { display: none; }
   const MORPH_MS = 3000;
   const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
   const ICON_POLYS = {
-    play: [[[-0.4, -0.55], [0.55, 0], [-0.4, 0.55]]],
-    pause: [
-      [[-0.45, -0.55], [-0.13, -0.55], [-0.13, 0.55], [-0.45, 0.55]],
-      [[0.13, -0.55], [0.45, -0.55], [0.45, 0.55], [0.13, 0.55]],
+    play: [
+      [
+        [-0.4, -0.55],
+        [0.55, 0],
+        [-0.4, 0.55],
+      ],
     ],
-    skip: [[[-0.55, -0.5], [0.2, 0], [-0.55, 0.5]], [[0.25, -0.5], [0.5, -0.5], [0.5, 0.5], [0.25, 0.5]]],
-    back: [[[-0.5, -0.5], [-0.25, -0.5], [-0.25, 0.5], [-0.5, 0.5]], [[0.55, -0.5], [0.55, 0.5], [-0.2, 0]]],
+    pause: [
+      [
+        [-0.45, -0.55],
+        [-0.13, -0.55],
+        [-0.13, 0.55],
+        [-0.45, 0.55],
+      ],
+      [
+        [0.13, -0.55],
+        [0.45, -0.55],
+        [0.45, 0.55],
+        [0.13, 0.55],
+      ],
+    ],
+    skip: [
+      [
+        [-0.55, -0.5],
+        [0.2, 0],
+        [-0.55, 0.5],
+      ],
+      [
+        [0.25, -0.5],
+        [0.5, -0.5],
+        [0.5, 0.5],
+        [0.25, 0.5],
+      ],
+    ],
+    back: [
+      [
+        [-0.5, -0.5],
+        [-0.25, -0.5],
+        [-0.25, 0.5],
+        [-0.5, 0.5],
+      ],
+      [
+        [0.55, -0.5],
+        [0.55, 0.5],
+        [-0.2, 0],
+      ],
+    ],
   };
   // rounds a polygon's corners
   function soften(poly, r = 0.06) {
     const out = [];
     poly.forEach((p, i) => {
-      const a = poly[(i + poly.length - 1) % poly.length], b = poly[(i + 1) % poly.length];
-      const la = Math.hypot(a[0] - p[0], a[1] - p[1]), lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+      const a = poly[(i + poly.length - 1) % poly.length];
+      const b = poly[(i + 1) % poly.length];
+      const la = Math.hypot(a[0] - p[0], a[1] - p[1]);
+      const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
       const d = Math.min(r, la / 2.2, lb / 2.2);
-      const st = [p[0] + (a[0] - p[0]) * d / la, p[1] + (a[1] - p[1]) * d / la];
-      const en = [p[0] + (b[0] - p[0]) * d / lb, p[1] + (b[1] - p[1]) * d / lb];
+      const st = [p[0] + ((a[0] - p[0]) * d) / la, p[1] + ((a[1] - p[1]) * d) / la];
+      const en = [p[0] + ((b[0] - p[0]) * d) / lb, p[1] + ((b[1] - p[1]) * d) / lb];
       for (let k = 0; k <= 6; k++) {
-        const t = k / 6, u = 1 - t;
+        const t = k / 6;
+        const u = 1 - t;
         out.push([
           u * u * st[0] + 2 * u * t * p[0] + t * t * en[0],
           u * u * st[1] + 2 * u * t * p[1] + t * t * en[1],
@@ -4918,11 +5552,14 @@ section.flat .status:empty { display: none; }
       const q = poly[(i + 1) % poly.length];
       return Math.hypot(q[0] - p[0], q[1] - p[1]);
     });
-    const total = seg.reduce((a, v) => a + v, 0), out = [];
+    const total = seg.reduce((a, v) => a + v, 0);
+    const out = [];
     for (let j = 0, i = 0, acc = 0; j < m; j++) {
       const d = (j / m) * total;
       while (acc + seg[i] < d) acc += seg[i++];
-      const t = (d - acc) / seg[i], a = poly[i], b = poly[(i + 1) % poly.length];
+      const t = (d - acc) / seg[i];
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
       out.push(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
     }
     return out;
@@ -4930,27 +5567,40 @@ section.flat .status:empty { display: none; }
   function blob(canvas) {
     const g = canvas.getContext('2d');
     const all = (ggs.radioShapes ?? []).map(a => Float32Array.from(a, v => v / 100));
-    const n = all[0]?.length ?? 0, K = n / 2;
+    const n = all[0]?.length ?? 0;
+    const K = n / 2;
     const circle = new Float32Array(n); // same start (top) and winding as the outlines
     for (let i = 0; i < K; i++) {
       const a = -Math.PI / 2 + (i / K) * Math.PI * 2;
       circle[2 * i] = Math.cos(a) * 0.8;
       circle[2 * i + 1] = Math.sin(a) * 0.8;
     }
-    const base = new Float32Array(n), shape = new Float32Array(n), ring = new Float32Array(n);
+    const base = new Float32Array(n);
+    const shape = new Float32Array(n);
+    const ring = new Float32Array(n);
     const icons = {};
     for (const [name, polys] of Object.entries(ICON_POLYS)) {
       const pts = Float32Array.from(polys.flatMap(p => loop(soften(p), K / polys.length)));
       icons[name] = { parts: polys.length, pts };
     }
-    let flashName = null, flashUntil = 0, iconMix = 0, iconTarget = null, parts = 1, partsAt = 0;
+    let flashName = null;
+    let flashUntil = 0;
+    let iconMix = 0;
+    let iconTarget = null;
+    let parts = 1;
+    let partsAt = 0;
     const iconCur = new Float32Array(n); // the icon on show, easing from one icon to the next
     const pick = prev => {
       let s;
-      do s = all[Math.floor(Math.random() * all.length)]; while (all.length > 1 && s === prev);
+      do s = all[Math.floor(Math.random() * all.length)];
+      while (all.length > 1 && s === prev);
       return s;
     };
-    let from = pick(), to = pick(from), since = performance.now(), load = 1, level = 0;
+    let from = pick();
+    let to = pick(from);
+    let since = performance.now();
+    let load = 1;
+    let level = 0;
 
     function trace(p, c, s, parts = 1) {
       g.beginPath();
@@ -4958,8 +5608,10 @@ section.flat .status:empty { display: none; }
       for (let q = 0; q < parts; q++) {
         const o = q * per;
         for (let i = 0; i <= per; i++) {
-          const j = (o + (i % per)) * 2, k = (o + ((i + 1) % per)) * 2;
-          const mx = c + (p[j] + p[k]) / 2 * s, my = c + (p[j + 1] + p[k + 1]) / 2 * s;
+          const j = (o + (i % per)) * 2;
+          const k = (o + ((i + 1) % per)) * 2;
+          const mx = c + ((p[j] + p[k]) / 2) * s;
+          const my = c + ((p[j + 1] + p[k + 1]) / 2) * s;
           if (i === 0) g.moveTo(mx, my);
           else g.quadraticCurveTo(c + p[j] * s, c + p[j + 1] * s, mx, my);
         }
@@ -4967,24 +5619,35 @@ section.flat .status:empty { display: none; }
       }
     }
     // outward normal at point i
-    let nx = 0, ny = 0;
+    let nx = 0;
+    let ny = 0;
     function normal(p, i) {
-      const a = ((i + K - 2) % K) * 2, b = ((i + 2) % K) * 2;
-      const tx = p[b] - p[a], ty = p[b + 1] - p[a + 1], len = Math.hypot(tx, ty) || 1;
+      const a = ((i + K - 2) % K) * 2;
+      const b = ((i + 2) % K) * 2;
+      const tx = p[b] - p[a];
+      const ty = p[b + 1] - p[a + 1];
+      const len = Math.hypot(tx, ty) || 1;
       nx = ty / len;
       ny = -tx / len;
     }
     const wave = (i, t, ph) => {
       const th = (i / K) * Math.PI * 2;
-      return Math.sin(3 * th + t * 1.3 + ph) * 0.5 + Math.sin(7 * th - t * 2.1 + ph) * 0.3
-           + Math.sin(13 * th + t * 3.4 + ph * 2) * 0.2;
+      return (
+        Math.sin(3 * th + t * 1.3 + ph) * 0.5 +
+        Math.sin(7 * th - t * 2.1 + ph) * 0.3 +
+        Math.sin(13 * th + t * 3.4 + ph * 2) * 0.2
+      );
     };
 
     // vol: 0..1 loudness; loading: finding/connecting; hold: an icon to keep showing
     function draw(now, { vol, loading, hold }) {
-      const dpr = devicePixelRatio || 1, cw = canvas.clientWidth || 1, W = Math.round(cw * dpr);
+      const dpr = devicePixelRatio || 1;
+      const cw = canvas.clientWidth || 1;
+      const W = Math.round(cw * dpr);
       if (canvas.width !== W || canvas.height !== W) canvas.width = canvas.height = W;
-      const px = W / 300, t = now / 1000, c = W / 2;
+      const px = W / 300;
+      const t = now / 1000;
+      const c = W / 2;
       g.clearRect(0, 0, W, W);
       if (!n) return;
 
@@ -4999,17 +5662,25 @@ section.flat .status:empty { display: none; }
       load += ((loading ? 1 : 0) - load) * 0.05;
       level += (vol - level) * (vol > level ? 0.35 : 0.07);
       // slowly spinning, timed so each outline is north up when the blend reaches it
-      const a0 = SPIN_STEP * p, a1 = SPIN_STEP * (p - 1);
-      const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+      const a0 = SPIN_STEP * p;
+      const a1 = SPIN_STEP * (p - 1);
+      const c0 = Math.cos(a0);
+      const s0 = Math.sin(a0);
+      const c1 = Math.cos(a1);
+      const s1 = Math.sin(a1);
       for (let i = 0; i < n; i += 2) {
-        const x0 = from[i] * c0 - from[i + 1] * s0, y0 = from[i] * s0 + from[i + 1] * c0;
-        const x1 = to[i] * c1 - to[i + 1] * s1, y1 = to[i] * s1 + to[i + 1] * c1;
-        const x = x0 + (x1 - x0) * m, y = y0 + (y1 - y0) * m;
+        const x0 = from[i] * c0 - from[i + 1] * s0;
+        const y0 = from[i] * s0 + from[i + 1] * c0;
+        const x1 = to[i] * c1 - to[i + 1] * s1;
+        const y1 = to[i] * s1 + to[i + 1] * c1;
+        const x = x0 + (x1 - x0) * m;
+        const y = y0 + (y1 - y0) * m;
         base[i] = x + (circle[i] - x) * load;
         base[i + 1] = y + (circle[i + 1] - y) * load;
       }
       // icons ease in and out
-      const want = hold ?? (now < flashUntil ? flashName : null), target = icons[want];
+      const want = hold ?? (now < flashUntil ? flashName : null);
+      const target = icons[want];
       if (target) {
         if (iconMix < 0.01) iconCur.set(base); // start from the shape as it is
         for (let i = 0; i < n; i++) iconCur[i] += (target.pts[i] - iconCur[i]) * 0.18;
@@ -5038,7 +5709,10 @@ section.flat .status:empty { display: none; }
 
       // echoes, pushed outward
       g.lineJoin = 'round';
-      for (const [k, alpha] of [[1, 0.14], [2, 0.07]]) {
+      for (const [k, alpha] of [
+        [1, 0.14],
+        [2, 0.07],
+      ]) {
         for (let i = 0; i < K; i++) {
           normal(shape, i);
           const d = 0.06 * k + amp * k * (0.5 + 0.5 * wave(i, t, k * 2.3));
@@ -5074,19 +5748,29 @@ section.flat .status:empty { display: none; }
         }
       }
     }
-    draw.flash = (name, ms) => { flashName = name; flashUntil = performance.now() + ms; };
+    draw.flash = (name, ms) => {
+      flashName = name;
+      flashUntil = performance.now() + ms;
+    };
     return draw;
   }
 
   // ---- streamer mode: skip music ----
   // Music puts far more of its energy below 90 Hz than speech does. A new station is
   // listened to silently for PRE_MS first, then the last BASS_MS are checked every 250 ms.
-  const PRE_MS = 3000, BASS_MS = 7000, BASS_EVERY_MS = 250, BASS_SHARE = 0.2;
+  const PRE_MS = 3000;
+  const BASS_MS = 7000;
+  const BASS_EVERY_MS = 250;
+  const BASS_SHARE = 0.2;
   function musicCheck() {
     let recent = [];
     return {
-      reset() { recent = []; },
-      span(now) { return recent.length ? now - recent[0][0] : 0; },
+      reset() {
+        recent = [];
+      },
+      span(now) {
+        return recent.length ? now - recent[0][0] : 0;
+      },
       // per frame: loudness, energy below 90 Hz, energy up to 10 kHz
       push(rms, low, all, now) {
         recent.push([now, rms, low, all]);
@@ -5094,7 +5778,10 @@ section.flat .status:empty { display: none; }
       },
       music(now, ms) {
         if (this.span(now) < ms * 0.95) return false;
-        let r = 0, l = 0, a = 0, k = 0;
+        let r = 0;
+        let l = 0;
+        let a = 0;
+        let k = 0;
         for (const f of recent) {
           if (now - f[0] > ms) continue;
           r += f[1];
@@ -5110,22 +5797,46 @@ section.flat .status:empty { display: none; }
   function start(cfg) {
     const hidePano = document.createElement('style');
     hidePano.textContent = HIDE_PANO_CSS;
-    const setPano = show => (show
-      ? hidePano.remove()
-      : (document.head ?? document.documentElement).append(hidePano));
+    const setPano = show =>
+      show ? hidePano.remove() : (document.head ?? document.documentElement).append(hidePano);
     setPano(cfg.showStreetView);
 
     muteGame(true);
-    let audio = null, node = null, ctx = null, analyser = null, gain = null, td = null, fd = null;
-    let tuning = false, preListen = false, allowMusic = false, lastCheck = 0;
+    let audio = null;
+    let node = null;
+    let ctx = null;
+    let analyser = null;
+    let gain = null;
+    let td = null;
+    let fd = null;
+    let tuning = false;
+    let preListen = false;
+    let allowMusic = false;
+    let lastCheck = 0;
     const music = musicCheck();
-    let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0;
-    let blocked = false, userPaused = false, skipping = 0;
-    let host = null, root = null, draw = null, raf = 0, lastT = 0, lastMove = 0, live = false;
-    let round = null, loc = null, stations = [], idx = 0;
+    let volume = 0.6;
+    let watchdog = 0;
+    let stallTimer = 0;
+    let waitingSince = 0;
+    let blocked = false;
+    let userPaused = false;
+    let skipping = 0;
+    let host = null;
+    let root = null;
+    let draw = null;
+    let raf = 0;
+    let lastT = 0;
+    let lastMove = 0;
+    let live = false;
+    let round = null;
+    let loc = null;
+    let stations = [];
+    let idx = 0;
 
     const $ = sel => root.querySelector(sel);
-    const setStatus = t => { $('.status').textContent = t; };
+    const setStatus = t => {
+      $('.status').textContent = t;
+    };
 
     function create() {
       host = document.createElement('div');
@@ -5162,7 +5873,9 @@ section.flat .status:empty { display: none; }
       };
       $('.play').onclick = togglePlay;
       $('canvas').onclick = togglePlay;
-      $('.wrap').onclick = e => { if (e.target === e.currentTarget) togglePlay(); };
+      $('.wrap').onclick = e => {
+        if (e.target === e.currentTarget) togglePlay();
+      };
       $('.prev').onclick = () => {
         draw.flash('back', 600);
         tune(idx - 1);
@@ -5202,7 +5915,8 @@ section.flat .status:empty { display: none; }
           if (cfg.streamerMode && !allowMusic && !skipping) {
             analyser.getFloatFrequencyData(fd);
             const hz = ctx.sampleRate / analyser.fftSize;
-            let low = 0, all = 0;
+            let low = 0;
+            let all = 0;
             for (let i = 1; i * hz < 10000; i++) {
               const p = 10 ** (fd[i] / 10);
               all += p;
@@ -5224,11 +5938,16 @@ section.flat .status:empty { display: none; }
         }
         const wait = waitingSince && !blocked ? (Date.now() - waitingSince) / START_MS : 0;
         if (wait) {
-          const left = Math.max(0, Math.ceil(START_MS / 1000 * (1 - wait)));
+          const left = Math.max(0, Math.ceil((START_MS / 1000) * (1 - wait)));
           setStatus(`Station ${idx + 1} of ${stations.length} · waiting for audio ${left}s`);
         } else if (live && cfg.streamerMode && !skipping) {
-          const note = allowMusic ? '' : !node ? " · can't check this one for music"
-            : preListen ? ' · checking for music…' : '';
+          const note = allowMusic
+            ? ''
+            : !node
+              ? " · can't check this one for music"
+              : preListen
+                ? ' · checking for music…'
+                : '';
           const text = `Station ${idx + 1} of ${stations.length}${note}`;
           if ($('.status').textContent !== text) setStatus(text);
         }
@@ -5242,8 +5961,8 @@ section.flat .status:empty { display: none; }
     }
 
     function place(inRound) {
-      const pano = !cfg.showStreetView && inRound
-        && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
+      const pano =
+        !cfg.showStreetView && inRound && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
       if (pano?.parentElement) {
         if (host.previousElementSibling !== pano) pano.after(host);
         host.className = 'stage';
@@ -5284,7 +6003,7 @@ section.flat .status:empty { display: none; }
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
-      const a = audio = new Audio();
+      const a = (audio = new Audio());
       ours.add(a);
       a.volume = volume;
       if (cors) ensureCtx();
@@ -5380,7 +6099,9 @@ section.flat .status:empty { display: none; }
     };
     // Moves an uncheckable station to the back. False if no checkable one is left after it.
     function tryCheckable() {
-      const st = stations[idx], bad = setFor(uncheckableFor), music = setFor(flaggedFor);
+      const st = stations[idx];
+      const bad = setFor(uncheckableFor);
+      const music = setFor(flaggedFor);
       bad.add(st);
       if (!stations.slice(idx + 1).some(s => !bad.has(s) && !music.has(s))) return false;
       stations.splice(idx, 1);
@@ -5403,7 +6124,11 @@ section.flat .status:empty { display: none; }
       skipping = setTimeout(() => {
         skipping = 0;
         if (next != null) tune(next);
-        else tune(stations.findIndex(s => flagged.has(s)), { paused: true });
+        else
+          tune(
+            stations.findIndex(s => flagged.has(s)),
+            { paused: true },
+          );
       }, 600);
     }
     function skip(why) {
@@ -5559,8 +6284,11 @@ section.flat .status:empty { display: none; }
 
   function nearEdge([x, y], poly) {
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
-      const dx = xj - xi, dy = yj - yi, len2 = dx * dx + dy * dy || 1;
+      const [xi, yi] = poly[i];
+      const [xj, yj] = poly[j];
+      const dx = xj - xi;
+      const dy = yj - yi;
+      const len2 = dx * dx + dy * dy || 1;
       const t = Math.max(0, Math.min(1, ((x - xi) * dx + (y - yi) * dy) / len2));
       if (Math.hypot(x - (xi + t * dx), y - (yi + t * dy)) < NEAR_DEG) return true;
     }
@@ -5569,8 +6297,9 @@ section.flat .status:empty { display: none; }
   function insidePolygon([x, y], poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      const [xi, yi] = poly[i];
+      const [xj, yj] = poly[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
     }
     return inside;
   }
@@ -5580,17 +6309,27 @@ section.flat .status:empty { display: none; }
   const tileCache = new Map();
   function tiles(id) {
     if (!tileCache.has(id)) {
-      tileCache.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-        .then(({ data }) => ({ width: data.tiles.worldSize.width, centerHeading: data.tiles.centerHeading }))
-        .catch(() => null));
+      tileCache.set(
+        id,
+        new window.google.maps.StreetViewService()
+          .getPanorama({ pano: id })
+          .then(({ data }) => ({
+            width: data.tiles.worldSize.width,
+            centerHeading: data.tiles.centerHeading,
+          }))
+          .catch(() => null),
+      );
     }
     return tileCache.get(id);
   }
 
   const rad = d => (d * Math.PI) / 180;
   function toCamera([x, y, z], pov) {
-    const a = rad(pov.heading), t = rad(pov.pitch);
-    const cx = x * Math.cos(a) - y * Math.sin(a), cy = z, cz = x * Math.sin(a) + y * Math.cos(a);
+    const a = rad(pov.heading);
+    const t = rad(pov.pitch);
+    const cx = x * Math.cos(a) - y * Math.sin(a);
+    const cy = z;
+    const cz = x * Math.sin(a) + y * Math.cos(a);
     return [cx, cy * Math.cos(t) - cz * Math.sin(t), cy * Math.sin(t) + cz * Math.cos(t)];
   }
   // Projects a polygon onto the screen, clipping the part behind the camera.
@@ -5599,8 +6338,10 @@ section.flat .status:empty { display: none; }
     const cam = pts.map(p => toCamera(p, pov));
     const clipped = [];
     for (let i = 0; i < cam.length; i++) {
-      const p = cam[i], q = cam[(i + 1) % cam.length];
-      const pin = p[2] > NEAR, qin = q[2] > NEAR;
+      const p = cam[i];
+      const q = cam[(i + 1) % cam.length];
+      const pin = p[2] > NEAR;
+      const qin = q[2] > NEAR;
       if (pin) clipped.push(p);
       if (pin !== qin) {
         const k = (NEAR - p[2]) / (q[2] - p[2]);
@@ -5620,7 +6361,9 @@ section.flat .status:empty { display: none; }
       if (!st) return;
       const { canvas } = st;
       const div = panos.get(pano);
-      const w = div.clientWidth, h = div.clientHeight, dpr = devicePixelRatio || 1;
+      const w = div.clientWidth;
+      const h = div.clientHeight;
+      const dpr = devicePixelRatio || 1;
       if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
@@ -5635,7 +6378,13 @@ section.flat .status:empty { display: none; }
       const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch };
       const fov = Math.min(127, 180 / 2 ** (pano.getZoom() ?? 1));
       const P = pts => project(pts, rel, fov, w, h);
-      const rect = (x0, x1, y0, y1, z) => P([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]);
+      const rect = (x0, x1, y0, y1, z) =>
+        P([
+          [x0, y0, z],
+          [x1, y0, z],
+          [x1, y1, z],
+          [x0, y1, z],
+        ]);
       const path = pts => {
         ctx.beginPath();
         pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
@@ -5650,10 +6399,13 @@ section.flat .status:empty { display: none; }
         ctx.fill();
         ctx.stroke();
       };
-      const cap = (cx, cy, r, side, z) => P(Array.from({ length: 9 }, (_, i) => {
-        const a = ((i / 8) - 0.5) * Math.PI;
-        return [cx + side * r * Math.cos(a), cy + r * Math.sin(a), z];
-      }));
+      const cap = (cx, cy, r, side, z) =>
+        P(
+          Array.from({ length: 9 }, (_, i) => {
+            const a = (i / 8 - 0.5) * Math.PI;
+            return [cx + side * r * Math.cos(a), cy + r * Math.sin(a), z];
+          }),
+        );
       // strips across a bar's width, lit from above
       const shade = (x0, x1, y, hw, z, colors) => {
         const n = colors.length;
@@ -5664,7 +6416,11 @@ section.flat .status:empty { display: none; }
       // fades the inner end of a bar into the blurred car
       const fade = (x0, x1, y, hw, z) => {
         const r = rect(x0, x1, y - hw, y + hw, z);
-        const ends = P([[x0, y, z], [x1, y, z], [x1, y + 0.001, z]]);
+        const ends = P([
+          [x0, y, z],
+          [x1, y, z],
+          [x1, y + 0.001, z],
+        ]);
         if (!r || !ends || ends.length < 2) return;
         const g = ctx.createLinearGradient(ends[0][0], ends[0][1], ends[1][0], ends[1][1]);
         g.addColorStop(0, 'rgba(0,0,0,1)');
@@ -5678,7 +6434,9 @@ section.flat .status:empty { display: none; }
       const { bars, tape } = CAR;
       bars.ys.forEach((y, i) => {
         for (const side of [-1, 1]) {
-          const x0 = side * bars.inner, x1 = side * bars.outer, hw = bars.w;
+          const x0 = side * bars.inner;
+          const x1 = side * bars.outer;
+          const hw = bars.w;
           if (!rect(x0, x1, y - hw, y + hw, bars.z)) continue;
 
           ctx.save();
@@ -5695,7 +6453,9 @@ section.flat .status:empty { display: none; }
           fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
 
           if (i === tape.bar && side === tape.side) {
-            const tx0 = side * (bars.outer - tape.len), tx1 = x1 + side * 0.015, tw = tape.w;
+            const tx0 = side * (bars.outer - tape.len);
+            const tx1 = x1 + side * 0.015;
+            const tw = tape.w;
             const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
             shade(tx0, tx1, y, tw, bars.z + 0.002, black);
             fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
@@ -5714,7 +6474,8 @@ section.flat .status:empty { display: none; }
       const st = attached.get(pano);
       if (!st) return;
       st.info = null;
-      const pos = pano.getPosition(), id = pano.getPano();
+      const pos = pano.getPosition();
+      const id = pano.getPano();
       if (pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]))) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;
@@ -5788,10 +6549,27 @@ section.flat .status:empty { display: none; }
     options: [
       // index into WORDS in main.js; 0 picks one per panorama
       {
-        key: 'script', label: 'Script to write in', type: 'select', default: 0,
+        key: 'script',
+        label: 'Script to write in',
+        type: 'select',
+        default: 0,
         choices: [
-          'Random', 'Thai', 'Georgian', 'Korean', 'Arabic', 'Cyrillic', 'Greek', 'Hebrew', 'Japanese', 'Hindi',
-          'Armenian', 'English (wrong words)', 'German', 'Spanish', 'French', 'Minecraft',
+          'Random',
+          'Thai',
+          'Georgian',
+          'Korean',
+          'Arabic',
+          'Cyrillic',
+          'Greek',
+          'Hebrew',
+          'Japanese',
+          'Hindi',
+          'Armenian',
+          'English (wrong words)',
+          'German',
+          'Spanish',
+          'French',
+          'Minecraft',
         ].map((label, value) => ({ value, label })),
       },
     ],
@@ -5813,6 +6591,7 @@ section.flat .status:empty { display: none; }
   const TEXT_OF_BOX = 0.8;
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
+  // biome-ignore format: word list
   const ENGLISH = [
     'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing',
     'JackSucksAtClips', 'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol',
@@ -5838,6 +6617,7 @@ section.flat .status:empty { display: none; }
     'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
   // Indexed by the "script" option; 0 is random (one script per panorama).
+  // biome-ignore format: word lists
   const WORDS = [
     null,
     [
@@ -5968,6 +6748,7 @@ section.flat .status:empty { display: none; }
   const JOINED = new Set([4, 9]);
 
   // Minecraft's enchanting-table letters as strokes on a 10x10 grid (a single point is a dot).
+  // biome-ignore format: glyph table
   const GALACTIC = [
     [[[1,3],[9,3]],[[1,3],[1,6]],[[9,3],[9,9]]],          // ᔑ
     [[[3,1],[3,9],[7,9],[7,6]]],                          // ʖ
@@ -5996,15 +6777,19 @@ section.flat .status:empty { display: none; }
     [[[2,9],[2,2],[8,2],[8,9]]],                          // ⨅
   ];
   function drawGalactic(g, b, rand = Math.random) {
-    const h = b.h * 0.72, adv = h * 0.62, gap = h * 0.16;
+    const h = b.h * 0.72;
+    const adv = h * 0.62;
+    const gap = h * 0.16;
     const n = Math.max(1, Math.floor((b.w - 2) / adv));
-    const x0 = b.x + (b.w - n * adv + gap) / 2, y0 = b.y + (b.h - h) / 2;
+    const x0 = b.x + (b.w - n * adv + gap) / 2;
+    const y0 = b.y + (b.h - h) / 2;
     g.lineWidth = Math.max(1, h * 0.11);
     g.lineCap = g.lineJoin = 'round';
     g.strokeStyle = g.fillStyle;
     for (let i = 0; i < n; i++) {
       const glyph = GALACTIC[Math.floor(rand() * GALACTIC.length)];
-      const gx = x0 + i * adv, s = (adv - gap) / 10;
+      const gx = x0 + i * adv;
+      const s = (adv - gap) / 10;
       for (const line of glyph) {
         g.beginPath();
         if (line.length === 1) {
@@ -6030,7 +6815,7 @@ section.flat .status:empty { display: none; }
   function rng(seed) {
     let a = seed >>> 0;
     return () => {
-      a = (a + 0x6D2B79F5) >>> 0;
+      a = (a + 0x6d2b79f5) >>> 0;
       let t = a;
       t = Math.imul(t ^ (t >>> 15), t | 1);
       t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
@@ -6038,13 +6823,15 @@ section.flat .status:empty { display: none; }
     };
   }
 
-  let active = null;                          // cfg while the script is on
+  let active = null; // cfg while the script is on
   const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, editMs: 0, editMax: 0 };
   ggs.lyingSigns = { stats };
 
   // ---- detector worker ----
-  let worker = null, workerReady = null, nextId = 0;
-  const waiting = new Map();                  // id -> resolve
+  let worker = null;
+  let workerReady = null;
+  let nextId = 0;
+  const waiting = new Map(); // id -> resolve
   function detector() {
     if (workerReady) return workerReady;
     workerReady = (async () => {
@@ -6103,12 +6890,17 @@ section.flat .status:empty { display: none; }
   // Detection queue, nearest tile to the view first. Tiles whose textures are gone, or whose
   // panorama is no longer shown, are dropped unrun. The queue is capped so moving quickly
   // never builds a backlog. A dropped tile is detected if it is uploaded again.
-  const queue = [];                           // [{ img, res, alive, url }]
+  const queue = []; // [{ img, res, alive, url }]
   let inflight = 0;
-  const MAX_INFLIGHT = 2, MAX_QUEUE = 300;
+  const MAX_INFLIGHT = 2;
+  const MAX_QUEUE = 300;
   ggs.lyingSigns.debug = () => ({
-    queue: queue.length, inflight, waiting: waiting.size,
-    tiles: tiles.size, panos: signs.size, stale: stale.size,
+    queue: queue.length,
+    inflight,
+    waiting: waiting.size,
+    tiles: tiles.size,
+    panos: signs.size,
+    stale: stale.size,
   });
   function detect(img, alive, url) {
     return new Promise(res => {
@@ -6122,7 +6914,11 @@ section.flat .status:empty { display: none; }
   }
   function pruneQueue() {
     const shown = new Set();
-    for (const p of panos) { try { shown.add(p.getPano()); } catch {} }
+    for (const p of panos) {
+      try {
+        shown.add(p.getPano());
+      } catch {}
+    }
     for (let i = queue.length - 1; i >= 0; i--) {
       const id = ggs.tileKey(queue[i].url)?.pano;
       if (id && !shown.has(id)) {
@@ -6136,27 +6932,35 @@ section.flat .status:empty { display: none; }
     if (!k) return null;
     const { pano: id, x, y, z } = k;
     for (const p of panos) {
-      let pov, centre;
+      let pov;
+      let centre;
       try {
         if (p.getPano() !== id) continue;
         pov = p.getPov();
         centre = p.getPhotographerPov?.()?.heading;
-      } catch { continue; }
+      } catch {
+        continue;
+      }
       if (!pov || centre == null) return null;
-      const cols = 2 ** z, rows = Math.max(1, 2 ** (z - 1));
+      const cols = 2 ** z;
+      const rows = Math.max(1, 2 ** (z - 1));
       const heading = centre + ((+x + 0.5) / cols - 0.5) * 360;
       const pitch = (0.5 - (+y + 0.5) / rows) * 180;
-      const dh = Math.abs(((heading - pov.heading) % 360 + 540) % 360 - 180);
-      return Math.hypot(dh * Math.cos(pov.pitch * Math.PI / 180), pitch - pov.pitch);
+      const dh = Math.abs(((((heading - pov.heading) % 360) + 540) % 360) - 180);
+      return Math.hypot(dh * Math.cos((pov.pitch * Math.PI) / 180), pitch - pov.pitch);
     }
     return null;
   }
   function pickJob() {
-    let best = queue.length - 1, bestD = Infinity;
+    let best = queue.length - 1;
+    let bestD = Infinity;
     for (let i = queue.length - 1; i >= 0; i--) {
       const d = tileDistance(queue[i].url);
-      if (d === null) break;                  // no view info: newest first
-      if (d < bestD) { bestD = d; best = i; }
+      if (d === null) break; // no view info: newest first
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
     }
     return queue.splice(best, 1)[0];
   }
@@ -6195,25 +6999,30 @@ section.flat .status:empty { display: none; }
   // what was decided about it: skipped or not, letter height, colour, the word written.
   // A sign found at one zoom is drawn into the tiles of every zoom on screen, so zooming in
   // or out shows the same words.
-  const signs = new Map();                    // pano -> [sign]
-  const detectedTiles = new Set();            // "pano/z/x/y" the detector has run on
+  const signs = new Map(); // pano -> [sign]
+  const detectedTiles = new Set(); // "pano/z/x/y" the detector has run on
   const tileId = k => `${k.pano}/${k.z}/${k.x}/${k.y}`;
   const MAX_PANOS = 20;
 
   function toTile(sg, k, W) {
     const u = W * 2 ** k.z;
     return {
-      cx: sg.cx * u - k.x * W, cy: sg.cy * u - k.y * W, w: sg.w * u, h: sg.h * u,
-      angle: sg.angle, vertical: sg.vertical, sign: sg,
+      cx: sg.cx * u - k.x * W,
+      cy: sg.cy * u - k.y * W,
+      w: sg.w * u,
+      h: sg.h * u,
+      angle: sg.angle,
+      vertical: sg.vertical,
+      sign: sg,
     };
   }
   function touches(sg, k, W) {
-    const b = toTile(sg, k, W), r = Math.hypot(b.w, b.h) / 2;
+    const b = toTile(sg, k, W);
+    const r = Math.hypot(b.w, b.h) / 2;
     return b.cx + r > 0 && b.cy + r > 0 && b.cx - r < W && b.cy - r < W;
   }
-  const signsIn = (k, W) => (signs.get(k.pano) || [])
-    .filter(sg => touches(sg, k, W))
-    .map(sg => toTile(sg, k, W));
+  const signsIn = (k, W) =>
+    (signs.get(k.pano) || []).filter(sg => touches(sg, k, W)).map(sg => toTile(sg, k, W));
 
   // Adds a tile's detections, biggest first. A known sign wins, as it may span tiles, unless a
   // new box is bigger and covers its middle (the other zoom only saw a sliver of it).
@@ -6226,11 +7035,19 @@ section.flat .status:empty { display: none; }
         for (const id of detectedTiles) if (id.startsWith(old + '/')) detectedTiles.delete(id);
       }
     }
-    const list = signs.get(k.pano), u = W * 2 ** k.z, added = [], removed = [];
+    const list = signs.get(k.pano);
+    const u = W * 2 ** k.z;
+    const added = [];
+    const removed = [];
     for (const b of found.slice().sort((a, c) => c.w * c.h - a.w * a.h)) {
       const sg = {
-        cx: (k.x * W + b.cx) / u, cy: (k.y * W + b.cy) / u, w: b.w / u, h: b.h / u,
-        angle: b.angle, vertical: b.vertical, words: {},
+        cx: (k.x * W + b.cx) / u,
+        cy: (k.y * W + b.cy) / u,
+        w: b.w / u,
+        h: b.h / u,
+        angle: b.angle,
+        vertical: b.vertical,
+        words: {},
       };
       const covered = list.filter(o => inside(o, sg) && sg.w * sg.h > o.w * o.h);
       if (list.some(o => !covered.includes(o) && inside(sg, o))) continue;
@@ -6246,7 +7063,10 @@ section.flat .status:empty { display: none; }
   }
   // whether b's middle is inside box a
   function inside(b, a) {
-    const dx = b.cx - a.cx, dy = b.cy - a.cy, c = Math.cos(a.angle), s = Math.sin(a.angle);
+    const dx = b.cx - a.cx;
+    const dy = b.cy - a.cy;
+    const c = Math.cos(a.angle);
+    const s = Math.sin(a.angle);
     return Math.abs(dx * c + dy * s) < a.w / 2 && Math.abs(-dx * s + dy * c) < a.h / 2;
   }
   // Known well enough to edit without waiting: the detector ran on this tile, on its parent
@@ -6262,10 +7082,11 @@ section.flat .status:empty { display: none; }
   }
   function kidsCovered(k, depth) {
     if (depth === 0) return false;
-    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const c = { pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy };
-      if (!detectedTiles.has(tileId(c)) && !kidsCovered(c, depth - 1)) return false;
-    }
+    for (let dy = 0; dy < 2; dy++)
+      for (let dx = 0; dx < 2; dx++) {
+        const c = { pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy };
+        if (!detectedTiles.has(tileId(c)) && !kidsCovered(c, depth - 1)) return false;
+      }
     return true;
   }
 
@@ -6277,7 +7098,8 @@ section.flat .status:empty { display: none; }
   // the detector works. Tiles another script already swapped for a canvas are left alone.
   ggs.tiles.filter((rec, img) => {
     if (!active || !(img instanceof HTMLImageElement)) return img;
-    const url = rec.url, k = ggs.tileKey(url);
+    const url = rec.url;
+    const k = ggs.tileKey(url);
     if (!k) return img;
     let t = tiles.get(url);
     if (!t) {
@@ -6300,11 +7122,12 @@ section.flat .status:empty { display: none; }
   }, 1);
 
   function queueDetect(t, url) {
-    const k = t.key, W = t.img.naturalWidth || t.img.width;
+    const k = t.key;
+    const W = t.img.naturalWidth || t.img.width;
     t.queued = true;
     detect(t.img, () => t.recs.some(ggs.tiles.live), url).then(found => {
       t.queued = false;
-      if (!found) return;                     // skipped or failed; a later upload retries
+      if (!found) return; // skipped or failed; a later upload retries
       detectedTiles.add(tileId(k));
       stats.boxes += found.length;
       const { added, removed } = addSigns(k, W, found);
@@ -6332,7 +7155,7 @@ section.flat .status:empty { display: none; }
   // those tiles go to WebGL again. A tile that drew a since-replaced sign is redone. The tile
   // just detected (`now`) is done at once, the rest a few at a time in idle time, so a burst
   // of detections never stalls a frame.
-  const stale = new Map();                    // tile -> Set of signs to add, or 'all' to redo it
+  const stale = new Map(); // tile -> Set of signs to add, or 'all' to redo it
   let draining = false;
   function refresh(pano, added, removed, now) {
     for (const t of tiles.values()) {
@@ -6362,9 +7185,12 @@ section.flat .status:empty { display: none; }
     }
     upload(t);
   }
-  const idle = () => new Promise(res => (window.requestIdleCallback
-    ? requestIdleCallback(res, { timeout: 200 })
-    : setTimeout(() => res({ timeRemaining: () => 8 }), 16)));
+  const idle = () =>
+    new Promise(res =>
+      window.requestIdleCallback
+        ? requestIdleCallback(res, { timeout: 200 })
+        : setTimeout(() => res({ timeRemaining: () => 8 }), 16),
+    );
   async function drain() {
     if (draining) return;
     draining = true;
@@ -6394,10 +7220,12 @@ section.flat .status:empty { display: none; }
   // ---- the edits ----
   // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
   function blurred(img) {
-    const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-    const small = new OffscreenCanvas(Math.max(1, W / 10 | 0), Math.max(1, H / 10 | 0));
+    const W = img.naturalWidth || img.width;
+    const H = img.naturalHeight || img.height;
+    const small = new OffscreenCanvas(Math.max(1, (W / 10) | 0), Math.max(1, (H / 10) | 0));
     small.getContext('2d').drawImage(img, 0, 0, small.width, small.height);
-    const c = new OffscreenCanvas(W, H), g = c.getContext('2d');
+    const c = new OffscreenCanvas(W, H);
+    const g = c.getContext('2d');
     g.imageSmoothingQuality = 'high';
     g.drawImage(small, 0, 0, W, H);
     return c;
@@ -6407,7 +7235,8 @@ section.flat .status:empty { display: none; }
   // earlier edit of the same tile, only the given boxes are added to it.
   function editSync(src, boxes, cfg, key, onto) {
     const t0 = performance.now();
-    const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+    const W = src.naturalWidth || src.width;
+    const H = src.naturalHeight || src.height;
     const c = onto || new OffscreenCanvas(W, H);
     const g = c.getContext('2d', { willReadFrequently: true });
     if (!onto) {
@@ -6419,7 +7248,7 @@ section.flat .status:empty { display: none; }
       let script = cfg.script | 0;
       if (!WORDS[script]) script = 0;
       // random: one script per panorama
-      if (script === 0) script = 1 + hash('script:' + (key?.pano || '')) % (WORDS.length - 1);
+      if (script === 0) script = 1 + (hash('script:' + (key?.pano || '')) % (WORDS.length - 1));
       const list = WORDS[script];
       const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
       try {
@@ -6451,7 +7280,7 @@ section.flat .status:empty { display: none; }
   const GROUND_PITCH = -30;
   function onGround(k, b, H) {
     if (!k) return false;
-    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H);   // degrees per tile pixel
+    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H); // degrees per tile pixel
     const pitch = 90 - (k.y * H + b.cy) * deg;
     return pitch < GROUND_PITCH || (pitch < -8 && Math.min(b.w, b.h) * deg > 6);
   }
@@ -6463,12 +7292,14 @@ section.flat .status:empty { display: none; }
     if (!k) return;
     const rows = Math.max(1, 2 ** (k.z - 1));
     // tile y where the mosaic starts
-    const top = Math.max(0, ((90 - NADIR_PITCH) / 180 * rows - k.y) * H);
+    const top = Math.max(0, (((90 - NADIR_PITCH) / 180) * rows - k.y) * H);
     if (top >= H) return;
-    const band = H - top, fade = Math.min(10, band);
-    const small = new OffscreenCanvas(Math.max(1, W / 16 | 0), Math.max(1, band / 16 | 0));
+    const band = H - top;
+    const fade = Math.min(10, band);
+    const small = new OffscreenCanvas(Math.max(1, (W / 16) | 0), Math.max(1, (band / 16) | 0));
     small.getContext('2d').drawImage(g.canvas, 0, top, W, band, 0, 0, small.width, small.height);
-    const layer = new OffscreenCanvas(W, band), l = layer.getContext('2d');
+    const layer = new OffscreenCanvas(W, band);
+    const l = layer.getContext('2d');
     l.imageSmoothingQuality = 'high';
     l.drawImage(small, 0, 0, W, band);
     const grad = l.createLinearGradient(0, 0, 0, fade);
@@ -6489,47 +7320,69 @@ section.flat .status:empty { display: none; }
   // halo, and filled in from the sign around them, so the sign's colour and gradients stay.
   // The new word goes on top at the old text's height and colour.
   function replaceBox(g, raw, script, pick, rand, tileW) {
-    const W = g.canvas.width, H = g.canvas.height;
+    const W = g.canvas.width;
+    const H = g.canvas.height;
     // level text is copied, not resampled
     const angle = Math.abs(raw.angle) < 0.01 ? 0 : raw.angle;
-    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
     // the frame's origin, on a pixel
-    const ox = Math.round(raw.cx), oy = Math.round(raw.cy);
-    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa, bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
+    const ox = Math.round(raw.cx);
+    const oy = Math.round(raw.cy);
+    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa;
+    const bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
     // the box hugs the strokes, so give them room
-    const pad = raw.h * 0.12, hw = raw.w / 2 + pad, hh = raw.h / 2 + pad;
-    const ctx = Math.max(4, Math.round(raw.h * 0.3));             // sign around the box, for the fill
+    const pad = raw.h * 0.12;
+    const hw = raw.w / 2 + pad;
+    const hh = raw.h / 2 + pad;
+    const ctx = Math.max(4, Math.round(raw.h * 0.3)); // sign around the box, for the fill
     // the tile's extent in the frame
-    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-    for (const [x, y] of [[0, 0], [W, 0], [0, H], [W, H]]) {
-      const u = (x - ox) * ca + (y - oy) * sa, v = -(x - ox) * sa + (y - oy) * ca;
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const [x, y] of [
+      [0, 0],
+      [W, 0],
+      [0, H],
+      [W, H],
+    ]) {
+      const u = (x - ox) * ca + (y - oy) * sa;
+      const v = -(x - ox) * sa + (y - oy) * ca;
       u0 = Math.min(u0, u);
       u1 = Math.max(u1, u);
       v0 = Math.min(v0, v);
       v1 = Math.max(v1, v);
     }
-    const rx = Math.floor(Math.max(bu - hw - ctx, u0)), ry = Math.floor(Math.max(bv - hh - ctx, v0));
-    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx, h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
+    const rx = Math.floor(Math.max(bu - hw - ctx, u0));
+    const ry = Math.floor(Math.max(bv - hh - ctx, v0));
+    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx;
+    const h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
     if (w < 4 || h < 4) return;
     // Strokes are looked for in the detector's own box. The padding is room to grow them into.
     const box = [
-      Math.max(0, Math.round(bu - raw.w / 2 - rx)), Math.max(0, Math.round(bv - raw.h / 2 - ry)),
-      Math.min(w, Math.round(bu + raw.w / 2 - rx)), Math.min(h, Math.round(bv + raw.h / 2 - ry)),
+      Math.max(0, Math.round(bu - raw.w / 2 - rx)),
+      Math.max(0, Math.round(bv - raw.h / 2 - ry)),
+      Math.min(w, Math.round(bu + raw.w / 2 - rx)),
+      Math.min(h, Math.round(bv + raw.h / 2 - ry)),
     ];
     if (box[2] - box[0] < 3 || box[3] - box[1] < 3) return;
     // the box isn't cut by the tile edge
     const whole = bu - hw - rx > 0 && bv - hh - ry > 0 && bu + hw - rx < w && bv + hh - ry < h;
 
-    const temp = new OffscreenCanvas(w, h), t = temp.getContext('2d', { willReadFrequently: true });
+    const temp = new OffscreenCanvas(w, h);
+    const t = temp.getContext('2d', { willReadFrequently: true });
     t.translate(-rx, -ry);
     t.rotate(-angle);
     t.translate(-ox, -oy);
-    t.drawImage(g.canvas, 0, 0);                                  // outside the tile stays transparent
+    t.drawImage(g.canvas, 0, 0); // outside the tile stays transparent
     t.setTransform(1, 0, 0, 1, 0, 0);
-    const img = t.getImageData(0, 0, w, h), d = img.data;
+    const img = t.getImageData(0, 0, w, h);
+    const d = img.data;
 
     // Decisions made while the whole box is on the tile are kept on the sign for every zoom.
-    const sign = raw.sign, fit = sign.fit;
+    const sign = raw.sign;
+    const fit = sign.fit;
     if (fit?.skip) return;
     const grow = 1 + Math.round(raw.h * 0.04);
     const s = strokes(d, w, h, box, grow);
@@ -6554,13 +7407,16 @@ section.flat .status:empty { display: none; }
       const measured = whole && s.bottom > s.top;
       f = {
         textH: measured ? Math.max(0.35, (s.bottom - s.top + 1) / raw.h) : TEXT_OF_BOX,
-        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0, fg: s.fg,
+        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0,
+        fg: s.fg,
       };
       if (whole) sign.fit = f;
     }
-    const textH = f.textH * raw.h, cy = bv - ry + f.dy * raw.h;
+    const textH = f.textH * raw.h;
+    const cy = bv - ry + f.dy * raw.h;
     // the new word on its own layer, kept to the sign's surface
-    const layer = new OffscreenCanvas(w, h), x = layer.getContext('2d', { willReadFrequently: true });
+    const layer = new OffscreenCanvas(w, h);
+    const x = layer.getContext('2d', { willReadFrequently: true });
     x.fillStyle = `rgb(${f.fg.join(',')})`;
     if (script === GALACTIC_INDEX) {
       const glyphH = textH / 0.72;
@@ -6592,11 +7448,11 @@ section.flat .status:empty { display: none; }
     for (let k = 0; k < 6; k++) {
       const word = pick();
       let fill;
-      if (stacked) fill = aspect * 0.92 / (graphemes(word).length * textH * 1.1);
+      if (stacked) fill = (aspect * 0.92) / (graphemes(word).length * textH * 1.1);
       else {
         const m = measurer.measureText(word);
         const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-        fill = aspect * 0.92 / (m.width * textH / gh);
+        fill = (aspect * 0.92) / ((m.width * textH) / gh);
       }
       if (!best || Math.abs(Math.log(fill)) < Math.abs(Math.log(best.fill))) best = { word, fill };
     }
@@ -6607,7 +7463,8 @@ section.flat .status:empty { display: none; }
   // to fill boxW, shrunk if it still doesn't fit.
   function writeWord(t, cx, cy, textH, boxW, { word, stacked }) {
     if (stacked) {
-      const chars = graphemes(word), step = Math.min(textH * 1.1, boxW * 0.92 / chars.length);
+      const chars = graphemes(word);
+      const step = Math.min(textH * 1.1, (boxW * 0.92) / chars.length);
       t.font = `bold ${step / 1.1}px sans-serif`;
       t.textAlign = 'center';
       t.textBaseline = 'middle';
@@ -6623,9 +7480,9 @@ section.flat .status:empty { display: none; }
     t.font = 'bold 100px sans-serif';
     let m = t.measureText(word);
     const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-    const width = m.width * textH / gh;
-    const sx = Math.min(1.25, Math.max(0.75, boxW * 0.92 / width));
-    let size = 100 * textH / gh;
+    const width = (m.width * textH) / gh;
+    const sx = Math.min(1.25, Math.max(0.75, (boxW * 0.92) / width));
+    let size = (100 * textH) / gh;
     if (width * sx > boxW) size *= boxW / (width * sx);
     t.font = `bold ${size}px sans-serif`;
     m = t.measureText(word);
@@ -6641,18 +7498,19 @@ section.flat .status:empty { display: none; }
   // their colour, the rows they span and how grainy the sign is, or null if nothing stands out.
   function strokes(d, w, h, box, grow) {
     const [x0, y0, x1, y1] = box;
-    const bins = new Float64Array(512 * 4);                       // 8-level colour cube: count, r, g, b
+    const bins = new Float64Array(512 * 4); // 8-level colour cube: count, r, g, b
     let n = 0;
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const i = (y * w + x) * 4;
-      if (d[i + 3] < 200) continue;
-      n++;
-      const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
-      bins[k]++;
-      bins[k + 1] += d[i];
-      bins[k + 2] += d[i + 1];
-      bins[k + 3] += d[i + 2];
-    }
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 200) continue;
+        n++;
+        const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
+        bins[k]++;
+        bins[k + 1] += d[i];
+        bins[k + 2] += d[i + 1];
+        bins[k + 3] += d[i + 2];
+      }
     let b = 0;
     for (let k = 4; k < bins.length; k += 4) if (bins[k] > bins[b]) b = k;
     if (!n) return null;
@@ -6660,10 +7518,11 @@ section.flat .status:empty { display: none; }
     const dist = i => Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]);
     // typical stroke pixel: the median of the eighth furthest from the sign colour
     const hist = new Uint32Array(766);
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const i = (y * w + x) * 4;
-      if (d[i + 3] >= 200) hist[dist(i) | 0]++;
-    }
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] >= 200) hist[dist(i) | 0]++;
+      }
     let contrast = 765;
     for (let v = 765, c = 0; v >= 0; v--) {
       c += hist[v];
@@ -6673,10 +7532,14 @@ section.flat .status:empty { display: none; }
       }
     }
     if (contrast < MIN_CONTRAST) return null;
-    const thr = Math.max(24, contrast * 0.45), strong = contrast * 0.8;
+    const thr = Math.max(24, contrast * 0.45);
+    const strong = contrast * 0.8;
     const core = new Uint8Array(w * h);
-    const ink = new Float64Array(512 * 4);                        // stroke colours, same cube
-    let top = h, bottom = -1, gsum = 0, gn = 0;
+    const ink = new Float64Array(512 * 4); // stroke colours, same cube
+    let top = h;
+    let bottom = -1;
+    let gsum = 0;
+    let gn = 0;
     const rowMin = Math.max(2, (x1 - x0) * 0.03);
     for (let y = y0; y < y1; y++) {
       let row = 0;
@@ -6712,7 +7575,10 @@ section.flat .status:empty { display: none; }
     return {
       mask: dilate(core, w, h, grow),
       fg: [1, 2, 3].map(j => Math.round(ink[f + j] / ink[f])),
-      bg, contrast, top, bottom,
+      bg,
+      contrast,
+      top,
+      bottom,
       grain: gn ? Math.min(6, (gsum / gn) * 0.5) : 0,
     };
   }
@@ -6720,9 +7586,10 @@ section.flat .status:empty { display: none; }
   // see-through. The background is lightened by about the same fraction in every channel.
   // Real white or grey lettering is far more opaque.
   function watermark(raw, tileW, bg, fg) {
-    const h = raw.h / tileW, aspect = raw.w / raw.h;
+    const h = raw.h / tileW;
+    const aspect = raw.w / raw.h;
     if (raw.vertical || h < 0.018 || h > 0.045 || aspect < 3.5 || aspect > 8) return false;
-    if (Math.max(...fg) - Math.min(...fg) > 30) return false;     // coloured: not the grey mark
+    if (Math.max(...fg) - Math.min(...fg) > 30) return false; // coloured: not the grey mark
     const a = [0, 1, 2].map(k => (fg[k] - bg[k]) / (256 - bg[k]));
     return Math.min(...a) > 0.1 && Math.max(...a) < 0.55 && Math.max(...a) - Math.min(...a) < 0.1;
   }
@@ -6733,7 +7600,8 @@ section.flat .status:empty { display: none; }
   function surface(d, w, h, s, r) {
     const near = (i, c, lim) =>
       Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < lim;
-    const lim = Math.max(40, s.contrast * 0.45), m = new Uint8Array(w * h);
+    const lim = Math.max(40, s.contrast * 0.45);
+    const m = new Uint8Array(w * h);
     for (let i = 0; i < w * h; i++) {
       const j = i * 4;
       if (d[j + 3] >= 200 && (near(j, s.bg, lim) || near(j, s.fg, lim))) m[i] = 1;
@@ -6749,7 +7617,8 @@ section.flat .status:empty { display: none; }
 
   // Grows a mask by r px in every direction (a square), with running counts along rows, then columns.
   function dilate(m, w, h, r) {
-    const a = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    const a = new Uint8Array(w * h);
+    const out = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) {
       let c = 0;
       for (let x = 0; x < Math.min(r, w); x++) c += m[y * w + x];
@@ -6775,7 +7644,10 @@ section.flat .status:empty { display: none; }
   // unknown pixel the smooth, bilinear value from the level above. Linear in the pixel count.
   function pushPull(d, mask, w, h) {
     const levels = [];
-    let c = new Float32Array(w * h * 3), wt = new Float32Array(w * h), lw = w, lh = h;
+    let c = new Float32Array(w * h * 3);
+    let wt = new Float32Array(w * h);
+    let lw = w;
+    let lh = h;
     for (let i = 0; i < w * h; i++) {
       if (mask[i] || d[i * 4 + 3] < 200) continue;
       wt[i] = 1;
@@ -6785,27 +7657,36 @@ section.flat .status:empty { display: none; }
     }
     levels.push([c, wt, lw, lh]);
     while (lw > 1 || lh > 1) {
-      const nw = Math.ceil(lw / 2), nh = Math.ceil(lh / 2);
-      const nc = new Float32Array(nw * nh * 3), nt = new Float32Array(nw * nh);
-      for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
-        let s0 = 0, s1 = 0, s2 = 0, ws = 0;
-        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-          const sx = 2 * x + dx, sy = 2 * y + dy;
-          if (sx >= lw || sy >= lh) continue;
-          const j = sy * lw + sx, q = wt[j];
-          s0 += c[j * 3] * q;
-          s1 += c[j * 3 + 1] * q;
-          s2 += c[j * 3 + 2] * q;
-          ws += q;
+      const nw = Math.ceil(lw / 2);
+      const nh = Math.ceil(lh / 2);
+      const nc = new Float32Array(nw * nh * 3);
+      const nt = new Float32Array(nw * nh);
+      for (let y = 0; y < nh; y++)
+        for (let x = 0; x < nw; x++) {
+          let s0 = 0;
+          let s1 = 0;
+          let s2 = 0;
+          let ws = 0;
+          for (let dy = 0; dy < 2; dy++)
+            for (let dx = 0; dx < 2; dx++) {
+              const sx = 2 * x + dx;
+              const sy = 2 * y + dy;
+              if (sx >= lw || sy >= lh) continue;
+              const j = sy * lw + sx;
+              const q = wt[j];
+              s0 += c[j * 3] * q;
+              s1 += c[j * 3 + 1] * q;
+              s2 += c[j * 3 + 2] * q;
+              ws += q;
+            }
+          const j = y * nw + x;
+          if (ws) {
+            nc[j * 3] = s0 / ws;
+            nc[j * 3 + 1] = s1 / ws;
+            nc[j * 3 + 2] = s2 / ws;
+          }
+          nt[j] = Math.min(1, ws);
         }
-        const j = y * nw + x;
-        if (ws) {
-          nc[j * 3] = s0 / ws;
-          nc[j * 3 + 1] = s1 / ws;
-          nc[j * 3 + 2] = s2 / ws;
-        }
-        nt[j] = Math.min(1, ws);
-      }
       c = nc;
       wt = nt;
       lw = nw;
@@ -6813,18 +7694,25 @@ section.flat .status:empty { display: none; }
       levels.push([c, wt, lw, lh]);
     }
     for (let l = levels.length - 2; l >= 0; l--) {
-      const [c, wt, lw, lh] = levels[l], [pc, , pw, ph] = levels[l + 1];
+      const [c, wt, lw, lh] = levels[l];
+      const [pc, , pw, ph] = levels[l + 1];
       for (let y = 0; y < lh; y++) {
         const fy = Math.min(ph - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
-        const y0 = fy | 0, y1 = Math.min(ph - 1, y0 + 1), ty = fy - y0;
+        const y0 = fy | 0;
+        const y1 = Math.min(ph - 1, y0 + 1);
+        const ty = fy - y0;
         for (let x = 0; x < lw; x++) {
-          const j = y * lw + x, q = wt[j];
+          const j = y * lw + x;
+          const q = wt[j];
           if (q >= 1) continue;
           const fx = Math.min(pw - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
-          const x0 = fx | 0, x1 = Math.min(pw - 1, x0 + 1), tx = fx - x0;
+          const x0 = fx | 0;
+          const x1 = Math.min(pw - 1, x0 + 1);
+          const tx = fx - x0;
           for (let k = 0; k < 3; k++) {
-            const up = (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty)
-              + (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
+            const up =
+              (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty) +
+              (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
             c[j * 3 + k] = c[j * 3 + k] * q + up * (1 - q);
           }
           wt[j] = 1;
@@ -6846,46 +7734,58 @@ section.flat .status:empty { display: none; }
   // to mirror it gets plain grain.
   function texture(d, mask, w, h, box, levels, grain) {
     const [x0, y0, x1, y1] = box;
-    const L = levels[Math.min(2, levels.length - 1)], f = 2 ** Math.min(2, levels.length - 1);
+    const L = levels[Math.min(2, levels.length - 1)];
+    const f = 2 ** Math.min(2, levels.length - 1);
     const blurred = (x, y, k) => {
       const [c, , lw, lh] = L;
       const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5));
       const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5));
-      const xa = fx | 0, ya = fy | 0, xb = Math.min(lw - 1, xa + 1), yb = Math.min(lh - 1, ya + 1);
-      const tx = fx - xa, ty = fy - ya;
-      return (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty)
-        + (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty;
+      const xa = fx | 0;
+      const ya = fy | 0;
+      const xb = Math.min(lw - 1, xa + 1);
+      const yb = Math.min(lh - 1, ya + 1);
+      const tx = fx - xa;
+      const ty = fy - ya;
+      return (
+        (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty) +
+        (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty
+      );
     };
     const known = (x, y) =>
       x >= 0 && y >= 0 && x < w && y < h && !mask[y * w + x] && d[(y * w + x) * 4 + 3] >= 200;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (!mask[i]) continue;
-      // mirror images across the four edges, nearest edge first
-      const m = [
-        [2 * x0 - x - 1, y, x - x0], [2 * x1 - x - 1, y, x1 - x],
-        [x, 2 * y0 - y - 1, y - y0], [x, 2 * y1 - y - 1, y1 - y],
-      ].sort((a, b) => a[2] - b[2]);
-      const src = m.find(([mx, my]) => known(mx, my));
-      if (src) {
-        const j = (src[1] * w + src[0]) * 4;
-        for (let k = 0; k < 3; k++) {
-          d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (!mask[i]) continue;
+        // mirror images across the four edges, nearest edge first
+        const m = [
+          [2 * x0 - x - 1, y, x - x0],
+          [2 * x1 - x - 1, y, x1 - x],
+          [x, 2 * y0 - y - 1, y - y0],
+          [x, 2 * y1 - y - 1, y1 - y],
+        ].sort((a, b) => a[2] - b[2]);
+        const src = m.find(([mx, my]) => known(mx, my));
+        if (src) {
+          const j = (src[1] * w + src[0]) * 4;
+          for (let k = 0; k < 3; k++) {
+            d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
+          }
+        } else {
+          const n = (Math.random() - 0.5) * 2 * grain;
+          d[i * 4] += n;
+          d[i * 4 + 1] += n;
+          d[i * 4 + 2] += n;
         }
-      } else {
-        const n = (Math.random() - 0.5) * 2 * grain;
-        d[i * 4] += n;
-        d[i * 4 + 1] += n;
-        d[i * 4 + 2] += n;
       }
-    }
   }
 
   // which way you're looking, for the queue order
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
     panos.add(p);
-    try { p.addListener('pano_changed', pruneQueue); } catch {}
+    try {
+      p.addListener('pano_changed', pruneQueue);
+    } catch {}
   });
   function start(cfg) {
     active = cfg;
@@ -6893,7 +7793,10 @@ section.flat .status:empty { display: none; }
     detector();
     ggs.tiles.replay();
     return {
-      stop() { active = null; ggs.tiles.replay(); },
+      stop() {
+        active = null;
+        ggs.tiles.replay();
+      },
       update(next) {
         const changed = next.script !== active.script;
         active = next;
@@ -6918,8 +7821,13 @@ section.flat .status:empty { display: none; }
     options: [
       { key: 'hq', label: 'High quality (limited)', type: 'checkbox', default: false },
       {
-        key: 'code', label: 'Extra usage', type: 'text', default: '',
-        placeholder: 'Code', secret: true, hidden: true,
+        key: 'code',
+        label: 'Extra usage',
+        type: 'text',
+        default: '',
+        placeholder: 'Code',
+        secret: true,
+        hidden: true,
       },
     ],
   });
@@ -6942,8 +7850,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // 1 = barely blurred, 10 = a few colours per view
-      { key: 'strength', label: 'How much gradient', type: 'slider', min: 1, max: 10, default: 8,
-        marks: ['Less', 'More'] },
+      {
+        key: 'strength',
+        label: 'How much gradient',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        default: 8,
+        marks: ['Less', 'More'],
+      },
     ],
   });
 })();
@@ -7006,20 +7921,21 @@ section.flat .status:empty { display: none; }
     const grid = canvas(3 * tw, 3 * th, 'grid');
     const g = grid.getContext('2d');
     g.clearRect(0, 0, grid.width, grid.height);
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
-      const x = (dx + 1) * tw;
-      const y = (dy + 1) * th;
-      if (nb) {
-        g.drawImage(nb.src, x, y, tw, th);
-        continue;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
+        const x = (dx + 1) * tw;
+        const y = (dy + 1) * th;
+        if (nb) {
+          g.drawImage(nb.src, x, y, tw, th);
+          continue;
+        }
+        g.save();
+        g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
+        g.scale(dx ? -1 : 1, dy ? -1 : 1);
+        g.drawImage(src, 0, 0, tw, th);
+        g.restore();
       }
-      g.save();
-      g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
-      g.scale(dx ? -1 : 1, dy ? -1 : 1);
-      g.drawImage(src, 0, 0, tw, th);
-      g.restore();
-    }
     // shrink in halves: one big step skips pixels and speckles the colours
     let cur = grid;
     let cw = grid.width;
@@ -7053,20 +7969,22 @@ section.flat .status:empty { display: none; }
   const dirty = new Map(); // "pano/z/x/y" -> { k, tiles }
   let timer = null;
   function touchNeighbours(k, tiles) {
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue;
-      const nk = { pano: k.pano, z: k.z, x: k.x + dx, y: k.y + dy };
-      if (tiles.has(tileId(nk))) dirty.set(`${k.pano}/${tileId(nk)}`, { k: nk, tiles });
-    }
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nk = { pano: k.pano, z: k.z, x: k.x + dx, y: k.y + dy };
+        if (tiles.has(tileId(nk))) dirty.set(`${k.pano}/${tileId(nk)}`, { k: nk, tiles });
+      }
     clearTimeout(timer);
     timer = setTimeout(redo, 80);
   }
   // A few tiles per frame, so the game keeps drawing (a replay can leave hundreds dirty at once).
   // Tiles that turn dirty meanwhile join the same pass.
-  const PER_FRAME = 4, SLICE = 8;
+  const PER_FRAME = 4;
+  const SLICE = 8;
   let redoing = false;
-  const nextFrame = () => new Promise(r =>
-    (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  const nextFrame = () =>
+    new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
   async function redo() {
     timer = null;
     if (redoing) return;
@@ -7143,15 +8061,21 @@ section.flat .status:empty { display: none; }
     section: 'streetview',
     defaultEnabled: false,
     options: [
-      { key: 'filter', label: 'Filter', type: 'select', default: 'grey', choices: [
-        { value: 'grey', label: 'Black and white' },
-        { value: 'invert', label: 'Inverted' },
-        { value: 'red', label: 'Only red' },
-        { value: 'orange', label: 'Only orange' },
-        { value: 'yellow', label: 'Only yellow' },
-        { value: 'green', label: 'Only green' },
-        { value: 'blue', label: 'Only blue' },
-      ] },
+      {
+        key: 'filter',
+        label: 'Filter',
+        type: 'select',
+        default: 'grey',
+        choices: [
+          { value: 'grey', label: 'Black and white' },
+          { value: 'invert', label: 'Inverted' },
+          { value: 'red', label: 'Only red' },
+          { value: 'orange', label: 'Only orange' },
+          { value: 'yellow', label: 'Only yellow' },
+          { value: 'green', label: 'Only green' },
+          { value: 'blue', label: 'Only blue' },
+        ],
+      },
     ],
   });
 })();
@@ -7169,7 +8093,8 @@ section.flat .status:empty { display: none; }
   // degrees of soft edge past the half-width
   const FEATHER = 12;
   // pre: { hue, tiles } drawn ahead by prepare
-  let keep = null, pre = null;
+  let keep = null;
+  let pre = null;
 
   const smooth = (a, b, x) => {
     const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -7177,14 +8102,22 @@ section.flat .status:empty { display: none; }
   };
 
   function draw(source, hue = keep) {
-    const w = source.width || source.naturalWidth || 512, h = source.height || source.naturalHeight || 512;
+    const w = source.width || source.naturalWidth || 512;
+    const h = source.height || source.naturalHeight || 512;
     // willReadFrequently keeps the pixels in memory, so there's no GPU readback
-    const out = new OffscreenCanvas(w, h), g = out.getContext('2d', { willReadFrequently: true });
+    const out = new OffscreenCanvas(w, h);
+    const g = out.getContext('2d', { willReadFrequently: true });
     g.drawImage(source, 0, 0, w, h);
-    const img = g.getImageData(0, 0, w, h), d = img.data, [centre, half] = hue;
+    const img = g.getImageData(0, 0, w, h);
+    const d = img.data;
+    const [centre, half] = hue;
     for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], gr = d[i + 1], b = d[i + 2];
-      const max = Math.max(r, gr, b), min = Math.min(r, gr, b), grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
+      const r = d[i];
+      const gr = d[i + 1];
+      const b = d[i + 2];
+      const max = Math.max(r, gr, b);
+      const min = Math.min(r, gr, b);
+      const grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
       let k = 0;
       if (max - min > 20) {
         const c = max - min;
@@ -7204,9 +8137,9 @@ section.flat .status:empty { display: none; }
   // A tile drawn ahead is only used if no earlier filter changed it. A filter that changes a tile
   // hands on a canvas, so an untouched tile is still an image.
   const ahead = (rec, source) =>
-    (pre?.hue === keep && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null);
+    pre?.hue === keep && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null;
   // order 4: after gradient (2) and ascii (3)
-  ggs.tiles.filter((rec, source) => (keep ? ahead(rec, source) ?? draw(source) : source), 4);
+  ggs.tiles.filter((rec, source) => (keep ? (ahead(rec, source) ?? draw(source)) : source), 4);
 
   const drop = p => {
     p?.tiles.cancel();
@@ -7227,7 +8160,7 @@ section.flat .status:empty { display: none; }
       const hue = HUES[cfg.filter];
       if (!hue) return null;
       drop(pre);
-      const p = pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) };
+      const p = (pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) });
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {
@@ -7246,22 +8179,28 @@ section.flat .status:empty { display: none; }
     section: 'streetview',
     defaultEnabled: false,
     options: [
-      { key: 'part', label: 'Visible part', type: 'select', default: 'top', choices: [
-        { value: 'top', label: 'Top half' },
-        { value: 'bottom', label: 'Bottom half' },
-        { value: 'left', label: 'Left half' },
-        { value: 'right', label: 'Right half' },
-        { value: 'centre', label: 'Centre' },
-        { value: 'spyglass', label: 'Spyglass' },
-        { value: 'strip', label: 'Horizon strip' },
-        { value: 'edges', label: 'All but the centre' },
-        { value: 'topLeft', label: 'Top-left triangle' },
-        { value: 'topRight', label: 'Top-right triangle' },
-        { value: 'bottomLeft', label: 'Bottom-left triangle' },
-        { value: 'bottomRight', label: 'Bottom-right triangle' },
-        { value: 'dvd', label: 'Bouncing DVD window' },
-        { value: 'random', label: 'Random each round' },
-      ] },
+      {
+        key: 'part',
+        label: 'Visible part',
+        type: 'select',
+        default: 'top',
+        choices: [
+          { value: 'top', label: 'Top half' },
+          { value: 'bottom', label: 'Bottom half' },
+          { value: 'left', label: 'Left half' },
+          { value: 'right', label: 'Right half' },
+          { value: 'centre', label: 'Centre' },
+          { value: 'spyglass', label: 'Spyglass' },
+          { value: 'strip', label: 'Horizon strip' },
+          { value: 'edges', label: 'All but the centre' },
+          { value: 'topLeft', label: 'Top-left triangle' },
+          { value: 'topRight', label: 'Top-right triangle' },
+          { value: 'bottomLeft', label: 'Bottom-left triangle' },
+          { value: 'bottomRight', label: 'Bottom-right triangle' },
+          { value: 'dvd', label: 'Bouncing DVD window' },
+          { value: 'random', label: 'Random each round' },
+        ],
+      },
     ],
   });
 })();
@@ -7276,20 +8215,75 @@ section.flat .status:empty { display: none; }
   const { poly, rect, circle } = ggs.view.shape;
   const E = 40;
   const PARTS = {
-    top: (w, h) => poly([[-E, -E], [w + E, -E], [w + E, h / 2], [-E, h / 2]]),
-    bottom: (w, h) => poly([[-E, h / 2], [w + E, h / 2], [w + E, h + E], [-E, h + E]]),
-    left: (w, h) => poly([[-E, -E], [w / 2, -E], [w / 2, h + E], [-E, h + E]]),
-    right: (w, h) => poly([[w / 2, -E], [w + E, -E], [w + E, h + E], [w / 2, h + E]]),
+    top: (w, h) =>
+      poly([
+        [-E, -E],
+        [w + E, -E],
+        [w + E, h / 2],
+        [-E, h / 2],
+      ]),
+    bottom: (w, h) =>
+      poly([
+        [-E, h / 2],
+        [w + E, h / 2],
+        [w + E, h + E],
+        [-E, h + E],
+      ]),
+    left: (w, h) =>
+      poly([
+        [-E, -E],
+        [w / 2, -E],
+        [w / 2, h + E],
+        [-E, h + E],
+      ]),
+    right: (w, h) =>
+      poly([
+        [w / 2, -E],
+        [w + E, -E],
+        [w + E, h + E],
+        [w / 2, h + E],
+      ]),
     centre: (w, h) => rect(w * 0.3, h * 0.3, w * 0.4, h * 0.4, 14),
     spyglass: (w, h) => circle(w / 2, h / 2, Math.min(w, h) * 0.28),
-    strip: (w, h) => poly([[-E, h * 0.4], [w + E, h * 0.4], [w + E, h * 0.6], [-E, h * 0.6]]),
+    strip: (w, h) =>
+      poly([
+        [-E, h * 0.4],
+        [w + E, h * 0.4],
+        [w + E, h * 0.6],
+        [-E, h * 0.6],
+      ]),
     // the whole box with the centre put back: a frame you see the edges through
     edges: (w, h) =>
-      poly([[-E, -E], [w + E, -E], [w + E, h + E], [-E, h + E]]) + rect(w * 0.2, h * 0.2, w * 0.6, h * 0.6, 14),
-    topLeft: (w, h) => poly([[-E, -E], [w + E, -E], [-E, h + E]]),
-    topRight: (w, h) => poly([[-E, -E], [w + E, -E], [w + E, h + E]]),
-    bottomLeft: (w, h) => poly([[-E, -E], [w + E, h + E], [-E, h + E]]),
-    bottomRight: (w, h) => poly([[w + E, -E], [w + E, h + E], [-E, h + E]]),
+      poly([
+        [-E, -E],
+        [w + E, -E],
+        [w + E, h + E],
+        [-E, h + E],
+      ]) + rect(w * 0.2, h * 0.2, w * 0.6, h * 0.6, 14),
+    topLeft: (w, h) =>
+      poly([
+        [-E, -E],
+        [w + E, -E],
+        [-E, h + E],
+      ]),
+    topRight: (w, h) =>
+      poly([
+        [-E, -E],
+        [w + E, -E],
+        [w + E, h + E],
+      ]),
+    bottomLeft: (w, h) =>
+      poly([
+        [-E, -E],
+        [w + E, h + E],
+        [-E, h + E],
+      ]),
+    bottomRight: (w, h) =>
+      poly([
+        [w + E, -E],
+        [w + E, h + E],
+        [-E, h + E],
+      ]),
   };
   const NAMES = [...Object.keys(PARTS), 'dvd'];
   // window size as a share of the box, and speed in px per second along each axis
@@ -7297,13 +8291,18 @@ section.flat .status:empty { display: none; }
 
   // The bouncing window: moves by the time since the last frame and turns back at each edge.
   function dvd() {
-    let x = null, y = 0, dx = 1, dy = 1, last = 0;
+    let x = null;
+    let y = 0;
+    let dx = 1;
+    let dy = 1;
+    let last = 0;
     return (w, h) => {
       const now = performance.now();
       // capped, so it doesn't jump after the tab was hidden
       const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
       last = now;
-      const ww = w * DVD.w, wh = h * DVD.h;
+      const ww = w * DVD.w;
+      const wh = h * DVD.h;
       if (x == null) {
         x = Math.random() * (w - ww);
         y = Math.random() * (h - wh);
@@ -7323,7 +8322,9 @@ section.flat .status:empty { display: none; }
   }
 
   function start(cfg) {
-    let part = cfg.part, round = null, randomPart = null;
+    let part = cfg.part;
+    let round = null;
+    let randomPart = null;
     const pick = () => {
       if (part !== 'random') return part;
       const now = ggs.game.roundKey();
@@ -7334,9 +8335,14 @@ section.flat .status:empty { display: none; }
       return randomPart;
     };
     const bounce = dvd();
-    const cut = (w, h) => (pick() === 'dvd' ? bounce : PARTS[pick()] ?? PARTS.top)(w, h);
+    const cut = (w, h) => (pick() === 'dvd' ? bounce : (PARTS[pick()] ?? PARTS.top))(w, h);
     const mask = ggs.view.mask({ over: 'pano', look: 'paper', cut });
-    return { stop: mask.stop, update(next) { part = next.part; } };
+    return {
+      stop: mask.stop,
+      update(next) {
+        part = next.part;
+      },
+    };
   }
   ggs.scripts.peek = { start };
 })();
@@ -7377,10 +8383,16 @@ section.flat .status:empty { display: none; }
     section: 'streetview',
     defaultEnabled: false,
     options: [
-      { key: 'flip', label: 'Flip', type: 'buttons', default: 'mirror', choices: [
-        { value: 'mirror', label: 'Mirror' },
-        { value: 'upside', label: 'Upside down' },
-      ] },
+      {
+        key: 'flip',
+        label: 'Flip',
+        type: 'buttons',
+        default: 'mirror',
+        choices: [
+          { value: 'mirror', label: 'Mirror' },
+          { value: 'upside', label: 'Upside down' },
+        ],
+      },
     ],
   });
 })();
@@ -7393,11 +8405,16 @@ section.flat .status:empty { display: none; }
   const ggs = globalThis.__ggs;
   const FLIPS = { mirror: [true, false], upside: [false, true] };
   function apply(cfg) {
-    const [x, y] = cfg ? FLIPS[cfg.flip] ?? FLIPS.mirror : [];
+    const [x, y] = cfg ? (FLIPS[cfg.flip] ?? FLIPS.mirror) : [];
     ggs.view.effect('flip', cfg && { transform: `scale(${x ? -1 : 1}, ${y ? -1 : 1})` });
     ggs.view.mirror('flip', cfg && { flipX: x, flipY: y, turn: x });
   }
-  ggs.scripts.flip = { start(cfg) { apply(cfg); return { update: apply, stop: () => apply(null) }; } };
+  ggs.scripts.flip = {
+    start(cfg) {
+      apply(cfg);
+      return { update: apply, stop: () => apply(null) };
+    },
+  };
 })();
 
 // ==================== src/scripts/spin/meta.js ====================================
@@ -7426,8 +8443,10 @@ section.flat .status:empty { display: none; }
 
   function start(cfg) {
     // base: degrees turned before `from`
-    let speed = cfg.speed, from = performance.now(), base = 0;
-    const angle = now => (base + (now - from) * 360 / (SECS[speed - 1] ?? 60) / 1000) % 360;
+    let speed = cfg.speed;
+    let from = performance.now();
+    let base = 0;
+    const angle = now => (base + ((now - from) * 360) / (SECS[speed - 1] ?? 60) / 1000) % 360;
     ggs.view.effect('spin', {
       transform(now, w, h) {
         const grow = Math.hypot(w, h) / Math.max(1, Math.min(w, h));
@@ -7435,7 +8454,9 @@ section.flat .status:empty { display: none; }
       },
     });
     return {
-      stop() { ggs.view.effect('spin', null); },
+      stop() {
+        ggs.view.effect('spin', null);
+      },
       update(next) {
         const now = performance.now();
         base = angle(now);
@@ -7457,8 +8478,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // index into MS in main.js
-      { key: 'shown', label: 'Shown for (s)', type: 'slider', min: 0, max: 5, default: 4,
-        marks: ['0.1', '0.5', '1', '2', '5', '10'] },
+      {
+        key: 'shown',
+        label: 'Shown for (s)',
+        type: 'slider',
+        min: 0,
+        max: 5,
+        default: 4,
+        marks: ['0.1', '0.5', '1', '2', '5', '10'],
+      },
     ],
   });
 })();
@@ -7471,7 +8499,8 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const MS = [100, 500, 1000, 2000, 5000, 10000]; // by the Shown for slider
-  const LOADING_MS = 1000, READY_MS = 1000;
+  const LOADING_MS = 1000;
+  const READY_MS = 1000;
   const NO_TILES_MS = 5000; // a round whose tiles never show up moves on anyway
   // While covered, a stylesheet also makes every Street View picture (any .gm-style but the guess
   // map's) see-through. It applies the moment GeoGuessr adds a new one, before the sheet moves onto
@@ -7479,13 +8508,16 @@ section.flat .status:empty { display: none; }
   // visibility. Only during a round, since the results screen's map is a .gm-style too.
   const HIDE_CSS =
     '.gm-style:not([class*="guess-map"] *, [data-qa="guess-map"] *) { opacity: 0 !important; }';
-  const INK = '#1c1a2e', YELLOW = '#fecd19';
-  const BAR_CSS = 'position:fixed;z-index:2147481000;height:4px;' +
+  const INK = '#1c1a2e';
+  const YELLOW = '#fecd19';
+  const BAR_CSS =
+    'position:fixed;z-index:2147481000;height:4px;' +
     `background:${YELLOW};box-shadow:0 -1px 0 ${INK};pointer-events:none;`;
   const CARD_CSS = `position:fixed;z-index:2147481000;transform:translate(-50%,-50%);flex-direction:column;
     align-items:center;gap:10px;font:800 18px/1 system-ui,sans-serif;letter-spacing:.04em;color:${INK};
     pointer-events:none;`;
-  const CARD_HTML = '<span></span>' +
+  const CARD_HTML =
+    '<span></span>' +
     `<b style="display:block;width:160px;height:8px;border:1.5px solid ${INK};border-radius:6px;overflow:hidden">
       <i style="display:block;height:100%;width:0;background:${YELLOW}"></i></b>`;
 
@@ -7538,11 +8570,11 @@ section.flat .status:empty { display: none; }
       if (step === 'loading' || step === 'ready') {
         word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
         meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
-        fill.style.width = `${Math.min(100, (now - round.ready) / READY_MS * 100) || 0}%`;
+        fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
         Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
         card.style.display = 'flex'; // not `hidden`: the inline display would beat it
       } else if (step === 'show') {
-        const width = r.width * (round.until - now) / ms;
+        const width = (r.width * (round.until - now)) / ms;
         Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
         bar.hidden = false;
       }
@@ -7583,10 +8615,16 @@ section.flat .status:empty { display: none; }
     // they re-upload tiles later, past this filter
     excludes: ['minecraft', 'lying-signs', 'gradient'],
     options: [
-      { key: 'look', label: 'Look', type: 'buttons', default: 'white', choices: [
-        { value: 'white', label: 'Black and white' },
-        { value: 'colour', label: 'Colour' },
-      ] },
+      {
+        key: 'look',
+        label: 'Look',
+        type: 'buttons',
+        default: 'white',
+        choices: [
+          { value: 'white', label: 'Black and white' },
+          { value: 'colour', label: 'Colour' },
+        ],
+      },
     ],
   });
 })();
@@ -7601,7 +8639,9 @@ section.flat .status:empty { display: none; }
   const ggs = globalThis.__ggs;
   const RAMP = ' .:-=+*#%@'; // darkest to brightest
   const ACROSS = 64; // characters across a zoom-3 (45°) tile
-  const BG = '#0b0a12', PAPER = '#ffffff', INK = '#111111';
+  const BG = '#0b0a12';
+  const PAPER = '#ffffff';
+  const INK = '#111111';
   let active = null;
   let pre = null; // { look, tiles } drawn ahead by prepare
 
@@ -7647,13 +8687,14 @@ section.flat .status:empty { display: none; }
     const g = glyphs.getContext('2d');
     const strip = atlas(cw, ch);
     const sw = Math.ceil(cw);
-    for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
-      const i = (y * nx + x) * 4;
-      let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
-      if (paper) light = 1 - light; // black on white: dark cells get the dense characters
-      const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
-      if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
-    }
+    for (let y = 0; y < ny; y++)
+      for (let x = 0; x < nx; x++) {
+        const i = (y * nx + x) * 4;
+        let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+        if (paper) light = 1 - light; // black on white: dark cells get the dense characters
+        const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+        if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
+      }
     g.globalCompositeOperation = 'source-in';
     if (paper) {
       g.fillStyle = INK;
@@ -7675,10 +8716,12 @@ section.flat .status:empty { display: none; }
   // A tile drawn ahead is used only while it's still a plain picture. An earlier filter that
   // changes a tile hands on a canvas instead.
   const ahead = (rec, source) =>
-    (pre?.look === active.look && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null);
+    pre?.look === active.look && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null;
   // order 3: after gradient (2)
-  ggs.tiles.filter((rec, source) =>
-    (active && rec.key ? ahead(rec, source) ?? draw(source, rec.key.z) : source), 3);
+  ggs.tiles.filter(
+    (rec, source) => (active && rec.key ? (ahead(rec, source) ?? draw(source, rec.key.z)) : source),
+    3,
+  );
 
   const drop = p => {
     p?.tiles.cancel();
@@ -7688,7 +8731,7 @@ section.flat .status:empty { display: none; }
     prepare(cfg) {
       drop(pre);
       const tiles = ggs.tiles.prerender((img, k) => draw(img, k.z, cfg.look));
-      const p = pre = { look: cfg.look, tiles };
+      const p = (pre = { look: cfg.look, tiles });
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {
@@ -7719,12 +8762,18 @@ section.flat .status:empty { display: none; }
     section: 'streetview',
     defaultEnabled: false,
     options: [
-      { key: 'dir', label: 'Facing', type: 'buttons', default: 'n', choices: [
-        { value: 'n', label: 'North' },
-        { value: 'e', label: 'East' },
-        { value: 's', label: 'South' },
-        { value: 'w', label: 'West' },
-      ] },
+      {
+        key: 'dir',
+        label: 'Facing',
+        type: 'buttons',
+        default: 'n',
+        choices: [
+          { value: 'n', label: 'North' },
+          { value: 'e', label: 'East' },
+          { value: 's', label: 'South' },
+          { value: 'w', label: 'West' },
+        ],
+      },
     ],
   });
 })();
@@ -7735,8 +8784,13 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const HEADING = { n: 0, e: 90, s: 180, w: 270 };
-  const face = cfg => ggs.lock.face('compass', cfg ? HEADING[cfg.dir] ?? 0 : null);
-  ggs.scripts.compass = { start(cfg) { face(cfg); return { update: face, stop: () => face(null) }; } };
+  const face = cfg => ggs.lock.face('compass', cfg ? (HEADING[cfg.dir] ?? 0) : null);
+  ggs.scripts.compass = {
+    start(cfg) {
+      face(cfg);
+      return { update: face, stop: () => face(null) };
+    },
+  };
 })();
 
 // ==================== src/scripts/eye/meta.js =====================================
@@ -7750,8 +8804,15 @@ section.flat .status:empty { display: none; }
     mic: true, // can't be switched on while the microphone is blocked
     options: [
       // how quiet a sound still opens the eye a crack: 5 is normal talking
-      { key: 'sensitivity', label: '', type: 'slider', min: 1, max: 10, default: 5,
-        marks: ['Louder', 'Quieter'] },
+      {
+        key: 'sensitivity',
+        label: '',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        default: 5,
+        marks: ['Louder', 'Quieter'],
+      },
     ],
   });
 })();
@@ -7774,20 +8835,27 @@ section.flat .status:empty { display: none; }
     const bulge = 1.5 * h * open;
     const l = -0.3 * w;
     const r = 1.3 * w;
-    return `M${n(l)} ${n(y)}Q${n(w / 2)} ${n(y - bulge)} ${n(r)} ${n(y)}` +
-      `Q${n(w / 2)} ${n(y + bulge)} ${n(l)} ${n(y)}Z`;
+    return (
+      `M${n(l)} ${n(y)}Q${n(w / 2)} ${n(y - bulge)} ${n(r)} ${n(y)}` +
+      `Q${n(w / 2)} ${n(y + bulge)} ${n(l)} ${n(y)}Z`
+    );
   }
 
   function start(cfg) {
     let sensitivity = cfg.sensitivity ?? 5;
     let open = 0;
     let stopped = false;
-    let stream = null, audio = null, analyser = null, raf = 0;
+    let stream = null;
+    let audio = null;
+    let analyser = null;
+    let raf = 0;
     const status = text => ggs.status('eye', text);
 
     // no sheet until there's a microphone to open the eye with
     const mask = ggs.view.mask({
-      over: 'pano', look: 'paper', cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
+      over: 'pano',
+      look: 'paper',
+      cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
     });
 
     const resume = () => {
@@ -7885,13 +8953,43 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const INPUT = [
-    'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup',
-    'click', 'dblclick', 'contextmenu', 'wheel', 'keydown', 'keyup',
+    'pointerdown',
+    'pointermove',
+    'pointerup',
+    'pointercancel',
+    'mousedown',
+    'mousemove',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'keydown',
+    'keyup',
   ];
   // Street View's own keys (as core/lock.js)
   const KEYS = [
-    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D',
-    '+', '-', '=', '_', 'z', 'x', 'Z', 'X', 'Backspace',
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'w',
+    'a',
+    's',
+    'd',
+    'W',
+    'A',
+    'S',
+    'D',
+    '+',
+    '-',
+    '=',
+    '_',
+    'z',
+    'x',
+    'Z',
+    'X',
+    'Backspace',
   ];
   // Input events kept during one freeze. Mouse moves past this are dropped.
   const MAX_HELD = 500;
@@ -7922,7 +9020,8 @@ section.flat .status:empty { display: none; }
   // for the GPU process.
   // Partial uploads (texSubImage2D, or a mip level) must keep their size, so they get a full-size
   // copy.
-  let chunk = 0, greyShare = 0;
+  let chunk = 0;
+  let greyShare = 0;
   const GREY = '#8e9094';
   const pot = n => 2 ** Math.max(0, Math.round(Math.log2(n)));
   const sharp = new WeakSet(); // textures drawn NEAREST
@@ -8077,9 +9176,12 @@ section.flat .status:empty { display: none; }
     .dialog button.main { background: #1a73e8; border-color: #1a73e8; color: #fff; }
   `;
   // Spinners: html, and an optional live(el, ep) for ones whose text changes.
-  const wheelSpokes = Array.from({ length: 12 }, (_, i) =>
-    `<span style="transform: rotate(${i * 30}deg) translateY(-15px); ` +
-    `animation-delay: ${(i * 0.075 - 0.9).toFixed(3)}s"></span>`).join('');
+  const wheelSpokes = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `<span style="transform: rotate(${i * 30}deg) translateY(-15px); ` +
+      `animation-delay: ${(i * 0.075 - 0.9).toFixed(3)}s"></span>`,
+  ).join('');
   const windowsDots = [0, 1, 2, 3, 4].map(i => `<i style="animation-delay: ${i * 0.24}s"></i>`).join('');
   const SPINNERS = {
     ring: { html: '<div class="lag shade ring"></div>' },
@@ -8192,8 +9294,8 @@ section.flat .status:empty { display: none; }
     function showPing(ep, ms = between(400, 1500)) {
       const r = panoRect();
       if (!r) return;
-      const html = '<div class="lag dark ping">' +
-        'PING <b>0</b> ms · LOSS <b>0</b>% · FPS <b class="ok">0</b></div>';
+      const html =
+        '<div class="lag dark ping">' + 'PING <b>0</b> ms · LOSS <b>0</b>% · FPS <b class="ok">0</b></div>';
       const el = ep.show(html, [r.left + r.width / 2, r.top + 70]);
       const [ping, loss, fps] = el.querySelectorAll('b');
       const tick = () => {
@@ -8208,23 +9310,31 @@ section.flat .status:empty { display: none; }
     // ---- the effects ----
     function spinners(ep, k) {
       const n = 1 + (roll(k.s * k.s * 0.6) ? 1 : 0) + (roll(k.hard * 0.4) ? 1 : 0);
-      const names = Object.keys(SPINNERS).sort(() => Math.random() - 0.5).slice(0, n);
+      const names = Object.keys(SPINNERS)
+        .sort(() => Math.random() - 0.5)
+        .slice(0, n);
       names.forEach(name => spinner(ep, name));
     }
     function loadingBar(ep) {
       const step = BARS[pick(Object.keys(BARS))];
       const r = panoRect();
-      let el, at;
+      let el;
+      let at;
       let label = null;
       if (roll(0.5) && (at = spot())) {
         const text = pick(LABELS);
         const speed = pick(['12 KB/s', '3 KB/s', '0 KB/s']);
-        el = ep.show(`<div class="lag card"><p>${text}</p><u><i class="bar"></i></u><span>0%</span>` +
-          `<small>${speed}</small></div>`, at);
+        el = ep.show(
+          `<div class="lag card"><p>${text}</p><u><i class="bar"></i></u><span>0%</span>` +
+            `<small>${speed}</small></div>`,
+          at,
+        );
         label = el.querySelector('p');
         label.dataset.text = text;
       } else if (r) {
-        el = ep.show('<div class="top"><i class="bar"></i></div>', [r.left, r.top], { width: `${r.width}px` });
+        el = ep.show('<div class="top"><i class="bar"></i></div>', [r.left, r.top], {
+          width: `${r.width}px`,
+        });
       }
       if (!el) return;
       const bar = el.querySelector('.bar');
@@ -8262,13 +9372,20 @@ section.flat .status:empty { display: none; }
     }
     function lowQuality(ep, k, ms) {
       const r = panoRect();
-      const badge = r && ep.show('<div class="lag dark badge">Quality: Auto <b>144p</b></div>',
-        [r.right - 120, r.top + 70]);
-      const steps = [['144p', lerp(4, 9, k.s * k.s)], ['240p', 4], ['480p', 1.5]];
-      steps.forEach(([q, px], i) => ep.after(ms * i / 3, () => {
-        ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
-        if (badge) badge.querySelector('b').textContent = q;
-      }));
+      const badge =
+        r &&
+        ep.show('<div class="lag dark badge">Quality: Auto <b>144p</b></div>', [r.right - 120, r.top + 70]);
+      const steps = [
+        ['144p', lerp(4, 9, k.s * k.s)],
+        ['240p', 4],
+        ['480p', 1.5],
+      ];
+      steps.forEach(([q, px], i) =>
+        ep.after((ms * i) / 3, () => {
+          ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
+          if (badge) badge.querySelector('b').textContent = q;
+        }),
+      );
       ep.finally(() => ggs.view.effect('lag-quality', null));
     }
     // Shared with the Street View input queue below.
@@ -8301,8 +9418,12 @@ section.flat .status:empty { display: none; }
       ep.every(between(300, 550), () => {
         const old = past[0];
         if (!old || roll(0.3)) return;
-        try { if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch }); } catch {}
-        try { if (old.centre) map.setCenter(old.centre); } catch {}
+        try {
+          if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch });
+        } catch {}
+        try {
+          if (old.centre) map.setCenter(old.centre);
+        } catch {}
         past.length = 0;
       });
       showPing(ep);
@@ -8312,10 +9433,12 @@ section.flat .status:empty { display: none; }
       const r = panoRect();
       if (!r) return;
       ep.show('<div class="fog"></div>', [r.left, r.top], { width: `${r.width}px`, height: `${r.height}px` });
-      const box = ep.show(`<div class="lag dialog"><h1>Page Unresponsive</h1>
+      const box = ep.show(
+        `<div class="lag dialog"><h1>Page Unresponsive</h1>
         <p>You can wait for it to become responsive or exit the page.</p><p>www.geoguessr.com</p>
         <div><button>Exit page</button><button class="main">Wait</button></div></div>`,
-      [r.left + r.width / 2, r.top + r.height * 0.42]);
+        [r.left + r.width / 2, r.top + r.height * 0.42],
+      );
       for (const b of box.querySelectorAll('button')) {
         b.addEventListener('click', e => {
           e.stopPropagation();
@@ -8338,9 +9461,10 @@ section.flat .status:empty { display: none; }
       { id: 'hang', from: 7, weight: 1, ms: [4000, 7000], run: hang },
     ];
     function launch(k) {
-      const list = EFFECTS
-        .filter(e => level >= e.from && !busy(e.id))
-        .map(e => [e, e.weight * (e.grows ? 1 + 3 * k.hard : 1)]);
+      const list = EFFECTS.filter(e => level >= e.from && !busy(e.id)).map(e => [
+        e,
+        e.weight * (e.grows ? 1 + 3 * k.hard : 1),
+      ]);
       let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
       const fx = list.find(([, w]) => (r -= w) < 0)?.[0];
       if (!fx) return;
@@ -8358,9 +9482,11 @@ section.flat .status:empty { display: none; }
     function next(first, now) {
       const k = knobs(level);
       clearTimeout(timer);
-      const wait = now ? 100
-        : first ? between(1000, 3000) + (1 - k.s) * between(0, 8000)
-        : between(...k.gap) * 1000;
+      const wait = now
+        ? 100
+        : first
+          ? between(1000, 3000) + (1 - k.s) * between(0, 8000)
+          : between(...k.gap) * 1000;
       timer = setTimeout(() => {
         if (inRound()) {
           launch(k);
@@ -8388,8 +9514,14 @@ section.flat .status:empty { display: none; }
     function wanted(e) {
       if (!e.isTrusted || !inRound()) return false;
       if (e.type.startsWith('key')) {
-        return KEYS.includes(e.key) && !ggs.isTyping(e) && !e.ctrlKey && !e.metaKey && !e.altKey
-          && !ggs.maps.guessMapElement()?.contains(e.target);
+        return (
+          KEYS.includes(e.key) &&
+          !ggs.isTyping(e) &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !ggs.maps.guessMapElement()?.contains(e.target)
+        );
       }
       const t = e.target;
       if (pressed) return true;
@@ -8463,93 +9595,102 @@ section.flat .status:empty { display: none; }
     // ---- the guess map: slow guesses, late or misplaced pins (core/aid.js) ----
     let sending = false;
     let pinTimer = 0;
-    const aid = ggs.aid('lag', {
-      usesLocation: false,
-      beforeGuess() {
-        const k = knobs(level);
-        if (sending === 'pass') return null;
-        if (sending) return false;
-        if (!k.hard || !roll(0.15 + 0.8 * k.hard)) return null;
-        const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
-        const ep = episode('guess', ms + 50);
-        const btn = ggs.maps.guessButton()?.getBoundingClientRect();
-        sending = true;
-        ep.finally(() => {
-          sending = false;
-        });
-        const el = ep.show('<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
-          btn ? [btn.left + btn.width / 2, btn.top - 26] : spot());
-        if (k.level >= 8) {
-          const say = text => {
-            el.querySelector('span').textContent = text;
-          };
-          ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
-          ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
-        }
-        ep.after(ms, () => {
-          if (!ggs.maps.guessMapElement()) return;
-          sending = 'pass';
-          try {
-            if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
-          } finally {
-            sending = true;
-          }
-        });
-        return false;
-      },
-      // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
-      // you clicked or not (from level 3, more often higher up).
-      attach(ctx) {
-        let prev = null;
-        let last = null;
-        const ev = ctx.gm.event;
-        const a = ev.addListener(ctx.map, 'mousemove', e => {
-          prev = last;
-          last = e.latLng;
-        });
-        const b = ev.addListener(ctx.map, 'mouseout', () => {
+    const aid = ggs
+      .aid('lag', {
+        usesLocation: false,
+        beforeGuess() {
           const k = knobs(level);
-          const bounds = ctx.map.getBounds();
-          if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
-          const from = prev ?? ctx.map.getCenter();
-          const span = bounds.toSpan();
-          const dy = last.lat() - from.lat();
-          const dx = last.lng() - from.lng();
-          const len = Math.hypot(dx, dy) || 1;
-          const far = between(0.15, 0.5);
-          const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
-          const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
-          clearTimeout(pinTimer);
-          pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
-        });
-        return () => {
-          a.remove();
-          b.remove();
-        };
-      },
-      click(latLng, ctx) {
-        const k = knobs(level);
-        clearTimeout(pinTimer);
-        if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
-        let lat = latLng.lat(), lng = latLng.lng();
-        if (roll(0.5)) {
-          // late: the pin goes, then shows up a moment later
-          setTimeout(() => {
-            try { ggs.maps.clearGuess(); } catch {}
+          if (sending === 'pass') return null;
+          if (sending) return false;
+          if (!k.hard || !roll(0.15 + 0.8 * k.hard)) return null;
+          const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
+          const ep = episode('guess', ms + 50);
+          const btn = ggs.maps.guessButton()?.getBoundingClientRect();
+          sending = true;
+          ep.finally(() => {
+            sending = false;
           });
-          pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
-        } else {
-          // off: it lands, then slides a few dozen pixels away
-          const px = between(15, 40) * (1 + k.hard);
-          const mPerPx = 156543 * Math.cos(lat * Math.PI / 180) / 2 ** (ctx.map?.getZoom() ?? 2);
-          ({ lat, lng } = ggs.aid.destination({ lat, lng }, px * mPerPx / 1000, between(0, 2 * Math.PI)));
-          pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
-        }
-      },
-    }).start(cfg);
+          const el = ep.show(
+            '<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
+            btn ? [btn.left + btn.width / 2, btn.top - 26] : spot(),
+          );
+          if (k.level >= 8) {
+            const say = text => {
+              el.querySelector('span').textContent = text;
+            };
+            ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
+            ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
+          }
+          ep.after(ms, () => {
+            if (!ggs.maps.guessMapElement()) return;
+            sending = 'pass';
+            try {
+              if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
+            } finally {
+              sending = true;
+            }
+          });
+          return false;
+        },
+        // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
+        // you clicked or not (from level 3, more often higher up).
+        attach(ctx) {
+          let prev = null;
+          let last = null;
+          const ev = ctx.gm.event;
+          const a = ev.addListener(ctx.map, 'mousemove', e => {
+            prev = last;
+            last = e.latLng;
+          });
+          const b = ev.addListener(ctx.map, 'mouseout', () => {
+            const k = knobs(level);
+            const bounds = ctx.map.getBounds();
+            if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
+            const from = prev ?? ctx.map.getCenter();
+            const span = bounds.toSpan();
+            const dy = last.lat() - from.lat();
+            const dx = last.lng() - from.lng();
+            const len = Math.hypot(dx, dy) || 1;
+            const far = between(0.15, 0.5);
+            const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
+            const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
+            clearTimeout(pinTimer);
+            pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
+          });
+          return () => {
+            a.remove();
+            b.remove();
+          };
+        },
+        click(latLng, ctx) {
+          const k = knobs(level);
+          clearTimeout(pinTimer);
+          if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
+          let lat = latLng.lat();
+          let lng = latLng.lng();
+          if (roll(0.5)) {
+            // late: the pin goes, then shows up a moment later
+            setTimeout(() => {
+              try {
+                ggs.maps.clearGuess();
+              } catch {}
+            });
+            pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
+          } else {
+            // off: it lands, then slides a few dozen pixels away
+            const px = between(15, 40) * (1 + k.hard);
+            const mPerPx = (156543 * Math.cos((lat * Math.PI) / 180)) / 2 ** (ctx.map?.getZoom() ?? 2);
+            ({ lat, lng } = ggs.aid.destination({ lat, lng }, (px * mPerPx) / 1000, between(0, 2 * Math.PI)));
+            pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
+          }
+        },
+      })
+      .start(cfg);
     const place = (lat, lng) => {
       if (!ggs.maps.guessMapElement()) return;
-      try { ggs.maps.placeGuess(lat, lng, { pan: false }); } catch {}
+      try {
+        ggs.maps.placeGuess(lat, lng, { pan: false });
+      } catch {}
     };
 
     return {
@@ -8584,8 +9725,15 @@ section.flat .status:empty { display: none; }
     defaultEnabled: false,
     options: [
       // how much can be scratched each round: a few dabs at 1, the whole view at 10
-      { key: 'amount', label: 'Scratching', type: 'slider', min: 1, max: 10, default: 6,
-        marks: ['Less', 'More'] },
+      {
+        key: 'amount',
+        label: 'Scratching',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        default: 6,
+        marks: ['Less', 'More'],
+      },
     ],
   });
 })();
@@ -8601,8 +9749,18 @@ section.flat .status:empty { display: none; }
   const BRUSH = 22; // px, radius of a scratch
   const INK = '#1c1a2e';
   const BLOCKED = [
-    'pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'click', 'dblclick',
-    'contextmenu', 'wheel', 'touchstart', 'touchmove',
+    'pointerdown',
+    'pointermove',
+    'pointerup',
+    'mousedown',
+    'mousemove',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'touchstart',
+    'touchmove',
   ];
   const CSS = `
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
@@ -8626,7 +9784,13 @@ section.flat .status:empty { display: none; }
   function paintFoil(g, w, h) {
     g.globalCompositeOperation = 'source-over';
     const grad = g.createLinearGradient(0, 0, w, h);
-    const stops = [['#b4b9c3', 0], ['#eceef2', 0.3], ['#a7acb7', 0.5], ['#e2e5ea', 0.72], ['#b0b5bf', 1]];
+    const stops = [
+      ['#b4b9c3', 0],
+      ['#eceef2', 0.3],
+      ['#a7acb7', 0.5],
+      ['#e2e5ea', 0.72],
+      ['#b0b5bf', 1],
+    ];
     stops.forEach(([c, at]) => grad.addColorStop(at, c));
     g.fillStyle = grad;
     g.fillRect(0, 0, w, h);
@@ -8639,7 +9803,7 @@ section.flat .status:empty { display: none; }
     }
     g.stroke();
     const rand = ggs.aid.seeded('scratch-foil');
-    for (let i = 0; i < w * h / 400; i++) {
+    for (let i = 0; i < (w * h) / 400; i++) {
       g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,.5)' : 'rgba(28,26,46,.07)';
       g.fillRect(rand() * w, rand() * h, 1.5, 1.5);
     }
@@ -8708,7 +9872,7 @@ section.flat .status:empty { display: none; }
     };
 
     function newRound(key) {
-      const r = round = { key, id: null, strokes: [], used: 0 };
+      const r = (round = { key, id: null, strokes: [], used: 0 });
       drag = null;
       redraw();
       roundId().then(id => {
@@ -8750,8 +9914,8 @@ section.flat .status:empty { display: none; }
       const left = (1 - round.used) * total();
       if (d > left) {
         // the last bit of the meter
-        x = lx + (x - lx) * left / d;
-        y = ly + (y - ly) * left / d;
+        x = lx + ((x - lx) * left) / d;
+        y = ly + ((y - ly) * left) / d;
       }
       round.used = Math.min(1, round.used + Math.min(d, left) / total());
       drag.last = [x, y];
@@ -8794,8 +9958,11 @@ section.flat .status:empty { display: none; }
         el.style.isolation = 'isolate';
         if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
       }
-      if (canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
-          canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))) redraw();
+      if (
+        canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
+        canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))
+      )
+        redraw();
     }
     const timer = setInterval(tick, 150);
     tick();
@@ -8929,8 +10096,14 @@ section.flat .status:empty { display: none; }
     const limit = audio.createDynamicsCompressor();
     const limitSettings = { threshold: -3, knee: 0, ratio: 20, attack: 0.001, release: 0.05 };
     for (const [k, v] of Object.entries(limitSettings)) limit[k].value = v;
-    audio.createMediaStreamSource(stream)
-      .connect(lowCut).connect(delay).connect(lows).connect(squeeze).connect(gain).connect(limit);
+    audio
+      .createMediaStreamSource(stream)
+      .connect(lowCut)
+      .connect(delay)
+      .connect(lows)
+      .connect(squeeze)
+      .connect(gain)
+      .connect(limit);
     // the static joins after the compressor, so it never pushes the voice down
     const hiss = audio.createBufferSource();
     hiss.buffer = pinkNoise(audio, 4);
@@ -8948,7 +10121,13 @@ section.flat .status:empty { display: none; }
   function pinkNoise(audio, seconds) {
     const buf = audio.createBuffer(1, audio.sampleRate * seconds, audio.sampleRate);
     const d = buf.getChannelData(0);
-    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    let b0 = 0;
+    let b1 = 0;
+    let b2 = 0;
+    let b3 = 0;
+    let b4 = 0;
+    let b5 = 0;
+    let b6 = 0;
     for (let i = 0; i < d.length; i++) {
       const w = Math.random() * 2 - 1;
       b0 = 0.99886 * b0 + w * 0.0555179;
@@ -9046,8 +10225,15 @@ section.flat .status:empty { display: none; }
     moreLabel: 'Effects', // the hidden options' fold
     options: [
       // index into EVERY in main.js
-      { key: 'every', label: 'New effect every', type: 'slider', min: 0, max: 7, default: 3,
-        steps: ['10 s', '15 s', '20 s', '30 s', '45 s', '1 min', '90 s', '2 min'] },
+      {
+        key: 'every',
+        label: 'New effect every',
+        type: 'slider',
+        min: 0,
+        max: 7,
+        default: 3,
+        steps: ['10 s', '15 s', '20 s', '30 s', '45 s', '1 min', '90 s', '2 min'],
+      },
       // a warning, shown only while the microphone isn't allowed; clicking it asks again
       { key: 'micNote', label: 'Mic effects disabled · click to allow the microphone', type: 'mic' },
       ...effects.map(e => ({ ...e, type: 'checkbox', default: !OFF.includes(e.key.slice(3)), hidden: true })),
@@ -9067,7 +10253,9 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const EVERY = [10, 15, 20, 30, 45, 60, 90, 120]; // seconds, by the slider
-  const LIFE_MS = 30000, FIRST_MS = 3000, TICK_MS = 250;
+  const LIFE_MS = 30000;
+  const FIRST_MS = 3000;
+  const TICK_MS = 250;
   // The guess map gone this long means the round is over. It can blink mid-round.
   const AWAY_MS = 1500;
   // Chance of a board per pick at a 30 s interval. It scales with the interval, so a board comes
@@ -9076,7 +10264,18 @@ section.flat .status:empty { display: none; }
   const BOARDS = ['draw-guess', 'flag-guess'];
   // Effects that need the guess map, which a board hides (or that press Guess themselves).
   const NEEDS_MAP = [
-    'guesses', 'wobble', 'ocean', 'in-country', 'blind', 'drift', 'lat-band', 'lng-band', 'radius', 'distance', 'liar', 'lag',
+    'guesses',
+    'wobble',
+    'ocean',
+    'in-country',
+    'blind',
+    'drift',
+    'lat-band',
+    'lng-band',
+    'radius',
+    'distance',
+    'liar',
+    'lag',
   ];
   // Street View tile filters: slow to switch.
   const TILES = ['ascii', 'minecraft', 'lying-signs', 'gradient', 'greyscale'];
@@ -9094,7 +10293,10 @@ section.flat .status:empty { display: none; }
   const SKIP = ['liar']; // the hints above already lie
   // Options chaos leaves as the player set them.
   const KEEP = {
-    minecraft: ['code'], radio: ['streamerMode'], 'draw-guess': ['hardMode'], 'flag-guess': ['forceInside'],
+    minecraft: ['code'],
+    radio: ['streamerMode'],
+    'draw-guess': ['hardMode'],
+    'flag-guess': ['forceInside'],
   };
   const LOCKS = { noMove: 'move', noPan: 'pan', noZoom: 'zoom' };
   // NMPZ, Clean map, OGGS tab: the player's own
@@ -9152,14 +10354,17 @@ section.flat .status:empty { display: none; }
   }
   // A few words on the settings it got, for the panel: choices and named slider stops.
   function describe(meta, cfg) {
-    return meta.options.map(o => {
-      const v = cfg[o.key];
-      if (KEEP[meta.id]?.includes(o.key)) return '';
-      if (o.choices) return o.choices.find(c => String(c.value) === String(v))?.label ?? '';
-      if (o.steps) return o.steps[v - o.min] ?? '';
-      if (o.marks?.length === o.max - o.min + 1) return withUnit(o.label, o.marks[v - o.min]);
-      return '';
-    }).filter(Boolean).join(' · ');
+    return meta.options
+      .map(o => {
+        const v = cfg[o.key];
+        if (KEEP[meta.id]?.includes(o.key)) return '';
+        if (o.choices) return o.choices.find(c => String(c.value) === String(v))?.label ?? '';
+        if (o.steps) return o.steps[v - o.min] ?? '';
+        if (o.marks?.length === o.max - o.min + 1) return withUnit(o.label, o.marks[v - o.min]);
+        return '';
+      })
+      .filter(Boolean)
+      .join(' · ');
   }
 
   const PANEL_CSS = `
@@ -9184,7 +10389,8 @@ section.flat .status:empty { display: none; }
     ul:empty { display: none; }
     li { animation: pop .35s ease-out; }
     @keyframes pop { from { opacity: 0; transform: translateX(-12px); } }`;
-  const PANEL_HTML = '<div class="next"><div class="row"><span class="label"><b>Next effect</b></span>' +
+  const PANEL_HTML =
+    '<div class="next"><div class="row"><span class="label"><b>Next effect</b></span>' +
     '<span class="secs"></span></div><div class="bar"><i></i></div></div><ul></ul>';
 
   // key (script id or lock name) -> { key, name, detail, cfg?, left?, round? }
@@ -9194,7 +10400,7 @@ section.flat .status:empty { display: none; }
     mix(stored) {
       const out = {};
       for (const m of ggs.registry) {
-        out[m.id] = own().includes(m.id) ? stored[m.id] : active.get(m.id)?.cfg ?? { enabled: false };
+        out[m.id] = own().includes(m.id) ? stored[m.id] : (active.get(m.id)?.cfg ?? { enabled: false });
       }
       return out;
     },
@@ -9209,7 +10415,10 @@ section.flat .status:empty { display: none; }
     let awaySince = 0;
     let lastRound = ggs.game.roundKey();
     const panel = ggs.ui.panel({
-      id: 'chaos', title: 'Chaos', css: PANEL_CSS, html: PANEL_HTML,
+      id: 'chaos',
+      title: 'Chaos',
+      css: PANEL_CSS,
+      html: PANEL_HTML,
       pos: { x: 16, y: Math.round(innerHeight * 0.3) },
     });
     panel.show(false);
@@ -9230,9 +10439,10 @@ section.flat .status:empty { display: none; }
     };
     // Fits beside the effects still on `ms` from now. A board fits beside anything but the other
     // board, and ends what clashes with it (see add).
-    const fits = (key, ms = 0) => (BOARDS.includes(key)
-      ? !BOARDS.some(b => active.has(b))
-      : [...active.values()].every(e => (!e.round && e.left <= ms) || !clash(e.key, key)));
+    const fits = (key, ms = 0) =>
+      BOARDS.includes(key)
+        ? !BOARDS.some(b => active.has(b))
+        : [...active.values()].every(e => (!e.round && e.left <= ms) || !clash(e.key, key));
 
     // Locks: the Controls effects, and No move under Minecraft (each panorama costs a generation).
     function locks() {
@@ -9264,7 +10474,9 @@ section.flat .status:empty { display: none; }
         for (const k of [...active.keys()]) if (clash(k, key)) active.delete(k);
         // after the map effects let go of it
         setTimeout(() => {
-          try { ggs.maps.clearGuess(); } catch {}
+          try {
+            ggs.maps.clearGuess();
+          } catch {}
         }, 300);
       } else {
         effect.left = LIFE_MS;
@@ -9286,9 +10498,9 @@ section.flat .status:empty { display: none; }
         .filter(k => !(quick && TILES.includes(k)) && ms >= (LEAD[k] ?? 0));
       const boards = can.filter(k => BOARDS.includes(k));
       const others = can.filter(k => !BOARDS.includes(k));
-      const board = boards.length && Math.random() < DRAW_CHANCE * EVERY[cfg.every] / 30;
+      const board = boards.length && Math.random() < (DRAW_CHANCE * EVERY[cfg.every]) / 30;
       // only boards left ticked: a board
-      const key = board || !others.length ? pick(boards) ?? null : pick(others);
+      const key = board || !others.length ? (pick(boards) ?? null) : pick(others);
       return key && make(key);
     }
     // The effect for the slot `ms` from now, starting to get ready.
@@ -9378,17 +10590,21 @@ section.flat .status:empty { display: none; }
     // The list is rebuilt when effects come or go. The bars and countdown update every tick.
     function draw(rebuild) {
       panel.$('.next .secs').textContent = `${Math.ceil(Math.max(0, next) / 1000)}s`;
-      panel.$('.next .bar i').style.width = `${100 * Math.max(0, next) / span}%`;
+      panel.$('.next .bar i').style.width = `${(100 * Math.max(0, next)) / span}%`;
       if (rebuild) {
-        list.innerHTML = [...active.values()].map(e =>
-          `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
-          `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
-          '<div class="bar"><i></i></div></li>').join('');
+        list.innerHTML = [...active.values()]
+          .map(
+            e =>
+              `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
+              `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
+              '<div class="bar"><i></i></div></li>',
+          )
+          .join('');
       }
       for (const li of list.children) {
         const e = active.get(li.dataset.key);
         if (!e) continue;
-        li.querySelector('.bar i').style.width = `${e.round ? 100 : 100 * e.left / LIFE_MS}%`;
+        li.querySelector('.bar i').style.width = `${e.round ? 100 : (100 * e.left) / LIFE_MS}%`;
       }
     }
 
@@ -9520,12 +10736,20 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const running = new Map(); // id -> { stop, update? }
-  let settings = null, blocked = false, path = null, check = 0;
+  let settings = null;
+  let blocked = false;
+  let path = null;
+  let check = 0;
 
   function apply() {
     if (!settings) return;
-    const chaos = !blocked && ggs.chaos
-      && ggs.config(ggs.registry.find(m => m.id === 'chaos'), settings).enabled;
+    const chaos =
+      !blocked &&
+      ggs.chaos &&
+      ggs.config(
+        ggs.registry.find(m => m.id === 'chaos'),
+        settings,
+      ).enabled;
     const live = chaos ? ggs.chaos.mix(settings) : settings;
     const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
@@ -9536,8 +10760,9 @@ section.flat .status:empty { display: none; }
         continue;
       }
       const cfg = ggs.config(meta, live);
-      const clash = [...on.values()]
-        .some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+      const clash = [...on.values()].some(
+        m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id),
+      );
       const wanted = cfg.enabled && !blocked && !clash;
       if (wanted) on.set(meta.id, meta);
       const inst = running.get(meta.id);
@@ -9589,7 +10814,7 @@ section.flat .status:empty { display: none; }
   setInterval(() => {
     onPath();
     const now = ggs.game.context()?.mode ?? '';
-    if (now !== mode) ggs.status('_mode', mode = now);
+    if (now !== mode) ggs.status('_mode', (mode = now));
   }, 500);
 
   // An empty heartbeat for the "playing now" count on the OGGS stats card (server/card.php):
@@ -9597,8 +10822,11 @@ section.flat .status:empty { display: none; }
   // competitive.
   const ping = () => {
     if (document.visibilityState !== 'visible' || blocked) return;
-    fetch('https://oggs.orlandopb.com/ping.php', { mode: 'no-cors', cache: 'no-store', credentials: 'omit' })
-      .catch(() => {});
+    fetch('https://oggs.orlandopb.com/ping.php', {
+      mode: 'no-cors',
+      cache: 'no-store',
+      credentials: 'omit',
+    }).catch(() => {});
   };
   setTimeout(ping, 5000);
   setInterval(ping, 2 * 60 * 1000);

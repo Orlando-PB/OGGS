@@ -6,8 +6,16 @@
     section: 'guessing',
     defaultEnabled: false,
     options: [
-      { key: 'units', label: 'Units', type: 'buttons', default: 'km',
-        choices: [{ value: 'km', label: 'Kilometres' }, { value: 'mi', label: 'Miles' }] },
+      {
+        key: 'units',
+        label: 'Units',
+        type: 'buttons',
+        default: 'km',
+        choices: [
+          { value: 'km', label: 'Kilometres' },
+          { value: 'mi', label: 'Miles' },
+        ],
+      },
     ],
   });
 })();

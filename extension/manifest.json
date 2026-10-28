@@ -3,9 +3,7 @@
   "name": "OGGS - Orlando's GeoGuessr Scripts",
   "version": "2.0.0",
   "description": "A collection of fun GeoGuessr extension scripts. Made by Orlando with love.",
-  "permissions": [
-    "storage"
-  ],
+  "permissions": ["storage"],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -24,18 +22,12 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://www.geoguessr.com/*"
-      ],
-      "js": [
-        "src/bridge.js"
-      ],
+      "matches": ["https://www.geoguessr.com/*"],
+      "js": ["src/bridge.js"],
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://www.geoguessr.com/*"
-      ],
+      "matches": ["https://www.geoguessr.com/*"],
       "world": "MAIN",
       "run_at": "document_start",
       "js": [
@@ -132,9 +124,7 @@
   ],
   "web_accessible_resources": [
     {
-      "matches": [
-        "https://www.geoguessr.com/*"
-      ],
+      "matches": ["https://www.geoguessr.com/*"],
       "resources": [
         "popup/popup.css",
         "icons/icon-128.png",

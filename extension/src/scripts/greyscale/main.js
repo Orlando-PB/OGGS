@@ -10,7 +10,8 @@
   // degrees of soft edge past the half-width
   const FEATHER = 12;
   // pre: { hue, tiles } drawn ahead by prepare
-  let keep = null, pre = null;
+  let keep = null;
+  let pre = null;
 
   const smooth = (a, b, x) => {
     const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -18,14 +19,22 @@
   };
 
   function draw(source, hue = keep) {
-    const w = source.width || source.naturalWidth || 512, h = source.height || source.naturalHeight || 512;
+    const w = source.width || source.naturalWidth || 512;
+    const h = source.height || source.naturalHeight || 512;
     // willReadFrequently keeps the pixels in memory, so there's no GPU readback
-    const out = new OffscreenCanvas(w, h), g = out.getContext('2d', { willReadFrequently: true });
+    const out = new OffscreenCanvas(w, h);
+    const g = out.getContext('2d', { willReadFrequently: true });
     g.drawImage(source, 0, 0, w, h);
-    const img = g.getImageData(0, 0, w, h), d = img.data, [centre, half] = hue;
+    const img = g.getImageData(0, 0, w, h);
+    const d = img.data;
+    const [centre, half] = hue;
     for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], gr = d[i + 1], b = d[i + 2];
-      const max = Math.max(r, gr, b), min = Math.min(r, gr, b), grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
+      const r = d[i];
+      const gr = d[i + 1];
+      const b = d[i + 2];
+      const max = Math.max(r, gr, b);
+      const min = Math.min(r, gr, b);
+      const grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
       let k = 0;
       if (max - min > 20) {
         const c = max - min;
@@ -45,9 +54,9 @@
   // A tile drawn ahead is only used if no earlier filter changed it. A filter that changes a tile
   // hands on a canvas, so an untouched tile is still an image.
   const ahead = (rec, source) =>
-    (pre?.hue === keep && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null);
+    pre?.hue === keep && source instanceof HTMLImageElement ? pre.tiles.get(rec.url) : null;
   // order 4: after gradient (2) and ascii (3)
-  ggs.tiles.filter((rec, source) => (keep ? ahead(rec, source) ?? draw(source) : source), 4);
+  ggs.tiles.filter((rec, source) => (keep ? (ahead(rec, source) ?? draw(source)) : source), 4);
 
   const drop = p => {
     p?.tiles.cancel();
@@ -68,7 +77,7 @@
       const hue = HUES[cfg.filter];
       if (!hue) return null;
       drop(pre);
-      const p = pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) };
+      const p = (pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) });
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {

@@ -7,8 +7,11 @@
     [/\/game\/([^/?#]+)/, 'standard', t => `/api/v3/games/${t}`],
     [/\/challenge\/([^/?#]+)/, 'challenge', t => `/api/v3/challenges/${t}`],
     [/\/(?:team-)?duels\/([^/?#]+)/, 'duels', t => `https://game-server.geoguessr.com/api/duels/${t}`],
-    [/\/battle-royale\/([^/?#]+)/, 'battle-royale',
-      t => `https://game-server.geoguessr.com/api/battle-royale/${t}`],
+    [
+      /\/battle-royale\/([^/?#]+)/,
+      'battle-royale',
+      t => `https://game-server.geoguessr.com/api/battle-royale/${t}`,
+    ],
   ];
 
   // Party games play under /party/... without the game id in the address. The id is taken
@@ -65,7 +68,10 @@
   // GeoGuessr's round counter markup keeps changing, so it isn't read. The map can blink out
   // for a moment mid-round, so it only counts as gone after GONE_MS.
   const GONE_MS = 1000;
-  let entries = 0, entryToken = null, hadMap = false, goneSince = 0;
+  let entries = 0;
+  let entryToken = null;
+  let hadMap = false;
+  let goneSince = 0;
   setInterval(() => {
     const token = context()?.token ?? null;
     const hasMap = !!ggs.maps.guessMapElement();
@@ -97,13 +103,19 @@
   function round() {
     const key = roundKey();
     if (!roundCache.has(key)) {
-      roundCache.set(key, lookupRound(key).then(r => {
-        if (!r) roundCache.delete(key);
-        return r;
-      }, err => {
-        roundCache.delete(key);
-        return noRound(`game data: ${err.message}`);
-      }));
+      roundCache.set(
+        key,
+        lookupRound(key).then(
+          r => {
+            if (!r) roundCache.delete(key);
+            return r;
+          },
+          err => {
+            roundCache.delete(key);
+            return noRound(`game data: ${err.message}`);
+          },
+        ),
+      );
     }
     return roundCache.get(key);
   }
@@ -159,8 +171,8 @@
     duelRounds.set(ctx.token, { n: last.n, key });
     return last;
   }
-  const roundLocation = () => round()
-    .then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
+  const roundLocation = () =>
+    round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
 
   // ---- competitive guard ----
   // Party and ranked duels share /duels/<id> URLs, so two signals decide. One is the lobby you
@@ -189,25 +201,31 @@
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, (async () => {
-      let lobby = null;
-      try {
-        lobby = sessionStorage.getItem(LOBBY_KEY);
-      } catch {}
-      const j = await fetchGame(ctx).catch(() => null);
-      const o = j?.options ?? {};
-      const types = [j?.gameContext?.type, o.gameContext?.type];
-      const rated = [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked]
-        .some(v => v === true)
-        || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
-      const party = [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId]
-        .some(Boolean)
-        || types.some(t => /party|private|friend/i.test(t ?? ''));
-      const why = `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}`
-        + (j ? '' : ' (no game data)');
-      if (rated) return { competitive: true, why };
-      return { competitive: !(party || lobby === 'party'), why };
-    })());
+    if (!guardCache.has(ctx.token))
+      guardCache.set(
+        ctx.token,
+        (async () => {
+          let lobby = null;
+          try {
+            lobby = sessionStorage.getItem(LOBBY_KEY);
+          } catch {}
+          const j = await fetchGame(ctx).catch(() => null);
+          const o = j?.options ?? {};
+          const types = [j?.gameContext?.type, o.gameContext?.type];
+          const rated =
+            [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked].some(
+              v => v === true,
+            ) || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
+          const party =
+            [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId].some(Boolean) ||
+            types.some(t => /party|private|friend/i.test(t ?? ''));
+          const why =
+            `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
+            (j ? '' : ' (no game data)');
+          if (rated) return { competitive: true, why };
+          return { competitive: !(party || lobby === 'party'), why };
+        })(),
+      );
     return guardCache.get(ctx.token);
   }
 

@@ -5,26 +5,28 @@
 //   dev/store/vX.Y.Z/oggs-X.Y.Z-chrome.zip   Chrome Web Store and Edge Add-ons (same file)
 //   dev/store/vX.Y.Z/oggs-X.Y.Z-firefox.zip  Firefox Add-ons (manifest gets Firefox's extra keys)
 // Usage: node tools/build.mjs
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { execFileSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
-const root = resolve(import.meta.dirname, "..");
-const src = join(root, "extension");
-const manifest = JSON.parse(readFileSync(join(src, "manifest.json"), "utf8"));
-const out = join(root, "dev", "store", `v${manifest.version}`);
+const root = resolve(import.meta.dirname, '..');
+const src = join(root, 'extension');
+const manifest = JSON.parse(readFileSync(join(src, 'manifest.json'), 'utf8'));
+const out = join(root, 'dev', 'store', `v${manifest.version}`);
 mkdirSync(out, { recursive: true });
 
 // ---- userscript ----
-const SERVER = "https://oggs.orlandopb.com/";
+const SERVER = 'https://oggs.orlandopb.com/';
 // Install/update address: the file in the repo, like other GeoGuessr userscripts.
-const RAW = "https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js";
-const pageScripts = manifest.content_scripts.find(c => c.world === "MAIN").js;
-const banner = f => `\n// ${"=".repeat(20)} ${f} ${"=".repeat(Math.max(3, 60 - f.length))}\n`;
-const file = f => readFileSync(join(src, f), "utf8").trimEnd() + "\n";
-const bridge = readFileSync(join(root, "userscript", "bridge.js"), "utf8")
-  .replace("__POPUP_CSS__", file("popup/popup.css").replace(/`/g, "\\`").replace(/\$\{/g, "\\${"));
+const RAW = 'https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js';
+const pageScripts = manifest.content_scripts.find(c => c.world === 'MAIN').js;
+const banner = f => `\n// ${'='.repeat(20)} ${f} ${'='.repeat(Math.max(3, 60 - f.length))}\n`;
+const file = f => readFileSync(join(src, f), 'utf8').trimEnd() + '\n';
+const bridge = readFileSync(join(root, 'userscript', 'bridge.js'), 'utf8').replace(
+  '__POPUP_CSS__',
+  file('popup/popup.css').replace(/`/g, '\\`').replace(/\$\{/g, '\\${'),
+);
 const userscript = `// ==UserScript==
 // @name         ${manifest.name}
 // @namespace    https://github.com/Orlando-PB/OGGS
@@ -58,17 +60,17 @@ const userscript = `// ==UserScript==
 //                         id, its size, the style, a random per-install id and the optional code;
 //                         gets the redrawn picture back
 // Nothing else leaves the page. Settings stay in geoguessr.com's localStorage ("ggs-settings").
-${banner("userscript/bridge.js")}${bridge}${pageScripts.map(f => banner(f) + file(f)).join("")}`;
-mkdirSync(join(root, "userscript"), { recursive: true });
-writeFileSync(join(root, "userscript", "oggs.user.js"), userscript);
-console.log(join(root, "userscript", "oggs.user.js"));
+${banner('userscript/bridge.js')}${bridge}${pageScripts.map(f => banner(f) + file(f)).join('')}`;
+mkdirSync(join(root, 'userscript'), { recursive: true });
+writeFileSync(join(root, 'userscript', 'oggs.user.js'), userscript);
+console.log(join(root, 'userscript', 'oggs.user.js'));
 
 // ---- store zips ----
 
 function zip(dir, name) {
   const file = join(out, name);
   rmSync(file, { force: true });
-  execFileSync("zip", ["-qr", file, ".", "-x", "*.DS_Store"], { cwd: dir });
+  execFileSync('zip', ['-qr', file, '.', '-x', '*.DS_Store'], { cwd: dir });
   console.log(file);
 }
 
@@ -76,19 +78,19 @@ zip(src, `oggs-${manifest.version}-chrome.zip`);
 
 // Firefox: needs a fixed add-on id (never change it after the first upload) and the
 // data-collection declaration AMO requires, which sets the floor at 140 (142 on Android).
-const tmp = mkdtempSync(join(tmpdir(), "oggs-firefox-"));
+const tmp = mkdtempSync(join(tmpdir(), 'oggs-firefox-'));
 cpSync(src, tmp, { recursive: true });
 const firefox = {
   ...manifest,
   browser_specific_settings: {
     gecko: {
-      id: "oggs@orlando-pb",
-      strict_min_version: "140.0",
-      data_collection_permissions: { required: ["none"] },
+      id: 'oggs@orlando-pb',
+      strict_min_version: '140.0',
+      data_collection_permissions: { required: ['none'] },
     },
-    gecko_android: { strict_min_version: "142.0" },
+    gecko_android: { strict_min_version: '142.0' },
   },
 };
-writeFileSync(join(tmp, "manifest.json"), JSON.stringify(firefox, null, 2) + "\n");
+writeFileSync(join(tmp, 'manifest.json'), JSON.stringify(firefox, null, 2) + '\n');
 zip(tmp, `oggs-${manifest.version}-firefox.zip`);
 rmSync(tmp, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 // Latitude band: a strip right round the world between two latitudes (core/aid.js).
 (() => {
-  const ggs = globalThis.__ggs, { aid } = ggs;
+  const ggs = globalThis.__ggs;
+  const { aid } = ggs;
   // the map's Mercator edge
   const clamp = lat => Math.max(-85, Math.min(85, lat));
 

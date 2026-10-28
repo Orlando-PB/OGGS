@@ -8,34 +8,41 @@
   // the boards' pin (marks.js)
   const PIN = 'M0,0 C-5,-12 -16,-19 -16,-30 A16,16 0 1 1 16,-30 C16,-19 5,-12 0,0Z';
   const OURS = 'data-ggs-pin';
-  const FALLBACK = '<svg width="32" height="46" viewBox="-17 -47 34 48">' +
+  const FALLBACK =
+    '<svg width="32" height="46" viewBox="-17 -47 34 48">' +
     `<path d="${PIN}" fill="#d9480f" stroke="#fff" stroke-width="2"/></svg>`;
   // GeoGuessr's pin as last seen: its element and its offset from its spot (px)
   let look = null;
 
-  const realPin = () => document.querySelector(
-    ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', '));
+  const realPin = () =>
+    document.querySelector(ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', '));
 
   // Copy GeoGuessr's pin for a click, once it has drawn it (a couple of frames later).
   function copyLook(map, latLng, done) {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const el = realPin();
-      const proj = done.projection;
-      if (el && proj) {
-        // the outermost marker element, and its offset from the clicked spot
-        let root = el;
-        while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
-          root = root.parentElement;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = realPin();
+        const proj = done.projection;
+        if (el && proj) {
+          // the outermost marker element, and its offset from the clicked spot
+          let root = el;
+          while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
+            root = root.parentElement;
+          }
+          const r = root.getBoundingClientRect();
+          const m = map.getDiv().getBoundingClientRect();
+          const p = proj.fromLatLngToContainerPixel(latLng);
+          look = {
+            html: root.outerHTML,
+            dx: r.left - m.left - p.x,
+            dy: r.top - m.top - p.y,
+            w: r.width,
+            h: r.height,
+          };
         }
-        const r = root.getBoundingClientRect();
-        const m = map.getDiv().getBoundingClientRect();
-        const p = proj.fromLatLngToContainerPixel(latLng);
-        look = {
-          html: root.outerHTML, dx: r.left - m.left - p.x, dy: r.top - m.top - p.y, w: r.width, h: r.height,
-        };
-      }
-      done(look);
-    }));
+        done(look);
+      }),
+    );
   }
 
   // A pin on the map: an OverlayView holding the copy (or the fallback pin), clickable to remove.
@@ -54,8 +61,13 @@
       node.innerHTML = l ? l.html : FALLBACK;
       // the copy sits in our box, which is already where the original was drawn
       if (l) {
-        Object.assign(node.firstElementChild.style,
-          { position: 'relative', left: '0', top: '0', margin: '0', transform: 'none' });
+        Object.assign(node.firstElementChild.style, {
+          position: 'relative',
+          left: '0',
+          top: '0',
+          margin: '0',
+          transform: 'none',
+        });
       }
       const size = l ? { width: `${l.w}px`, height: `${l.h}px` } : { width: '32px', height: '46px' };
       Object.assign(node.style, size);
@@ -86,11 +98,13 @@
   };
 
   function addPin(ctx, latLng) {
-    const pin = ctx.add(makePin(ctx, latLng, () => {
-      ctx.remove(pin);
-      ctx.pins = ctx.pins.filter(p => p !== pin);
-      show(ctx);
-    }));
+    const pin = ctx.add(
+      makePin(ctx, latLng, () => {
+        ctx.remove(pin);
+        ctx.pins = ctx.pins.filter(p => p !== pin);
+        show(ctx);
+      }),
+    );
     ctx.pins.push(pin);
   }
 
@@ -101,7 +115,8 @@
   }
 
   ggs.scripts.guesses = ggs.aid('guesses', {
-    css: `${ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', ')} ` +
+    css:
+      `${ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', ')} ` +
       '{ visibility: hidden !important; }',
     round(ctx) {
       ctx.pins = [];

@@ -11,8 +11,10 @@
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
       {
-        key: 'forceInside', label: 'Guess must go inside the matched country',
-        type: 'checkbox', default: true,
+        key: 'forceInside',
+        label: 'Guess must go inside the matched country',
+        type: 'checkbox',
+        default: true,
       },
     ],
   });

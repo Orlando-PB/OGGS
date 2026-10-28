@@ -12,6 +12,7 @@
   const TEXT_OF_BOX = 0.8;
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
+  // biome-ignore format: word list
   const ENGLISH = [
     'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing',
     'JackSucksAtClips', 'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol',
@@ -37,6 +38,7 @@
     'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
   // Indexed by the "script" option; 0 is random (one script per panorama).
+  // biome-ignore format: word lists
   const WORDS = [
     null,
     [
@@ -167,6 +169,7 @@
   const JOINED = new Set([4, 9]);
 
   // Minecraft's enchanting-table letters as strokes on a 10x10 grid (a single point is a dot).
+  // biome-ignore format: glyph table
   const GALACTIC = [
     [[[1,3],[9,3]],[[1,3],[1,6]],[[9,3],[9,9]]],          // ᔑ
     [[[3,1],[3,9],[7,9],[7,6]]],                          // ʖ
@@ -195,15 +198,19 @@
     [[[2,9],[2,2],[8,2],[8,9]]],                          // ⨅
   ];
   function drawGalactic(g, b, rand = Math.random) {
-    const h = b.h * 0.72, adv = h * 0.62, gap = h * 0.16;
+    const h = b.h * 0.72;
+    const adv = h * 0.62;
+    const gap = h * 0.16;
     const n = Math.max(1, Math.floor((b.w - 2) / adv));
-    const x0 = b.x + (b.w - n * adv + gap) / 2, y0 = b.y + (b.h - h) / 2;
+    const x0 = b.x + (b.w - n * adv + gap) / 2;
+    const y0 = b.y + (b.h - h) / 2;
     g.lineWidth = Math.max(1, h * 0.11);
     g.lineCap = g.lineJoin = 'round';
     g.strokeStyle = g.fillStyle;
     for (let i = 0; i < n; i++) {
       const glyph = GALACTIC[Math.floor(rand() * GALACTIC.length)];
-      const gx = x0 + i * adv, s = (adv - gap) / 10;
+      const gx = x0 + i * adv;
+      const s = (adv - gap) / 10;
       for (const line of glyph) {
         g.beginPath();
         if (line.length === 1) {
@@ -229,7 +236,7 @@
   function rng(seed) {
     let a = seed >>> 0;
     return () => {
-      a = (a + 0x6D2B79F5) >>> 0;
+      a = (a + 0x6d2b79f5) >>> 0;
       let t = a;
       t = Math.imul(t ^ (t >>> 15), t | 1);
       t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
@@ -237,13 +244,15 @@
     };
   }
 
-  let active = null;                          // cfg while the script is on
+  let active = null; // cfg while the script is on
   const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, editMs: 0, editMax: 0 };
   ggs.lyingSigns = { stats };
 
   // ---- detector worker ----
-  let worker = null, workerReady = null, nextId = 0;
-  const waiting = new Map();                  // id -> resolve
+  let worker = null;
+  let workerReady = null;
+  let nextId = 0;
+  const waiting = new Map(); // id -> resolve
   function detector() {
     if (workerReady) return workerReady;
     workerReady = (async () => {
@@ -302,12 +311,17 @@
   // Detection queue, nearest tile to the view first. Tiles whose textures are gone, or whose
   // panorama is no longer shown, are dropped unrun. The queue is capped so moving quickly
   // never builds a backlog. A dropped tile is detected if it is uploaded again.
-  const queue = [];                           // [{ img, res, alive, url }]
+  const queue = []; // [{ img, res, alive, url }]
   let inflight = 0;
-  const MAX_INFLIGHT = 2, MAX_QUEUE = 300;
+  const MAX_INFLIGHT = 2;
+  const MAX_QUEUE = 300;
   ggs.lyingSigns.debug = () => ({
-    queue: queue.length, inflight, waiting: waiting.size,
-    tiles: tiles.size, panos: signs.size, stale: stale.size,
+    queue: queue.length,
+    inflight,
+    waiting: waiting.size,
+    tiles: tiles.size,
+    panos: signs.size,
+    stale: stale.size,
   });
   function detect(img, alive, url) {
     return new Promise(res => {
@@ -321,7 +335,11 @@
   }
   function pruneQueue() {
     const shown = new Set();
-    for (const p of panos) { try { shown.add(p.getPano()); } catch {} }
+    for (const p of panos) {
+      try {
+        shown.add(p.getPano());
+      } catch {}
+    }
     for (let i = queue.length - 1; i >= 0; i--) {
       const id = ggs.tileKey(queue[i].url)?.pano;
       if (id && !shown.has(id)) {
@@ -335,27 +353,35 @@
     if (!k) return null;
     const { pano: id, x, y, z } = k;
     for (const p of panos) {
-      let pov, centre;
+      let pov;
+      let centre;
       try {
         if (p.getPano() !== id) continue;
         pov = p.getPov();
         centre = p.getPhotographerPov?.()?.heading;
-      } catch { continue; }
+      } catch {
+        continue;
+      }
       if (!pov || centre == null) return null;
-      const cols = 2 ** z, rows = Math.max(1, 2 ** (z - 1));
+      const cols = 2 ** z;
+      const rows = Math.max(1, 2 ** (z - 1));
       const heading = centre + ((+x + 0.5) / cols - 0.5) * 360;
       const pitch = (0.5 - (+y + 0.5) / rows) * 180;
-      const dh = Math.abs(((heading - pov.heading) % 360 + 540) % 360 - 180);
-      return Math.hypot(dh * Math.cos(pov.pitch * Math.PI / 180), pitch - pov.pitch);
+      const dh = Math.abs(((((heading - pov.heading) % 360) + 540) % 360) - 180);
+      return Math.hypot(dh * Math.cos((pov.pitch * Math.PI) / 180), pitch - pov.pitch);
     }
     return null;
   }
   function pickJob() {
-    let best = queue.length - 1, bestD = Infinity;
+    let best = queue.length - 1;
+    let bestD = Infinity;
     for (let i = queue.length - 1; i >= 0; i--) {
       const d = tileDistance(queue[i].url);
-      if (d === null) break;                  // no view info: newest first
-      if (d < bestD) { bestD = d; best = i; }
+      if (d === null) break; // no view info: newest first
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
     }
     return queue.splice(best, 1)[0];
   }
@@ -394,25 +420,30 @@
   // what was decided about it: skipped or not, letter height, colour, the word written.
   // A sign found at one zoom is drawn into the tiles of every zoom on screen, so zooming in
   // or out shows the same words.
-  const signs = new Map();                    // pano -> [sign]
-  const detectedTiles = new Set();            // "pano/z/x/y" the detector has run on
+  const signs = new Map(); // pano -> [sign]
+  const detectedTiles = new Set(); // "pano/z/x/y" the detector has run on
   const tileId = k => `${k.pano}/${k.z}/${k.x}/${k.y}`;
   const MAX_PANOS = 20;
 
   function toTile(sg, k, W) {
     const u = W * 2 ** k.z;
     return {
-      cx: sg.cx * u - k.x * W, cy: sg.cy * u - k.y * W, w: sg.w * u, h: sg.h * u,
-      angle: sg.angle, vertical: sg.vertical, sign: sg,
+      cx: sg.cx * u - k.x * W,
+      cy: sg.cy * u - k.y * W,
+      w: sg.w * u,
+      h: sg.h * u,
+      angle: sg.angle,
+      vertical: sg.vertical,
+      sign: sg,
     };
   }
   function touches(sg, k, W) {
-    const b = toTile(sg, k, W), r = Math.hypot(b.w, b.h) / 2;
+    const b = toTile(sg, k, W);
+    const r = Math.hypot(b.w, b.h) / 2;
     return b.cx + r > 0 && b.cy + r > 0 && b.cx - r < W && b.cy - r < W;
   }
-  const signsIn = (k, W) => (signs.get(k.pano) || [])
-    .filter(sg => touches(sg, k, W))
-    .map(sg => toTile(sg, k, W));
+  const signsIn = (k, W) =>
+    (signs.get(k.pano) || []).filter(sg => touches(sg, k, W)).map(sg => toTile(sg, k, W));
 
   // Adds a tile's detections, biggest first. A known sign wins, as it may span tiles, unless a
   // new box is bigger and covers its middle (the other zoom only saw a sliver of it).
@@ -425,11 +456,19 @@
         for (const id of detectedTiles) if (id.startsWith(old + '/')) detectedTiles.delete(id);
       }
     }
-    const list = signs.get(k.pano), u = W * 2 ** k.z, added = [], removed = [];
+    const list = signs.get(k.pano);
+    const u = W * 2 ** k.z;
+    const added = [];
+    const removed = [];
     for (const b of found.slice().sort((a, c) => c.w * c.h - a.w * a.h)) {
       const sg = {
-        cx: (k.x * W + b.cx) / u, cy: (k.y * W + b.cy) / u, w: b.w / u, h: b.h / u,
-        angle: b.angle, vertical: b.vertical, words: {},
+        cx: (k.x * W + b.cx) / u,
+        cy: (k.y * W + b.cy) / u,
+        w: b.w / u,
+        h: b.h / u,
+        angle: b.angle,
+        vertical: b.vertical,
+        words: {},
       };
       const covered = list.filter(o => inside(o, sg) && sg.w * sg.h > o.w * o.h);
       if (list.some(o => !covered.includes(o) && inside(sg, o))) continue;
@@ -445,7 +484,10 @@
   }
   // whether b's middle is inside box a
   function inside(b, a) {
-    const dx = b.cx - a.cx, dy = b.cy - a.cy, c = Math.cos(a.angle), s = Math.sin(a.angle);
+    const dx = b.cx - a.cx;
+    const dy = b.cy - a.cy;
+    const c = Math.cos(a.angle);
+    const s = Math.sin(a.angle);
     return Math.abs(dx * c + dy * s) < a.w / 2 && Math.abs(-dx * s + dy * c) < a.h / 2;
   }
   // Known well enough to edit without waiting: the detector ran on this tile, on its parent
@@ -461,10 +503,11 @@
   }
   function kidsCovered(k, depth) {
     if (depth === 0) return false;
-    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const c = { pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy };
-      if (!detectedTiles.has(tileId(c)) && !kidsCovered(c, depth - 1)) return false;
-    }
+    for (let dy = 0; dy < 2; dy++)
+      for (let dx = 0; dx < 2; dx++) {
+        const c = { pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy };
+        if (!detectedTiles.has(tileId(c)) && !kidsCovered(c, depth - 1)) return false;
+      }
     return true;
   }
 
@@ -476,7 +519,8 @@
   // the detector works. Tiles another script already swapped for a canvas are left alone.
   ggs.tiles.filter((rec, img) => {
     if (!active || !(img instanceof HTMLImageElement)) return img;
-    const url = rec.url, k = ggs.tileKey(url);
+    const url = rec.url;
+    const k = ggs.tileKey(url);
     if (!k) return img;
     let t = tiles.get(url);
     if (!t) {
@@ -499,11 +543,12 @@
   }, 1);
 
   function queueDetect(t, url) {
-    const k = t.key, W = t.img.naturalWidth || t.img.width;
+    const k = t.key;
+    const W = t.img.naturalWidth || t.img.width;
     t.queued = true;
     detect(t.img, () => t.recs.some(ggs.tiles.live), url).then(found => {
       t.queued = false;
-      if (!found) return;                     // skipped or failed; a later upload retries
+      if (!found) return; // skipped or failed; a later upload retries
       detectedTiles.add(tileId(k));
       stats.boxes += found.length;
       const { added, removed } = addSigns(k, W, found);
@@ -531,7 +576,7 @@
   // those tiles go to WebGL again. A tile that drew a since-replaced sign is redone. The tile
   // just detected (`now`) is done at once, the rest a few at a time in idle time, so a burst
   // of detections never stalls a frame.
-  const stale = new Map();                    // tile -> Set of signs to add, or 'all' to redo it
+  const stale = new Map(); // tile -> Set of signs to add, or 'all' to redo it
   let draining = false;
   function refresh(pano, added, removed, now) {
     for (const t of tiles.values()) {
@@ -561,9 +606,12 @@
     }
     upload(t);
   }
-  const idle = () => new Promise(res => (window.requestIdleCallback
-    ? requestIdleCallback(res, { timeout: 200 })
-    : setTimeout(() => res({ timeRemaining: () => 8 }), 16)));
+  const idle = () =>
+    new Promise(res =>
+      window.requestIdleCallback
+        ? requestIdleCallback(res, { timeout: 200 })
+        : setTimeout(() => res({ timeRemaining: () => 8 }), 16),
+    );
   async function drain() {
     if (draining) return;
     draining = true;
@@ -593,10 +641,12 @@
   // ---- the edits ----
   // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
   function blurred(img) {
-    const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-    const small = new OffscreenCanvas(Math.max(1, W / 10 | 0), Math.max(1, H / 10 | 0));
+    const W = img.naturalWidth || img.width;
+    const H = img.naturalHeight || img.height;
+    const small = new OffscreenCanvas(Math.max(1, (W / 10) | 0), Math.max(1, (H / 10) | 0));
     small.getContext('2d').drawImage(img, 0, 0, small.width, small.height);
-    const c = new OffscreenCanvas(W, H), g = c.getContext('2d');
+    const c = new OffscreenCanvas(W, H);
+    const g = c.getContext('2d');
     g.imageSmoothingQuality = 'high';
     g.drawImage(small, 0, 0, W, H);
     return c;
@@ -606,7 +656,8 @@
   // earlier edit of the same tile, only the given boxes are added to it.
   function editSync(src, boxes, cfg, key, onto) {
     const t0 = performance.now();
-    const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+    const W = src.naturalWidth || src.width;
+    const H = src.naturalHeight || src.height;
     const c = onto || new OffscreenCanvas(W, H);
     const g = c.getContext('2d', { willReadFrequently: true });
     if (!onto) {
@@ -618,7 +669,7 @@
       let script = cfg.script | 0;
       if (!WORDS[script]) script = 0;
       // random: one script per panorama
-      if (script === 0) script = 1 + hash('script:' + (key?.pano || '')) % (WORDS.length - 1);
+      if (script === 0) script = 1 + (hash('script:' + (key?.pano || '')) % (WORDS.length - 1));
       const list = WORDS[script];
       const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
       try {
@@ -650,7 +701,7 @@
   const GROUND_PITCH = -30;
   function onGround(k, b, H) {
     if (!k) return false;
-    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H);   // degrees per tile pixel
+    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H); // degrees per tile pixel
     const pitch = 90 - (k.y * H + b.cy) * deg;
     return pitch < GROUND_PITCH || (pitch < -8 && Math.min(b.w, b.h) * deg > 6);
   }
@@ -662,12 +713,14 @@
     if (!k) return;
     const rows = Math.max(1, 2 ** (k.z - 1));
     // tile y where the mosaic starts
-    const top = Math.max(0, ((90 - NADIR_PITCH) / 180 * rows - k.y) * H);
+    const top = Math.max(0, (((90 - NADIR_PITCH) / 180) * rows - k.y) * H);
     if (top >= H) return;
-    const band = H - top, fade = Math.min(10, band);
-    const small = new OffscreenCanvas(Math.max(1, W / 16 | 0), Math.max(1, band / 16 | 0));
+    const band = H - top;
+    const fade = Math.min(10, band);
+    const small = new OffscreenCanvas(Math.max(1, (W / 16) | 0), Math.max(1, (band / 16) | 0));
     small.getContext('2d').drawImage(g.canvas, 0, top, W, band, 0, 0, small.width, small.height);
-    const layer = new OffscreenCanvas(W, band), l = layer.getContext('2d');
+    const layer = new OffscreenCanvas(W, band);
+    const l = layer.getContext('2d');
     l.imageSmoothingQuality = 'high';
     l.drawImage(small, 0, 0, W, band);
     const grad = l.createLinearGradient(0, 0, 0, fade);
@@ -688,47 +741,69 @@
   // halo, and filled in from the sign around them, so the sign's colour and gradients stay.
   // The new word goes on top at the old text's height and colour.
   function replaceBox(g, raw, script, pick, rand, tileW) {
-    const W = g.canvas.width, H = g.canvas.height;
+    const W = g.canvas.width;
+    const H = g.canvas.height;
     // level text is copied, not resampled
     const angle = Math.abs(raw.angle) < 0.01 ? 0 : raw.angle;
-    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
     // the frame's origin, on a pixel
-    const ox = Math.round(raw.cx), oy = Math.round(raw.cy);
-    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa, bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
+    const ox = Math.round(raw.cx);
+    const oy = Math.round(raw.cy);
+    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa;
+    const bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
     // the box hugs the strokes, so give them room
-    const pad = raw.h * 0.12, hw = raw.w / 2 + pad, hh = raw.h / 2 + pad;
-    const ctx = Math.max(4, Math.round(raw.h * 0.3));             // sign around the box, for the fill
+    const pad = raw.h * 0.12;
+    const hw = raw.w / 2 + pad;
+    const hh = raw.h / 2 + pad;
+    const ctx = Math.max(4, Math.round(raw.h * 0.3)); // sign around the box, for the fill
     // the tile's extent in the frame
-    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-    for (const [x, y] of [[0, 0], [W, 0], [0, H], [W, H]]) {
-      const u = (x - ox) * ca + (y - oy) * sa, v = -(x - ox) * sa + (y - oy) * ca;
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const [x, y] of [
+      [0, 0],
+      [W, 0],
+      [0, H],
+      [W, H],
+    ]) {
+      const u = (x - ox) * ca + (y - oy) * sa;
+      const v = -(x - ox) * sa + (y - oy) * ca;
       u0 = Math.min(u0, u);
       u1 = Math.max(u1, u);
       v0 = Math.min(v0, v);
       v1 = Math.max(v1, v);
     }
-    const rx = Math.floor(Math.max(bu - hw - ctx, u0)), ry = Math.floor(Math.max(bv - hh - ctx, v0));
-    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx, h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
+    const rx = Math.floor(Math.max(bu - hw - ctx, u0));
+    const ry = Math.floor(Math.max(bv - hh - ctx, v0));
+    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx;
+    const h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
     if (w < 4 || h < 4) return;
     // Strokes are looked for in the detector's own box. The padding is room to grow them into.
     const box = [
-      Math.max(0, Math.round(bu - raw.w / 2 - rx)), Math.max(0, Math.round(bv - raw.h / 2 - ry)),
-      Math.min(w, Math.round(bu + raw.w / 2 - rx)), Math.min(h, Math.round(bv + raw.h / 2 - ry)),
+      Math.max(0, Math.round(bu - raw.w / 2 - rx)),
+      Math.max(0, Math.round(bv - raw.h / 2 - ry)),
+      Math.min(w, Math.round(bu + raw.w / 2 - rx)),
+      Math.min(h, Math.round(bv + raw.h / 2 - ry)),
     ];
     if (box[2] - box[0] < 3 || box[3] - box[1] < 3) return;
     // the box isn't cut by the tile edge
     const whole = bu - hw - rx > 0 && bv - hh - ry > 0 && bu + hw - rx < w && bv + hh - ry < h;
 
-    const temp = new OffscreenCanvas(w, h), t = temp.getContext('2d', { willReadFrequently: true });
+    const temp = new OffscreenCanvas(w, h);
+    const t = temp.getContext('2d', { willReadFrequently: true });
     t.translate(-rx, -ry);
     t.rotate(-angle);
     t.translate(-ox, -oy);
-    t.drawImage(g.canvas, 0, 0);                                  // outside the tile stays transparent
+    t.drawImage(g.canvas, 0, 0); // outside the tile stays transparent
     t.setTransform(1, 0, 0, 1, 0, 0);
-    const img = t.getImageData(0, 0, w, h), d = img.data;
+    const img = t.getImageData(0, 0, w, h);
+    const d = img.data;
 
     // Decisions made while the whole box is on the tile are kept on the sign for every zoom.
-    const sign = raw.sign, fit = sign.fit;
+    const sign = raw.sign;
+    const fit = sign.fit;
     if (fit?.skip) return;
     const grow = 1 + Math.round(raw.h * 0.04);
     const s = strokes(d, w, h, box, grow);
@@ -753,13 +828,16 @@
       const measured = whole && s.bottom > s.top;
       f = {
         textH: measured ? Math.max(0.35, (s.bottom - s.top + 1) / raw.h) : TEXT_OF_BOX,
-        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0, fg: s.fg,
+        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0,
+        fg: s.fg,
       };
       if (whole) sign.fit = f;
     }
-    const textH = f.textH * raw.h, cy = bv - ry + f.dy * raw.h;
+    const textH = f.textH * raw.h;
+    const cy = bv - ry + f.dy * raw.h;
     // the new word on its own layer, kept to the sign's surface
-    const layer = new OffscreenCanvas(w, h), x = layer.getContext('2d', { willReadFrequently: true });
+    const layer = new OffscreenCanvas(w, h);
+    const x = layer.getContext('2d', { willReadFrequently: true });
     x.fillStyle = `rgb(${f.fg.join(',')})`;
     if (script === GALACTIC_INDEX) {
       const glyphH = textH / 0.72;
@@ -791,11 +869,11 @@
     for (let k = 0; k < 6; k++) {
       const word = pick();
       let fill;
-      if (stacked) fill = aspect * 0.92 / (graphemes(word).length * textH * 1.1);
+      if (stacked) fill = (aspect * 0.92) / (graphemes(word).length * textH * 1.1);
       else {
         const m = measurer.measureText(word);
         const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-        fill = aspect * 0.92 / (m.width * textH / gh);
+        fill = (aspect * 0.92) / ((m.width * textH) / gh);
       }
       if (!best || Math.abs(Math.log(fill)) < Math.abs(Math.log(best.fill))) best = { word, fill };
     }
@@ -806,7 +884,8 @@
   // to fill boxW, shrunk if it still doesn't fit.
   function writeWord(t, cx, cy, textH, boxW, { word, stacked }) {
     if (stacked) {
-      const chars = graphemes(word), step = Math.min(textH * 1.1, boxW * 0.92 / chars.length);
+      const chars = graphemes(word);
+      const step = Math.min(textH * 1.1, (boxW * 0.92) / chars.length);
       t.font = `bold ${step / 1.1}px sans-serif`;
       t.textAlign = 'center';
       t.textBaseline = 'middle';
@@ -822,9 +901,9 @@
     t.font = 'bold 100px sans-serif';
     let m = t.measureText(word);
     const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-    const width = m.width * textH / gh;
-    const sx = Math.min(1.25, Math.max(0.75, boxW * 0.92 / width));
-    let size = 100 * textH / gh;
+    const width = (m.width * textH) / gh;
+    const sx = Math.min(1.25, Math.max(0.75, (boxW * 0.92) / width));
+    let size = (100 * textH) / gh;
     if (width * sx > boxW) size *= boxW / (width * sx);
     t.font = `bold ${size}px sans-serif`;
     m = t.measureText(word);
@@ -840,18 +919,19 @@
   // their colour, the rows they span and how grainy the sign is, or null if nothing stands out.
   function strokes(d, w, h, box, grow) {
     const [x0, y0, x1, y1] = box;
-    const bins = new Float64Array(512 * 4);                       // 8-level colour cube: count, r, g, b
+    const bins = new Float64Array(512 * 4); // 8-level colour cube: count, r, g, b
     let n = 0;
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const i = (y * w + x) * 4;
-      if (d[i + 3] < 200) continue;
-      n++;
-      const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
-      bins[k]++;
-      bins[k + 1] += d[i];
-      bins[k + 2] += d[i + 1];
-      bins[k + 3] += d[i + 2];
-    }
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 200) continue;
+        n++;
+        const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
+        bins[k]++;
+        bins[k + 1] += d[i];
+        bins[k + 2] += d[i + 1];
+        bins[k + 3] += d[i + 2];
+      }
     let b = 0;
     for (let k = 4; k < bins.length; k += 4) if (bins[k] > bins[b]) b = k;
     if (!n) return null;
@@ -859,10 +939,11 @@
     const dist = i => Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]);
     // typical stroke pixel: the median of the eighth furthest from the sign colour
     const hist = new Uint32Array(766);
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const i = (y * w + x) * 4;
-      if (d[i + 3] >= 200) hist[dist(i) | 0]++;
-    }
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] >= 200) hist[dist(i) | 0]++;
+      }
     let contrast = 765;
     for (let v = 765, c = 0; v >= 0; v--) {
       c += hist[v];
@@ -872,10 +953,14 @@
       }
     }
     if (contrast < MIN_CONTRAST) return null;
-    const thr = Math.max(24, contrast * 0.45), strong = contrast * 0.8;
+    const thr = Math.max(24, contrast * 0.45);
+    const strong = contrast * 0.8;
     const core = new Uint8Array(w * h);
-    const ink = new Float64Array(512 * 4);                        // stroke colours, same cube
-    let top = h, bottom = -1, gsum = 0, gn = 0;
+    const ink = new Float64Array(512 * 4); // stroke colours, same cube
+    let top = h;
+    let bottom = -1;
+    let gsum = 0;
+    let gn = 0;
     const rowMin = Math.max(2, (x1 - x0) * 0.03);
     for (let y = y0; y < y1; y++) {
       let row = 0;
@@ -911,7 +996,10 @@
     return {
       mask: dilate(core, w, h, grow),
       fg: [1, 2, 3].map(j => Math.round(ink[f + j] / ink[f])),
-      bg, contrast, top, bottom,
+      bg,
+      contrast,
+      top,
+      bottom,
       grain: gn ? Math.min(6, (gsum / gn) * 0.5) : 0,
     };
   }
@@ -919,9 +1007,10 @@
   // see-through. The background is lightened by about the same fraction in every channel.
   // Real white or grey lettering is far more opaque.
   function watermark(raw, tileW, bg, fg) {
-    const h = raw.h / tileW, aspect = raw.w / raw.h;
+    const h = raw.h / tileW;
+    const aspect = raw.w / raw.h;
     if (raw.vertical || h < 0.018 || h > 0.045 || aspect < 3.5 || aspect > 8) return false;
-    if (Math.max(...fg) - Math.min(...fg) > 30) return false;     // coloured: not the grey mark
+    if (Math.max(...fg) - Math.min(...fg) > 30) return false; // coloured: not the grey mark
     const a = [0, 1, 2].map(k => (fg[k] - bg[k]) / (256 - bg[k]));
     return Math.min(...a) > 0.1 && Math.max(...a) < 0.55 && Math.max(...a) - Math.min(...a) < 0.1;
   }
@@ -932,7 +1021,8 @@
   function surface(d, w, h, s, r) {
     const near = (i, c, lim) =>
       Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < lim;
-    const lim = Math.max(40, s.contrast * 0.45), m = new Uint8Array(w * h);
+    const lim = Math.max(40, s.contrast * 0.45);
+    const m = new Uint8Array(w * h);
     for (let i = 0; i < w * h; i++) {
       const j = i * 4;
       if (d[j + 3] >= 200 && (near(j, s.bg, lim) || near(j, s.fg, lim))) m[i] = 1;
@@ -948,7 +1038,8 @@
 
   // Grows a mask by r px in every direction (a square), with running counts along rows, then columns.
   function dilate(m, w, h, r) {
-    const a = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    const a = new Uint8Array(w * h);
+    const out = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) {
       let c = 0;
       for (let x = 0; x < Math.min(r, w); x++) c += m[y * w + x];
@@ -974,7 +1065,10 @@
   // unknown pixel the smooth, bilinear value from the level above. Linear in the pixel count.
   function pushPull(d, mask, w, h) {
     const levels = [];
-    let c = new Float32Array(w * h * 3), wt = new Float32Array(w * h), lw = w, lh = h;
+    let c = new Float32Array(w * h * 3);
+    let wt = new Float32Array(w * h);
+    let lw = w;
+    let lh = h;
     for (let i = 0; i < w * h; i++) {
       if (mask[i] || d[i * 4 + 3] < 200) continue;
       wt[i] = 1;
@@ -984,27 +1078,36 @@
     }
     levels.push([c, wt, lw, lh]);
     while (lw > 1 || lh > 1) {
-      const nw = Math.ceil(lw / 2), nh = Math.ceil(lh / 2);
-      const nc = new Float32Array(nw * nh * 3), nt = new Float32Array(nw * nh);
-      for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
-        let s0 = 0, s1 = 0, s2 = 0, ws = 0;
-        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-          const sx = 2 * x + dx, sy = 2 * y + dy;
-          if (sx >= lw || sy >= lh) continue;
-          const j = sy * lw + sx, q = wt[j];
-          s0 += c[j * 3] * q;
-          s1 += c[j * 3 + 1] * q;
-          s2 += c[j * 3 + 2] * q;
-          ws += q;
+      const nw = Math.ceil(lw / 2);
+      const nh = Math.ceil(lh / 2);
+      const nc = new Float32Array(nw * nh * 3);
+      const nt = new Float32Array(nw * nh);
+      for (let y = 0; y < nh; y++)
+        for (let x = 0; x < nw; x++) {
+          let s0 = 0;
+          let s1 = 0;
+          let s2 = 0;
+          let ws = 0;
+          for (let dy = 0; dy < 2; dy++)
+            for (let dx = 0; dx < 2; dx++) {
+              const sx = 2 * x + dx;
+              const sy = 2 * y + dy;
+              if (sx >= lw || sy >= lh) continue;
+              const j = sy * lw + sx;
+              const q = wt[j];
+              s0 += c[j * 3] * q;
+              s1 += c[j * 3 + 1] * q;
+              s2 += c[j * 3 + 2] * q;
+              ws += q;
+            }
+          const j = y * nw + x;
+          if (ws) {
+            nc[j * 3] = s0 / ws;
+            nc[j * 3 + 1] = s1 / ws;
+            nc[j * 3 + 2] = s2 / ws;
+          }
+          nt[j] = Math.min(1, ws);
         }
-        const j = y * nw + x;
-        if (ws) {
-          nc[j * 3] = s0 / ws;
-          nc[j * 3 + 1] = s1 / ws;
-          nc[j * 3 + 2] = s2 / ws;
-        }
-        nt[j] = Math.min(1, ws);
-      }
       c = nc;
       wt = nt;
       lw = nw;
@@ -1012,18 +1115,25 @@
       levels.push([c, wt, lw, lh]);
     }
     for (let l = levels.length - 2; l >= 0; l--) {
-      const [c, wt, lw, lh] = levels[l], [pc, , pw, ph] = levels[l + 1];
+      const [c, wt, lw, lh] = levels[l];
+      const [pc, , pw, ph] = levels[l + 1];
       for (let y = 0; y < lh; y++) {
         const fy = Math.min(ph - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
-        const y0 = fy | 0, y1 = Math.min(ph - 1, y0 + 1), ty = fy - y0;
+        const y0 = fy | 0;
+        const y1 = Math.min(ph - 1, y0 + 1);
+        const ty = fy - y0;
         for (let x = 0; x < lw; x++) {
-          const j = y * lw + x, q = wt[j];
+          const j = y * lw + x;
+          const q = wt[j];
           if (q >= 1) continue;
           const fx = Math.min(pw - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
-          const x0 = fx | 0, x1 = Math.min(pw - 1, x0 + 1), tx = fx - x0;
+          const x0 = fx | 0;
+          const x1 = Math.min(pw - 1, x0 + 1);
+          const tx = fx - x0;
           for (let k = 0; k < 3; k++) {
-            const up = (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty)
-              + (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
+            const up =
+              (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty) +
+              (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
             c[j * 3 + k] = c[j * 3 + k] * q + up * (1 - q);
           }
           wt[j] = 1;
@@ -1045,46 +1155,58 @@
   // to mirror it gets plain grain.
   function texture(d, mask, w, h, box, levels, grain) {
     const [x0, y0, x1, y1] = box;
-    const L = levels[Math.min(2, levels.length - 1)], f = 2 ** Math.min(2, levels.length - 1);
+    const L = levels[Math.min(2, levels.length - 1)];
+    const f = 2 ** Math.min(2, levels.length - 1);
     const blurred = (x, y, k) => {
       const [c, , lw, lh] = L;
       const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5));
       const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5));
-      const xa = fx | 0, ya = fy | 0, xb = Math.min(lw - 1, xa + 1), yb = Math.min(lh - 1, ya + 1);
-      const tx = fx - xa, ty = fy - ya;
-      return (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty)
-        + (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty;
+      const xa = fx | 0;
+      const ya = fy | 0;
+      const xb = Math.min(lw - 1, xa + 1);
+      const yb = Math.min(lh - 1, ya + 1);
+      const tx = fx - xa;
+      const ty = fy - ya;
+      return (
+        (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty) +
+        (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty
+      );
     };
     const known = (x, y) =>
       x >= 0 && y >= 0 && x < w && y < h && !mask[y * w + x] && d[(y * w + x) * 4 + 3] >= 200;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (!mask[i]) continue;
-      // mirror images across the four edges, nearest edge first
-      const m = [
-        [2 * x0 - x - 1, y, x - x0], [2 * x1 - x - 1, y, x1 - x],
-        [x, 2 * y0 - y - 1, y - y0], [x, 2 * y1 - y - 1, y1 - y],
-      ].sort((a, b) => a[2] - b[2]);
-      const src = m.find(([mx, my]) => known(mx, my));
-      if (src) {
-        const j = (src[1] * w + src[0]) * 4;
-        for (let k = 0; k < 3; k++) {
-          d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (!mask[i]) continue;
+        // mirror images across the four edges, nearest edge first
+        const m = [
+          [2 * x0 - x - 1, y, x - x0],
+          [2 * x1 - x - 1, y, x1 - x],
+          [x, 2 * y0 - y - 1, y - y0],
+          [x, 2 * y1 - y - 1, y1 - y],
+        ].sort((a, b) => a[2] - b[2]);
+        const src = m.find(([mx, my]) => known(mx, my));
+        if (src) {
+          const j = (src[1] * w + src[0]) * 4;
+          for (let k = 0; k < 3; k++) {
+            d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
+          }
+        } else {
+          const n = (Math.random() - 0.5) * 2 * grain;
+          d[i * 4] += n;
+          d[i * 4 + 1] += n;
+          d[i * 4 + 2] += n;
         }
-      } else {
-        const n = (Math.random() - 0.5) * 2 * grain;
-        d[i * 4] += n;
-        d[i * 4 + 1] += n;
-        d[i * 4 + 2] += n;
       }
-    }
   }
 
   // which way you're looking, for the queue order
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
     panos.add(p);
-    try { p.addListener('pano_changed', pruneQueue); } catch {}
+    try {
+      p.addListener('pano_changed', pruneQueue);
+    } catch {}
   });
   function start(cfg) {
     active = cfg;
@@ -1092,7 +1214,10 @@
     detector();
     ggs.tiles.replay();
     return {
-      stop() { active = null; ggs.tiles.replay(); },
+      stop() {
+        active = null;
+        ggs.tiles.replay();
+      },
       update(next) {
         const changed = next.script !== active.script;
         active = next;

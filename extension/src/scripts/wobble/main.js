@@ -9,9 +9,15 @@
     click(latLng, { cfg }) {
       // the square root spreads spots evenly over the disc
       const km = KM[cfg.size] * Math.sqrt(Math.random());
-      const p = ggs.aid.destination({ lat: latLng.lat(), lng: latLng.lng() }, km, 2 * Math.PI * Math.random());
+      const p = ggs.aid.destination(
+        { lat: latLng.lat(), lng: latLng.lng() },
+        km,
+        2 * Math.PI * Math.random(),
+      );
       setTimeout(() => {
-        try { ggs.maps.placeGuess(p.lat, p.lng, { pan: false }); } catch {}
+        try {
+          ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+        } catch {}
       });
     },
   });

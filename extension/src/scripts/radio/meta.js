@@ -8,8 +8,10 @@
     options: [
       { key: 'showStreetView', label: 'Show Street View', type: 'checkbox', default: false },
       {
-        key: 'streamerMode', label: 'Streamer / YouTube mode: talk & news stations only',
-        type: 'checkbox', default: false,
+        key: 'streamerMode',
+        label: 'Streamer / YouTube mode: talk & news stations only',
+        type: 'checkbox',
+        default: false,
       },
     ],
   });

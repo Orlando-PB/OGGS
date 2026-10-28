@@ -3,14 +3,25 @@
 // mirrors what each script reports on the page.
 const list = document.getElementById('list');
 
-const metaFiles = chrome.runtime.getManifest().content_scripts
-  .flatMap(c => c.js)
+const metaFiles = chrome.runtime
+  .getManifest()
+  .content_scripts.flatMap(c => c.js)
   .filter(p => p.endsWith('/meta.js'));
-Promise.all(metaFiles.map(p => new Promise((res, rej) => {
-  const s = Object.assign(document.createElement('script'),
-    { src: `../${p}`, async: false, onload: res, onerror: rej });
-  document.head.append(s);
-}))).then(() => Promise.all([chrome.storage.sync.get('settings'), chrome.storage.local.get('status')]))
+Promise.all(
+  metaFiles.map(
+    p =>
+      new Promise((res, rej) => {
+        const s = Object.assign(document.createElement('script'), {
+          src: `../${p}`,
+          async: false,
+          onload: res,
+          onerror: rej,
+        });
+        document.head.append(s);
+      }),
+  ),
+)
+  .then(() => Promise.all([chrome.storage.sync.get('settings'), chrome.storage.local.get('status')]))
   .then(([{ settings = {} }, { status = {} }]) => {
     // The object the form edits. Changes made in the in-page panel replace it.
     let current = settings;
@@ -36,6 +47,6 @@ Promise.all(metaFiles.map(p => new Promise((res, rej) => {
     show(status);
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes.status) show(changes.status.newValue);
-      if (area === 'sync' && changes.settings) form.update(current = changes.settings.newValue ?? {});
+      if (area === 'sync' && changes.settings) form.update((current = changes.settings.newValue ?? {}));
     });
   });
