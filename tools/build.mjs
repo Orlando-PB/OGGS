@@ -41,13 +41,16 @@ const userscript = `// ==UserScript==
 // @downloadURL  ${RAW}
 // ==/UserScript==
 
+// Developed by Orlando. AI-generated code assisted with this script.
+//
 // Built by tools/build.mjs from extension/ in https://github.com/Orlando-PB/OGGS: don't edit
 // this file, edit those. Each section below is one file from there, unchanged, except
 // userscript/bridge.js, which stands in for the extension's bridge.js.
 //
 // What talks to the network, and with what:
 //   core/game.js          geoguessr.com's own game API (your session), to read the game's mode
-//                         and map, and the round's location for the drawing board's boost
+//                         and map, and the round's location (drawing board boost, map aids)
+//   core/aid.js           country outlines (draw-guess's geo.json) from ${SERVER}
 //   userscript/bridge.js  loads the drawing and flag boards, the panel icon and the sign-text
 //                         detector from ${SERVER}
 //   scripts/radio         radio-browser.info (station search) and the station streams

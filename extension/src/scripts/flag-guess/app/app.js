@@ -1,9 +1,10 @@
-// Draw the flag: the paint board inside flag-guess's iframe. Paint a flag with a few colours,
-// it's matched against every flag in flags.json (built by dev/tools/build_flags.mjs), then the
-// best match's outline (draw-guess's geo.json) is shown to click your guess into. The guess
-// goes up to the page (main.js), which puts it on GeoGuessr's hidden map and presses Guess.
-// Talks to the page only by postMessage: up 'ready', 'height', 'guess', 'done' (after the
-// zoom out to the right spot); down 'reset', 'answer', 'strict' (guess must go inside the matched country).
+// Draw the flag: the paint board inside flag-guess's iframe. You paint a flag with a few colours
+// and it's matched against every flag in flags.json (built by dev/tools/build_flags.mjs). The best
+// match's outline (draw-guess's geo.json) is then shown to click your guess into. The guess goes
+// up to the page (main.js), which puts it on GeoGuessr's hidden map and presses Guess.
+// Talks to the page only by postMessage. Up: 'ready', 'height', 'guess', and 'done' after the
+// zoom out to the right spot. Down: 'reset', 'answer', and 'strict' (guess must go inside the
+// matched country).
 // Suggested by @Dilbot447 on YouTube.
 (() => {
   const $ = id => document.getElementById(id);
@@ -12,9 +13,12 @@
   // px is the painting, as the pixels of img (little-endian RGBA words).
   const img = pctx.createImageData(PW, PH), px = new Uint32Array(img.data.buffer);
   const pick = $('pick'), kctx = pick.getContext('2d');
-  const WIDTHS = { fine: 2, medium: 6, thick: 16 }, MAX_UNDO = 30; // line radii in paper pixels
+  // line radii in paper pixels
+  const WIDTHS = { fine: 2, medium: 6, thick: 16 }, MAX_UNDO = 30;
 
-  const toParent = msg => { if (parent !== window) parent.postMessage(msg, '*'); };
+  const toParent = msg => {
+    if (parent !== window) parent.postMessage(msg, '*');
+  };
   const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
   // ---------- data ----------
@@ -31,7 +35,13 @@
     const at = name => d.palette.findIndex(p => p.name === name);
     // Colours people mix up count for part of a match.
     SIM = pots.map((_, i) => pots.map((_, j) => +(i === j)));
-    for (const [a, b, s] of [['Red', 'Maroon', 0.6], ['Light blue', 'Blue', 0.6], ['Orange', 'Yellow', 0.4], ['Orange', 'Red', 0.3]]) {
+    const MIXED_UP = [
+      ['Red', 'Maroon', 0.6],
+      ['Light blue', 'Blue', 0.6],
+      ['Orange', 'Yellow', 0.4],
+      ['Orange', 'Red', 0.3],
+    ];
+    for (const [a, b, s] of MIXED_UP) {
       SIM[at(a)][at(b)] = SIM[at(b)][at(a)] = s;
     }
     FAMILY = d.palette.map((p, i) => ({ Maroon: at('Red'), Blue: at('Light blue') })[p.name] ?? i);
@@ -40,8 +50,11 @@
   });
   const sprite = new Image();
   sprite.src = 'flags.png';
-  const spriteReady = sprite.decode().catch(() => {}); // without it the header just has no picture
-  const geoReady = fetch('../../draw-guess/app/data/geo.json').then(r => r.json()).then(g => { geo = g; });
+  // without the sprite the header just has no picture
+  const spriteReady = sprite.decode().catch(() => {});
+  const geoReady = fetch('../../draw-guess/app/data/geo.json').then(r => r.json()).then(g => {
+    geo = g;
+  });
 
   // ---------- painting ----------
   let tool = 'medium', color = 0, undo = [], redo = [], drawing = null;
@@ -58,9 +71,13 @@
     $('undo').disabled = !undo.length;
     $('redo').disabled = !redo.length;
   }
-  // Each step saves the painting before it; a new step drops anything undone.
+  // Each step saves the painting before it. A new step drops anything undone.
   const snapshot = () => px.slice();
-  const saveUndo = () => { undo.push(snapshot()); if (undo.length > MAX_UNDO) undo.shift(); redo = []; };
+  const saveUndo = () => {
+    undo.push(snapshot());
+    if (undo.length > MAX_UNDO) undo.shift();
+    redo = [];
+  };
   function step(from, to) {
     const s = from.pop();
     if (!s) return;
@@ -81,7 +98,9 @@
   }
   function line([x0, y0], [x1, y1], r, c) {
     const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
-    for (let i = 0; i <= n; i++) stamp(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n), r, c);
+    for (let i = 0; i <= n; i++) {
+      stamp(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n), r, c);
+    }
   }
   // Scanline flood fill, exact colour (strokes aren't anti-aliased, so there are no fringes).
   function flood(x, y, c) {
@@ -95,8 +114,16 @@
       let up = false, down = false;
       for (; sx < PW && same(sy * PW + sx); sx++) {
         px[sy * PW + sx] = c;
-        if (sy > 0) { const t = same((sy - 1) * PW + sx); if (t && !up) stack.push([sx, sy - 1]); up = t; }
-        if (sy < PH - 1) { const t = same((sy + 1) * PW + sx); if (t && !down) stack.push([sx, sy + 1]); down = t; }
+        if (sy > 0) {
+          const t = same((sy - 1) * PW + sx);
+          if (t && !up) stack.push([sx, sy - 1]);
+          up = t;
+        }
+        if (sy < PH - 1) {
+          const t = same((sy + 1) * PW + sx);
+          if (t && !down) stack.push([sx, sy + 1]);
+          down = t;
+        }
       }
     }
   }
@@ -109,7 +136,11 @@
     if (e.button !== 0 || !data) return;
     const p = paperPos(e);
     saveUndo();
-    if (tool === 'fill') { flood(...p, pots[color]); show(); return; }
+    if (tool === 'fill') {
+      flood(...p, pots[color]);
+      show();
+      return;
+    }
     paper.setPointerCapture(e.pointerId);
     drawing = p;
     line(p, p, WIDTHS[tool], pots[color]);
@@ -118,7 +149,10 @@
   paper.addEventListener('pointermove', e => {
     if (!drawing) return;
     // Released outside the iframe: no pointerup arrives, so stop on the first buttonless move.
-    if (!(e.buttons & 1)) { drawing = null; return; }
+    if (!(e.buttons & 1)) {
+      drawing = null;
+      return;
+    }
     const p = paperPos(e);
     line(drawing, p, WIDTHS[tool], pots[color]);
     drawing = p;
@@ -139,16 +173,23 @@
     document.querySelectorAll('.swatch').forEach((s, j) => s.classList.toggle('on', j === i));
   }
   function buildPalette() {
-    $('palette').innerHTML = data.palette.map((p, i) =>
-      `<button class="swatch" style="background:${p.hex}" title="${esc(p.name)} (${i + 1})"></button>`).join('');
-    $('palette').querySelectorAll('.swatch').forEach((s, i) => s.addEventListener('click', () => setColor(i)));
+    const swatch = (p, i) =>
+      `<button class="swatch" style="background:${p.hex}" title="${esc(p.name)} (${i + 1})"></button>`;
+    $('palette').innerHTML = data.palette.map(swatch).join('');
+    $('palette').querySelectorAll('.swatch').forEach((s, i) => {
+      s.addEventListener('click', () => setColor(i));
+    });
     setColor(data.palette.findIndex(p => p.name === 'Blue'));
     clearPaper();
   }
   for (const t of ['fine', 'medium', 'thick', 'fill']) $(t).addEventListener('click', () => setTool(t));
   $('undo').addEventListener('click', () => step(undo, redo));
   $('redo').addEventListener('click', () => step(redo, undo));
-  $('clear').addEventListener('click', () => { saveUndo(); px.fill(pots[0]); show(); });
+  $('clear').addEventListener('click', () => {
+    saveUndo();
+    px.fill(pots[0]);
+    show();
+  });
 
   // ---------- matching ----------
   // A grid plus its half-size version (for drawings a little off), colour shares and stripes.
@@ -163,23 +204,35 @@
       }
     }
     const share = new Array(n).fill(0), fam = new Array(n).fill(0);
-    for (const c of grid) { share[c] += 1 / grid.length; fam[FAMILY[c]] += 1 / grid.length; }
+    for (const c of grid) {
+      share[c] += 1 / grid.length;
+      fam[FAMILY[c]] += 1 / grid.length;
+    }
     return { grid, half, share, fam, stripes: changes(grid, w, h, 1) };
   }
 
-  // How often the colour changes going down a column and along a row, averaged over 20 of
-  // each. Runs shorter than minRun don't count, so a wobbly edge isn't a stripe. This keeps
-  // thin painted stripes that the cell grid loses: the US with red lines on white is still
-  // striped, not white with a blue corner (Israel, South Korea).
+  // How often the colour changes going down a column and along a row, averaged over 20 of each.
+  // Runs shorter than minRun don't count, so a wobbly edge isn't a stripe. This keeps thin painted
+  // stripes that the cell grid loses: the US with red lines on white is still striped, not white
+  // with a blue corner (Israel, South Korea).
   function changes(img, w, h, minRun) {
     const count = (get, len) => {
       let n = 0, cur = get(0), next = -1, run = 0;
       for (let i = 1; i < len; i++) {
         const v = get(i);
-        if (v === cur) { next = -1; run = 0; continue; }
+        if (v === cur) {
+          next = -1;
+          run = 0;
+          continue;
+        }
         run = v === next ? run + 1 : 1;
         next = v;
-        if (run >= minRun) { n++; cur = v; next = -1; run = 0; }
+        if (run >= minRun) {
+          n++;
+          cur = v;
+          next = -1;
+          run = 0;
+        }
       }
       return n;
     };
@@ -193,9 +246,9 @@
   }
 
   // The painting cut into the same grid as the flags: each cell takes its most common colour.
-  // Black counts half, so the outline strokes don't outvote the paint they surround.
-  // Every flag is stretched to this one rectangle (Switzerland's square, Nepal with the
-  // space round it as white), so the paper is the only shape there is.
+  // Black counts half, so the outline strokes don't outvote the paint they surround. Every flag is
+  // stretched to this one rectangle (Switzerland's square, Nepal with white round it), so the
+  // paper is the only shape there is.
   function paperGrid() {
     const { w, h } = data, n = pots.length, grid = new Uint8Array(w * h);
     const ink = Uint8Array.from(px, c => potIndex.get(c));
@@ -219,7 +272,9 @@
     let total = 0;
     for (const i of ink) {
       const k = data.palette[i].name === 'Black' ? 0.5 : 1;
-      share[i] += k; fam[FAMILY[i]] += k; total += k;
+      share[i] += k;
+      fam[FAMILY[i]] += k;
+      total += k;
     }
     u.share = share.map(v => v / total);
     u.fam = fam.map(v => v / total);
@@ -227,7 +282,11 @@
     return u;
   }
 
-  const cellScore = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += SIM[a[i]][b[i]]; return s / a.length; };
+  const cellScore = (a, b) => {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += SIM[a[i]][b[i]];
+    return s / a.length;
+  };
   // The same on the full grid, also with the flag moved a row up or down (counting 10% less),
   // so stripes a row out of step, or red and white swapped, still line up.
   function slidScore(a, b) {
@@ -244,8 +303,8 @@
     return best;
   }
   const overlap = (a, b) => a.reduce((s, v, i) => s + Math.min(v, b[i]), 0);
-  // Which colours are used at all (2%+ of the flag), however much of each: a small red
-  // circle on white is still Japan's colours, not Cyprus's white, orange and green.
+  // Which colours are used at all (2%+ of the flag), however much of each. A small red circle on
+  // white is still Japan's colours, not Cyprus's white, orange and green.
   const present = share => share.flatMap((v, i) => (v >= 0.02 ? [i] : []));
   function sameColours(a, b) {
     const found = (x, y) => x.reduce((s, c) => s + Math.max(...y.map(d => SIM[c][d])), 0);
@@ -255,14 +314,15 @@
   const sameStripes = (a, b) => (near(a[0], b[0]) + near(a[1], b[1])) / 2;
   function score(u, f) {
     const amounts = 0.5 * overlap(u.share, f.share) + 0.5 * overlap(u.fam, f.fam);
-    return 0.85 * (0.35 * slidScore(u.grid, f.grid) + 0.2 * cellScore(u.half, f.half) + 0.15 * amounts
-      + 0.3 * sameColours(present(u.share), present(f.share))) + 0.15 * sameStripes(u.stripes, f.stripes);
+    const looks = 0.35 * slidScore(u.grid, f.grid) + 0.2 * cellScore(u.half, f.half) + 0.15 * amounts
+      + 0.3 * sameColours(present(u.share), present(f.share));
+    return 0.85 * looks + 0.15 * sameStripes(u.stripes, f.stripes);
   }
 
-  // A slight, hidden lift for the round's real country (OWN points) and countries near it
-  // (up to NEAR points: all of it within 200 km of their border, fading to nothing at
-  // 800 km), like the outline board's. It only settles close calls such as a rough US flag
-  // against Liberia's; a clearly different flag still wins. The % shown stays the real one.
+  // A slight, hidden lift for the round's real country (OWN points) and countries near it, like
+  // the outline board's. Near ones get up to NEAR points: all of it within 200 km of their border,
+  // fading to nothing at 800 km. It only settles close calls such as a rough US flag against
+  // Liberia's. A clearly different flag still wins, and the % shown stays the real one.
   const OWN = 2, NEAR = 1.5, NEAR_FULL = 200, NEAR_ZERO = 800;
   const inside = ([x, y], ring) => {
     let c = false;
@@ -282,7 +342,8 @@
       let d2 = Infinity;
       for (const [outer] of polys) {
         for (const [x, y] of outer) {
-          let dx = Math.abs(x - lng); if (dx > 180) dx = 360 - dx;
+          let dx = Math.abs(x - lng);
+          if (dx > 180) dx = 360 - dx;
           d2 = Math.min(d2, (dx * k) ** 2 + (y - lat) ** 2);
         }
       }
@@ -294,10 +355,10 @@
 
   // The country whose flag is closest to the painting.
   function bestMatch() {
-    const u = paperGrid(), near = answerLL ? lift(answerLL) : {};
+    const u = paperGrid(), lifts = answerLL ? lift(answerLL) : {};
     let best = null;
     data.flags.forEach((f, i) => {
-      const s = score(u, flagGrids[i]), lifted = s + (near[f.country ?? f.code] ?? 0);
+      const s = score(u, flagGrids[i]), lifted = s + (lifts[f.country ?? f.code] ?? 0);
       if (!best || lifted > best.lifted) best = { ...f, s, lifted };
     });
     return { ...best, score: Math.round(best.s * 100) };
@@ -305,6 +366,7 @@
 
   // ---------- picking the spot ----------
   let stage = 'draw', chosen = null, view = null, pin = null;
+  const pole = $('pole'), octx = pole.getContext('2d');
 
   // draw -> raise (the flag goes up a pole) -> pick (click in the outline) -> done
   function setStage(s) {
@@ -322,7 +384,8 @@
     if (drawing && data) show();
   }
 
-  const pickTip = () => (strict ? `Click where in ${chosen.name} you think you are` : 'Click where you think you are');
+  const pickTip = () =>
+    (strict ? `Click where in ${chosen.name} you think you are` : 'Click where you think you are');
 
   // The matched country's real flag, from flags.png (96x64 each, data.perRow to a row).
   const SPRITE_W = 96, SPRITE_H = 64;
@@ -341,17 +404,18 @@
     y.drawImage(paper, 0, 0, y.canvas.width, y.canvas.height);
   }
 
-  // Mercator, like GeoGuessr's own map, in degree-sized units (y down). Land is projected
-  // once into Path2Ds, plus a lighter copy for zoomed-out views; view.at turns these units
-  // into canvas pixels (x + X * s, y + Y * s), so zooming never projects again. Land is
-  // drawn again one world to either side, so views across the antimeridian stay whole.
+  // Mercator, like GeoGuessr's own map, in degree-sized units (y down). Land is projected once
+  // into Path2Ds, plus a lighter copy for zoomed-out views. view.at turns these units into canvas
+  // pixels (x + X * s, y + Y * s), so zooming never projects again. Land is drawn again one world
+  // to either side, so views across the antimeridian stay whole.
   const DEG = Math.PI / 180, WORLD = 360;
   const mercY = lat => -Math.log(Math.tan(Math.PI / 4 + Math.max(-85, Math.min(85, lat)) * DEG / 2)) / DEG;
   const bounds = pts => {
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
   };
-  const COARSE = 0.2, COARSE_BELOW = 4; // drop points under 0.2 units apart while < 4 px a unit
+  // the coarse copy drops points under 0.2 units apart, used below 4 px a unit
+  const COARSE = 0.2, COARSE_BELOW = 4;
   let lands = null;
   function buildLands() {
     lands = [];
@@ -363,17 +427,22 @@
           r.forEach(([x, y], i) => (i ? fine.lineTo(x, y) : fine.moveTo(x, y)));
           let last = r[0];
           coarse.moveTo(...last);
-          for (const p of r) if (Math.abs(p[0] - last[0]) + Math.abs(p[1] - last[1]) >= COARSE) { coarse.lineTo(...p); last = p; }
-          fine.closePath(); coarse.closePath();
+          for (const p of r) {
+            if (Math.abs(p[0] - last[0]) + Math.abs(p[1] - last[1]) < COARSE) continue;
+            coarse.lineTo(...p);
+            last = p;
+          }
+          fine.closePath();
+          coarse.closePath();
         }
         lands.push({ code, fine, coarse, first: rings[0][0], box: bounds(rings[0]) });
       }
     }
   }
 
-  // The matched country fills the middle half of the view at first, so its neighbours and
-  // coast show round it and a guess can go just over the border or out to sea. A country
-  // across the antimeridian (Russia, Fiji) has its western longitudes moved +360.
+  // The matched country fills the middle half of the view at first, so its neighbours and coast
+  // show round it and a guess can go just over the border or out to sea. A country across the
+  // antimeridian (Russia, Fiji) has its western longitudes moved +360.
   function makeView(code) {
     if (!lands) buildLands();
     const all = geo[code].flat(2);
@@ -386,16 +455,24 @@
       return { s, x: pick.width / 2 - (x0 + x1) / 2 * s, y: pick.height / 2 - (y0 + y1) / 2 * s };
     };
     const box = bounds(all.map(proj));
-    const back = ([X, Y]) => ({ lat: (2 * Math.atan(Math.exp(-Y * DEG)) - Math.PI / 2) / DEG, lng: ((X + 540) % WORLD) - 180 });
-    return { mine: lands.filter(l => l.code === code), others: lands.filter(l => l.code !== code),
-             box, wrapX, proj, fit, back, start: fit(box, 0.5) };
+    const back = ([X, Y]) => ({
+      lat: (2 * Math.atan(Math.exp(-Y * DEG)) - Math.PI / 2) / DEG,
+      lng: ((X + 540) % WORLD) - 180,
+    });
+    return {
+      mine: lands.filter(l => l.code === code),
+      others: lands.filter(l => l.code !== code),
+      box, wrapX, proj, fit, back,
+      start: fit(box, 0.5),
+    };
   }
   const toScreen = ([X, Y], at = view.at) => [at.x + X * at.s, at.y + Y * at.s];
   const fromScreen = ([x, y], at = view.at) => [(x - at.x) / at.s, (y - at.y) / at.s];
 
   // The visible copies of some lands as one path in canvas pixels, so lines keep their width.
   function landPath(list) {
-    const { s, x, y } = view.at, [vx0, vy0] = fromScreen([0, 0]), [vx1, vy1] = fromScreen([pick.width, pick.height]);
+    const { s, x, y } = view.at;
+    const [vx0, vy0] = fromScreen([0, 0]), [vx1, vy1] = fromScreen([pick.width, pick.height]);
     const key = s < COARSE_BELOW ? 'coarse' : 'fine', out = new Path2D();
     for (const d of [-WORLD, 0, WORLD]) {
       const m = new DOMMatrix([s, 0, 0, s, x + d * s, y]);
@@ -407,9 +484,9 @@
     return out;
   }
 
-  // In a country made of specks (Maldives, Tuvalu), each speck gets a ring round it: their
-  // centres in canvas pixels. Specks are judged at the starting zoom, so zooming out after the
-  // guess doesn't ring a big country's small islands.
+  // In a country made of specks (Maldives, Tuvalu), each speck gets a ring round it. This returns
+  // their centres in canvas pixels. Specks are judged at the starting zoom, so zooming out after
+  // the guess doesn't ring a big country's small islands.
   const SPECK_R = 12;
   function specks() {
     const span = l => Math.max(l.box[2] - l.box[0], l.box[3] - l.box[1]) * view.start.s;
@@ -420,7 +497,8 @@
   // With "guess must go inside the matched country" on, a click counts only on that country:
   // inside it, within a few pixels of its border, or inside a speck's ring.
   const BORDER_SLACK = 4;
-  let strict = true; // the page sends the setting on start
+  // the page sends the setting on start
+  let strict = true;
   function inCountry([x, y]) {
     const mine = landPath(view.mine);
     kctx.save();
@@ -432,10 +510,10 @@
   }
 
   function drawPick() {
-    const s = view.at.s;
     kctx.clearRect(0, 0, pick.width, pick.height);
     kctx.lineJoin = 'round';
-    const others = landPath(view.others); // the neighbours, as plain land
+    // the neighbours, as plain land
+    const others = landPath(view.others);
     kctx.fillStyle = '#ece6d6';
     kctx.fill(others, 'evenodd');
     kctx.strokeStyle = '#b9ae94';
@@ -453,25 +531,31 @@
       kctx.arc(cx, cy, SPECK_R, 0, 2 * Math.PI);
       kctx.stroke();
     }
-    if (pin) marks.drawPin(kctx, toScreen(pin)); // ../../draw-guess/app/marks.js
+    // marks is ../../draw-guess/app/marks.js
+    if (pin) marks.drawPin(kctx, toScreen(pin));
     if (answerAt) marks.drawAnswer(kctx, toScreen(pin), toScreen(answerAt));
   }
 
-  // After the guess: the flag on the round's real spot, a dashed line to it from the pin,
-  // and a zoom out until both and the matched country are in view. The guess is already on
-  // GeoGuessr's (hidden) map by then and can't change.
+  // After the guess: the flag on the round's real spot, a dashed line to it from the pin, and a
+  // zoom out until both and the matched country are in view. The guess is already on GeoGuessr's
+  // (hidden) map by then and can't change.
   const ZOOM_MS = 2600;
   let answerLL = null, answerAt = null, runId = 0;
   function showAnswer() {
     const run = ++runId;
     if (!answerLL) return Promise.resolve(true);
     const a = view.proj([answerLL.lng, answerLL.lat]);
-    a[0] += Math.round((pin[0] - a[0]) / WORLD) * WORLD; // the copy nearest the pin
+    // the copy nearest the pin
+    a[0] += Math.round((pin[0] - a[0]) / WORLD) * WORLD;
     answerAt = a;
     const [x0, y0, x1, y1] = view.box;
-    const box = [Math.min(x0, pin[0], a[0]), Math.min(y0, pin[1], a[1]), Math.max(x1, pin[0], a[0]), Math.max(y1, pin[1], a[1])];
+    const box = [
+      Math.min(x0, pin[0], a[0]), Math.min(y0, pin[1], a[1]),
+      Math.max(x1, pin[0], a[0]), Math.max(y1, pin[1], a[1]),
+    ];
     const from = view.at, to = view.fit(box, 0.75);
-    if (to.s > from.s) Object.assign(to, view.fit(box, 0.75 * from.s / to.s)); // never zoom in
+    // never zoom in
+    if (to.s > from.s) Object.assign(to, view.fit(box, 0.75 * from.s / to.s));
     // Scale moves geometrically and the centre with 1/scale, so the zoom looks steady.
     const centre = at => fromScreen([pick.width / 2, pick.height / 2], at);
     const c0 = centre(from), c1 = centre(to);
@@ -479,7 +563,8 @@
     const start = performance.now();
     return new Promise(done => {
       const frame = now => {
-        if (run !== runId) return done(false); // a new round reset the board meanwhile
+        // a new round reset the board meanwhile
+        if (run !== runId) return done(false);
         const t = ease(Math.min(1, (now - start) / ZOOM_MS));
         const s = from.s * (to.s / from.s) ** t;
         const u = to.s === from.s ? t : (1 / s - 1 / from.s) / (1 / to.s - 1 / from.s);
@@ -496,7 +581,8 @@
   function choose(r) {
     chosen = r;
     pin = answerAt = null;
-    view = makeView(r.country ?? r.code); // England, Scotland, Wales: the UK outline
+    // England, Scotland and Wales use the UK outline
+    view = makeView(r.country ?? r.code);
     view.at = view.start;
     showMini(r);
     $('guess').disabled = true;
@@ -508,19 +594,24 @@
     if ($('match').disabled) return;
     $('match').disabled = true;
     await Promise.all([ready, geoReady, spriteReady]);
-    if (stage !== 'draw') return; // a new round reset the board meanwhile
+    // a new round may have reset the board meanwhile, here and after raise()
+    if (stage !== 'draw') return;
     const best = bestMatch();
     await raise(best);
-    if (stage !== 'raise') return; // a new round reset the board meanwhile
+    if (stage !== 'raise') return;
     choose(best);
-    pole.classList.add('out'); // fades, uncovering the outline, then goes
-    setTimeout(() => { if (stage !== 'raise') pole.hidden = true; }, 700);
+    // the pole fades, uncovering the outline, then goes
+    pole.classList.add('out');
+    setTimeout(() => {
+      if (stage !== 'raise') pole.hidden = true;
+    }, 700);
   }
 
   // ---------- the flag going up the pole ----------
-  const pole = $('pole'), octx = pole.getContext('2d');
-  const WAVE = 3600; // ms
-  const MORPH_FROM = 1200, MORPH_MS = 1400; // the painting turns into the matched flag, square by square
+  // ms the flag waves for
+  const WAVE = 3600;
+  // the painting turns into the matched flag square by square, from 1.2 s for 1.4 s
+  const MORPH_FROM = 1200, MORPH_MS = 1400;
   const MORPH_COLS = 24, MORPH_ROWS = 16;
   const INK = '#3b4459', LINE = 2;
   const ease = t => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -543,9 +634,9 @@
   }
   const hillTop = (x, cx, cy, rx, ry) => cy - ry * Math.sqrt(Math.max(0, 1 - ((x - cx) / rx) ** 2));
 
-  // A quiet countryside in muted colours: pale sky, low sun, two slow clouds, three
-  // layers of hills with a few trees, and the pole on the nearest one.
-  // Returns where the pole meets the ground.
+  // A quiet countryside in muted colours: pale sky, low sun, two slow clouds, three layers of
+  // hills with a few trees, and the pole on the nearest one. Returns where the pole meets the
+  // ground.
   function scene(W, H, poleX, top, secs) {
     octx.fillStyle = '#e4eeed';
     octx.fillRect(0, 0, W, H);
@@ -582,9 +673,9 @@
     return ground;
   }
 
-  // The painting in thin vertical slices, each bobbing on a sine wave that grows towards the
-  // free end, then outlined in ink so it matches the scene. The outline is the flag's
-  // silhouette stamped around it.
+  // The painting in thin vertical slices, each bobbing on a sine wave that grows towards the free
+  // end, then outlined in ink so it matches the scene. The outline is the flag's silhouette
+  // stamped around it.
   function flag(src, x, y, w, h, amp, secs) {
     const N = 48, sw = src.width, sh = src.height;
     fctx.clearRect(0, 0, fbuf.width, fbuf.height);
@@ -599,12 +690,14 @@
     sctx.fillRect(0, 0, sil.width, sil.height);
     // stamped on a square of whole-pixel offsets, so corners stay square and fully inked
     const d = LINE;
-    for (let dy = -d; dy <= d; dy += d) for (let dx = -d; dx <= d; dx += d) octx.drawImage(sil, dx, dy);
+    for (let dy = -d; dy <= d; dy += d) {
+      for (let dx = -d; dx <= d; dx += d) octx.drawImage(sil, dx, dy);
+    }
     octx.drawImage(fbuf, 0, 0);
   }
 
-  // The flag on the pole: the painting, with the matched flag's squares (in a random order
-  // fixed per raise) drawn over it as k goes from 0 to 1.
+  // The flag on the pole: the painting, with the matched flag's squares drawn over it as k goes
+  // from 0 to 1. The squares' random order is fixed for each raise.
   const mix = document.createElement('canvas'), mctx = mix.getContext('2d');
   mix.width = PW;
   mix.height = PH;
@@ -621,10 +714,11 @@
 
   let skipRaise = false;
   pole.addEventListener('pointerdown', () => { skipRaise = true; });
-  // The scene fades in with the painted flag already at the top of the pole; it starts
-  // still, picks up the wind, then turns into the matched country's flag.
+  // The scene fades in with the painted flag already at the top of the pole. It starts still,
+  // picks up the wind, then turns into the matched country's flag.
   function raise(best) {
-    octx.clearRect(0, 0, pole.width, pole.height); // last round's flag would show for a frame
+    // otherwise last round's flag would show for a frame
+    octx.clearRect(0, 0, pole.width, pole.height);
     setStage('raise');
     pole.classList.remove('out');
     skipRaise = false;
@@ -638,7 +732,8 @@
         const t = now - t0, secs = t / 1000;
         octx.globalAlpha = clamp01(t / 400);
         const ground = scene(W, H, poleX, top, secs);
-        octx.strokeStyle = INK; // the rope, from the pole's top to its foot
+        // the rope, from the pole's top to its foot
+        octx.strokeStyle = INK;
         octx.lineWidth = 1.2;
         octx.beginPath();
         octx.moveTo(poleX + 5, top);
@@ -659,8 +754,12 @@
     if (stage !== 'pick' || e.button !== 0) return;
     const r = pick.getBoundingClientRect();
     const p = [(e.clientX - r.left) / r.width * pick.width, (e.clientY - r.top) / r.height * pick.height];
-    if (strict && !inCountry(p)) { $('tip').textContent = `Click inside ${chosen.name}`; return; }
-    pin = fromScreen(p); // without strict, anywhere: over the border or out to sea
+    if (strict && !inCountry(p)) {
+      $('tip').textContent = `Click inside ${chosen.name}`;
+      return;
+    }
+    // without strict, anywhere: over the border or out to sea
+    pin = fromScreen(p);
     $('tip').textContent = '';
     $('guess').disabled = false;
     drawPick();
@@ -694,14 +793,19 @@
   window.addEventListener('message', e => {
     if (e.source !== parent) return;
     const d = e.data ?? {};
-    if (d.ggs === 'reset') { runId++; ready.then(clearPaper); setStage('draw'); }
+    if (d.ggs === 'reset') {
+      runId++;
+      ready.then(clearPaper);
+      setStage('draw');
+    }
     if (d.ggs === 'strict') strict = !!d.on;
     if (d.ggs === 'answer') answerLL = typeof d.lat === 'number' ? { lat: d.lat, lng: d.lng } : null;
   });
 
   // The page sizes the frame to the board (plus the body's 10px padding top and bottom).
   const board = document.querySelector('.board');
-  new ResizeObserver(() => toParent({ ggs: 'height', h: Math.ceil(board.getBoundingClientRect().height) + 20 })).observe(board);
+  const height = () => Math.ceil(board.getBoundingClientRect().height) + 20;
+  new ResizeObserver(() => toParent({ ggs: 'height', h: height() })).observe(board);
   setStage('draw');
   ready.then(() => toParent({ ggs: 'ready' }));
 })();

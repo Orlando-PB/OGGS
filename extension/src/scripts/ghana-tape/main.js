@@ -1,13 +1,14 @@
-// Ghana black tape: old (Gen 3) Ghana coverage has tape on the car's roof bar, Gen 4
-// doesn't. On Gen 4 panoramas inside Ghana (tile width 16384) the tape is drawn on a
-// canvas over Street View, projected so it turns and zooms with the view.
+// Ghana black tape: old (Gen 3) Ghana coverage has tape on the car's roof bar, Gen 4 doesn't.
+// On Gen 4 panoramas in Ghana (tile width 16384) the tape is drawn on a canvas over Street
+// View, projected so it turns and zooms with the view. With cfg.everywhere (Add to all
+// rounds, and always in Chaos mode) it goes on every panorama, anywhere.
 (() => {
   const ggs = globalThis.__ggs;
 
   // The car in its own frame: x right, y forward, z up, camera at the origin. Two roof
   // bars with four ends poking out from under the blurred car; tape on the front-left tip.
   const CAR = {
-    bars: { ys: [-0.85, 0.85], inner: 1.0, outer: 1.5, w: 0.07, z: -1 },
+    bars: { ys: [-0.85, 0.85], inner: 0.85, outer: 1.35, w: 0.07, z: -1 },
     tape: { bar: 1, side: 1, len: 0.22, w: 0.085 },
   };
   const GEN4_WIDTH = 16384;
@@ -95,7 +96,8 @@
       if (!st.info || !pano.getVisible()) return;
 
       const pov = pano.getPov();
-      const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch }; // centerHeading points at the back of the car
+      // centerHeading points at the back of the car
+      const rel = { heading: pov.heading - st.info.centerHeading + 180, pitch: pov.pitch };
       const fov = Math.min(127, 180 / 2 ** (pano.getZoom() ?? 1));
       const P = pts => project(pts, rel, fov, w, h);
       const rect = (x0, x1, y0, y1, z) => P([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]);
@@ -104,7 +106,8 @@
         pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
         ctx.closePath();
       };
-      const fill = (pts, color) => { // stroked in the same colour so adjacent strips don't show a seam
+      // stroked in the same colour so neighbouring strips don't show a seam
+      const fill = (pts, color) => {
         if (!pts) return;
         path(pts);
         ctx.fillStyle = ctx.strokeStyle = color;
@@ -119,7 +122,9 @@
       // strips across a bar's width, lit from above
       const shade = (x0, x1, y, hw, z, colors) => {
         const n = colors.length;
-        colors.forEach((c, i) => fill(rect(x0, x1, y - hw + (2 * hw * i) / n, y - hw + (2 * hw * (i + 1)) / n, z), c));
+        colors.forEach((c, i) => {
+          fill(rect(x0, x1, y - hw + (2 * hw * i) / n, y - hw + (2 * hw * (i + 1)) / n, z), c);
+        });
       };
       // fades the inner end of a bar into the blurred car
       const fade = (x0, x1, y, hw, z) => {
@@ -143,10 +148,12 @@
 
           ctx.save();
           ctx.filter = 'blur(3px)';
-          fill(rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01), 'rgba(0,0,0,.28)');
+          const shadow = rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01);
+          fill(shadow, 'rgba(0,0,0,.28)');
           ctx.restore();
 
-          shade(x0, x1, y, hw, bars.z, ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384']);
+          const metal = ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384'];
+          shade(x0, x1, y, hw, bars.z, metal);
           fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
           fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
           fill(cap(x1, y, hw, side, bars.z), '#b9babb');
@@ -154,7 +161,8 @@
 
           if (i === tape.bar && side === tape.side) {
             const tx0 = side * (bars.outer - tape.len), tx1 = x1 + side * 0.015, tw = tape.w;
-            shade(tx0, tx1, y, tw, bars.z + 0.002, ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111']);
+            const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
+            shade(tx0, tx1, y, tw, bars.z + 0.002, black);
             fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
             for (const k of [0.3, 0.62]) {
               const x = side * (bars.outer - tape.len * k);
@@ -172,10 +180,10 @@
       if (!st) return;
       st.info = null;
       const pos = pano.getPosition(), id = pano.getPano();
-      if (pos && id && inGhana([pos.lng(), pos.lat()])) {
+      if (pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]))) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;
-        if (t && t.width >= GEN4_WIDTH) st.info = t;
+        if (t && (cfg.everywhere || t.width >= GEN4_WIDTH)) st.info = t;
       }
       draw(pano);
     }
@@ -184,10 +192,17 @@
       if (attached.has(pano)) return;
       const div = panos.get(pano);
       const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000';
+      canvas.style.cssText =
+        'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000';
       if (getComputedStyle(div).position === 'static') div.style.position = 'relative';
       div.append(canvas);
-      const redraw = () => { try { draw(pano); } catch (err) { ggs.log('ghana-tape draw failed', err); } };
+      const redraw = () => {
+        try {
+          draw(pano);
+        } catch (err) {
+          ggs.log('ghana-tape draw failed', err);
+        }
+      };
       const st = { canvas, info: null, listeners: [] };
       attached.set(pano, st);
       const ev = window.google.maps.event;
@@ -207,6 +222,11 @@
     panos.forEach((_, p) => attach(p));
 
     return {
+      update(next) {
+        const changed = !!next.everywhere !== !!cfg.everywhere;
+        cfg = next;
+        if (changed) attached.forEach((_, p) => refresh(p));
+      },
       stop() {
         active = null;
         for (const st of attached.values()) {

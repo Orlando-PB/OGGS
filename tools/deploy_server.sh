@@ -8,17 +8,25 @@
 # The first time, seeds ~/oggs_private/config.php from .env. Usage: tools/deploy_server.sh
 set -e
 cd "$(dirname "$0")/.."
-ssh ionos 'mkdir -p ~/oggs/src/scripts/draw-guess ~/oggs/src/scripts/flag-guess ~/oggs/src/scripts/lying-signs ~/oggs/icons ~/oggs_private && chmod 700 ~/oggs_private'
-rsync -az --delete --exclude .DS_Store --exclude src/ --exclude oggs.user.js --exclude icon-128.png --exclude icons/ server/ ionos:~/oggs/
+ssh ionos 'mkdir -p ~/oggs/src/scripts/draw-guess ~/oggs/src/scripts/flag-guess \
+  ~/oggs/src/scripts/lying-signs ~/oggs/icons ~/oggs_private && chmod 700 ~/oggs_private'
+rsync -az --delete --exclude .DS_Store \
+  --exclude src/ --exclude oggs.user.js --exclude icon-128.png --exclude icons/ \
+  server/ ionos:~/oggs/
 rsync -az --delete --exclude .DS_Store extension/src/scripts/draw-guess/app ionos:~/oggs/src/scripts/draw-guess/
 rsync -az --delete --exclude .DS_Store extension/src/scripts/flag-guess/app ionos:~/oggs/src/scripts/flag-guess/
 rsync -az --delete --exclude .DS_Store --include='worker.js' --include='vendor/***' --exclude='*' \
   extension/src/scripts/lying-signs/ ionos:~/oggs/src/scripts/lying-signs/
 scp -q userscript/oggs.user.js extension/icons/icon-128.png ionos:~/oggs/
-scp -q extension/icons/icon-128.png ionos:~/oggs/icons/  # panel header icon (ggs.extBase + 'icons/')
+# the panel header icon (ggs.extBase + 'icons/')
+scp -q extension/icons/icon-128.png ionos:~/oggs/icons/
 if ! ssh ionos 'test -f ~/oggs_private/config.php'; then
-  key=$(sed -n 's/^OPENAI_API_KEY=//p' .env); code=$(sed -n 's/^HQ_CODE=//p' .env)
-  printf "<?php\nreturn ['OPENAI_API_KEY' => '%s', 'HQ_CODE' => '%s'];\n" "$key" "$code" | ssh ionos 'cat > ~/oggs_private/config.php && chmod 600 ~/oggs_private/config.php'
+  key=$(sed -n 's/^OPENAI_API_KEY=//p' .env)
+  gkey=$(sed -n 's/^GEMINI_API_KEY=//p' .env)
+  code=$(sed -n 's/^HQ_CODE=//p' .env)
+  printf "<?php\nreturn ['OPENAI_API_KEY' => '%s', 'GEMINI_API_KEY' => '%s', 'HQ_CODE' => '%s'];\n" \
+    "$key" "$gkey" "$code" |
+    ssh ionos 'cat > ~/oggs_private/config.php && chmod 600 ~/oggs_private/config.php'
   echo "seeded ~/oggs_private/config.php from .env"
 fi
 echo "deployed to ionos:~/oggs"

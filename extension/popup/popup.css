@@ -1,6 +1,7 @@
 /* Same look as the store images: cream paper with a faint dot grid, dark ink, one flat accent
    per script, hard offset shadows, no glows. */
-body { width: 320px; margin: 0; padding: 14px; font: 13px/1.4 "Avenir Next", Avenir, -apple-system, system-ui, "Segoe UI", sans-serif;
+body { width: 320px; margin: 0; padding: 14px;
+       font: 13px/1.4 "Avenir Next", Avenir, -apple-system, system-ui, "Segoe UI", sans-serif;
        color: #1c1a2e; background-color: #f5f1e8;
        background-image: radial-gradient(rgba(28, 26, 46, .09) 1.3px, transparent 1.5px);
        background-size: 22px 22px; background-position: 11px 11px; }
@@ -10,59 +11,140 @@ header { display: flex; align-items: center; gap: 10px; margin: 0 2px 14px; }
 header img { width: 32px; height: 32px; }
 h1 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
 
-/* one card per script; the accent is its colour from the store images */
+/* search box over the sections */
+.search input { box-sizing: border-box; width: 100%; padding: 8px 12px; font: inherit; font-size: 13px;
+  color: #1c1a2e; background: #fff; border: 2px solid #1c1a2e; border-radius: 10px;
+  box-shadow: 3px 3px 0 #1c1a2e; outline: none; }
+.search input:focus { box-shadow: 3px 3px 0 #fecd19; }
+/* hides the suggestions' dropdown arrow; they still show as you type */
+.search input::-webkit-calendar-picker-indicator { display: none !important; }
+.sec[hidden], .cards > section[hidden] { display: none; }
+
+/* one card per script, its accent its section's colour (below) */
 section { --accent: #fecd19; border-radius: 10px; background: #fff; border: 2px solid #1c1a2e;
           box-shadow: 5px 5px 0 var(--accent); transition: box-shadow .15s, transform .15s; }
 section.off { background: #f5f1e8; border-color: rgba(28, 26, 46, .3); box-shadow: none; }
 section.off .name { color: rgba(28, 26, 46, .7); }
-section[data-id="draw-guess"] { --accent: #3fae62; }
-section[data-id="radio"] { --accent: #6b4fd8; }
-section[data-id="ghana-tape"] { --accent: #e0973a; }
-section[data-id="lying-signs"] { --accent: #d64040; }
-section[data-id="minecraft"] { --accent: #4a8f2a; }
 
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; }
 .text { flex: 1; min-width: 0; }
 .name { display: block; font-weight: 700; font-size: 13px; }
 .desc { display: block; margin-top: 2px; font-size: 12px; color: rgba(28, 26, 46, .6); }
+.desc:empty { display: none; }
 
 /* options sit under a rule, indented by a bar in the script's colour */
 .opts { margin: 0 12px 6px; padding-top: 4px; border-top: 1px dashed rgba(28, 26, 46, .2); }
 .opts:empty { display: none; }
-.opts .row { padding: 5px 4px 5px 10px; margin-left: -2px; border-left: 2px solid var(--accent); border-radius: 0;
-             font-size: 12px; color: rgba(28, 26, 46, .85); }
+.opts .row { padding: 5px 4px 5px 10px; margin-left: -2px; border-left: 2px solid var(--accent);
+             border-radius: 0; font-size: 12px; color: rgba(28, 26, 46, .85); }
 .opts .row:hover { background: rgba(28, 26, 46, .04); }
 section.off .opts { display: none; }
-/* the controls strip (NMPZ, clean-screen and panel boxes): full width at the top, never
-   faded, since the boxes show what's on */
-section[data-id="controls"], section[data-id="controls"].off { --accent: #1c1a2e; margin: -2px -14px 0; padding: 0 14px 6px;
-  background: none; border: 0; border-bottom: 2px solid #1c1a2e; border-radius: 0; box-shadow: none; }
-section[data-id="controls"] .status:empty { display: none; }
-section[data-id="controls"] .status { padding: 0 0 4px; font-size: 11px; color: rgba(28, 26, 46, .5); }
-.boxes { gap: 6px; padding: 0 0 6px; cursor: default; }
+/* sections: a coloured bar that folds its cards away and counts the ones that are on.
+   The cards inside take the section's colour for their shadow. */
+.sec { --sec: #e9e4d8; }
+.sec[data-section="guessing"] { --sec: #8ec5ff; }
+.sec[data-section="controls"] { --sec: #ff9f7a; }
+.sec[data-section="streetview"] { --sec: #c4b0ff; }
+.sec[data-section="misc"] { --sec: #ffd966; }
+/* Chaos mode: its card alone, no fold, on a rainbow */
+.sec.lone .cards { margin-top: 0; }
+.sec[data-section="chaos"] section, .sec[data-section="chaos"] section.off {
+  --accent: #8a5cff; border-color: #1c1a2e;
+  background: linear-gradient(120deg, #ff4d4d, #ff9a1f, #ffd51f, #3ecf6a, #2fa8ff, #8a5cff, #ff4fd1); }
+/* its name like the section bars, its settings on a light panel so they read on the strong colours */
+.sec[data-section="chaos"] .name { font-size: 14px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: #1c1a2e; }
+.sec[data-section="chaos"] .opts { margin: 0 10px 10px; padding: 6px 4px 2px; border: 0; border-radius: 8px;
+  background: rgba(255, 255, 255, .85); }
+.sec[data-section="chaos"] section { box-shadow: 5px 5px 0 #1c1a2e; }
+/* the microphone warning: a click asks again */
+.micnote { display: block; width: calc(100% - 8px); margin: 2px 4px 6px; padding: 6px 8px; font: inherit;
+  font-size: 11px; font-weight: 700; color: #1c1a2e; text-align: left; background: #ffe3e3;
+  border: 1.5px solid #e03131; border-radius: 6px; cursor: pointer; }
+.micnote[hidden] { display: none; }
+/* Chaos mode off: raised like the section bars */
+.sec[data-section="chaos"] section.off { box-shadow: 3px 3px 0 #1c1a2e; }
+.sec[data-section="chaos"] section.off .name { color: #1c1a2e; }
+/* Chaos mode on: it runs the other scripts itself, so their sections are out of reach */
+.chaos-on .sec:not([data-section="chaos"]):not([data-section="controls"]):not([data-section="ui"]) {
+  opacity: .4; pointer-events: none; }
+.chaos-on .sec:not([data-section="chaos"]):not([data-section="controls"]):not([data-section="ui"])
+  > summary .count { display: none; }
+/* in Controls, but chaos runs it */
+.chaos-on section[data-id="reverse"] { opacity: .4; pointer-events: none; }
+.sec > summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+                 list-style: none; background: var(--sec); border: 2px solid #1c1a2e; border-radius: 10px;
+                 box-shadow: 3px 3px 0 #1c1a2e; font-size: 14px; font-weight: 800; letter-spacing: .06em;
+                 text-transform: uppercase; color: #1c1a2e; transition: transform .1s, box-shadow .1s; }
+.sec > summary:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 #1c1a2e; }
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary::before { content: '▸'; width: 10px; font-size: 12px; }
+.sec[open] > summary::before { content: '▾'; }
+.sec > summary .count { margin-left: auto; padding: 2px 8px; border: 1.5px solid #1c1a2e; border-radius: 999px;
+                        background: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0;
+                        text-transform: none; }
+.sec > summary .count:empty { display: none; }
+.sec .cards { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.sec section { --accent: var(--sec); }
+/* the box strips (Controls, UI): no card, never faded, since the boxes show what's on */
+section[data-id="controls"], section[data-id="controls"].off, section[data-id="ui"], section[data-id="ui"].off {
+  --accent: #1c1a2e; background: none; border: 0; border-radius: 0; box-shadow: none; }
+section[data-id="controls"] .status:empty, section[data-id="ui"] .status:empty { display: none; }
+section[data-id="controls"] .status, section[data-id="ui"] .status { padding: 0 0 4px; font-size: 11px;
+  color: rgba(28, 26, 46, .5); }
+section[data-id="ui"] .part + .part .boxes { padding-top: 0; }
+.boxes { gap: 6px; padding: 0 0 6px; cursor: default; flex-wrap: wrap; }
 .boxes .tog { flex: 1 1 auto; white-space: nowrap; }
 section.flat .row { gap: 6px; cursor: default; }
 section.flat .status:empty { display: none; }
-.tog { flex: none; padding: 4px 7px; border-radius: 5px; border: 1.5px solid rgba(28, 26, 46, .55); background: #ebe5d6; color: #1c1a2e;
-       font: inherit; font-size: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; }
-.tog[aria-pressed="true"] { background: #e6d6a3; border-color: #1c1a2e; }
+.tog { flex: none; padding: 4px 7px; border-radius: 5px; border: 1.5px solid rgba(28, 26, 46, .55);
+       background: #ebe5d6; color: #1c1a2e; font: inherit; font-size: 11px; font-weight: 700; line-height: 1.2;
+       cursor: pointer; }
+.tog[aria-pressed="true"] { background: #1c1a2e; border-color: #1c1a2e; color: #f5f1e8; }
 .tog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.opts .more summary { padding: 4px 10px; font-size: 11px; color: rgba(28, 26, 46, .45); cursor: pointer; list-style: none; }
+/* option buttons inside a card: wrap long labels, a lone one is a full-width bar */
+.opts .boxes, .opts .boxes:hover { cursor: default; border-left: 0; margin-left: 0; padding-left: 0;
+  background: none; }
+.opts .boxes .tog { white-space: normal; text-align: center; }
+/* off option buttons look inactive */
+.opts .tog[aria-pressed="false"] { background: transparent; border: 1.5px dashed rgba(28, 26, 46, .3);
+  color: rgba(28, 26, 46, .55); }
+.opts .tog[aria-pressed="false"]:hover { border-color: rgba(28, 26, 46, .6); color: #1c1a2e; }
+.opts .more summary { padding: 4px 10px; font-size: 11px; color: rgba(28, 26, 46, .45); cursor: pointer;
+  list-style: none; }
 .opts .more summary::before { content: '▸ '; }
 .opts .more[open] summary::before { content: '▾ '; }
 
-/* sliders */
-.opts .slider { flex-wrap: wrap; row-gap: 4px; cursor: default; }
+/* sliders. Dragging one selects no text. */
+.opts .slider { flex-wrap: wrap; row-gap: 4px; cursor: default; user-select: none; }
 .slider .text { flex-basis: 100%; }
+/* a slider whose marks say it all (Scream to look, Lag) */
+.slider .text:empty { display: none; }
 .slider input[type=range] { flex-basis: 100%; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .slider .marks { flex-basis: 100%; display: flex; justify-content: space-between; font-size: 11px;
                  color: rgba(28, 26, 46, .5); }
+.slider .marks .on { color: #1c1a2e; font-weight: 800; }
+.slider .stops { flex-basis: 100%; position: relative; padding-top: 14px; cursor: pointer; outline: none;
+                 touch-action: none; }
+.stops .track { position: absolute; left: 0; right: 0; top: 3px; height: 6px; border-radius: 3px;
+                background: #45434f; }
+.stops .track i { position: absolute; left: 0; top: 0; bottom: 0; width: var(--x, 0); border-radius: 3px;
+                  background: var(--accent); }
+.stops .track b { position: absolute; left: var(--x, 0); top: 50%; width: 16px; height: 16px; border-radius: 50%;
+                  transform: translate(-50%, -50%); background: var(--accent); border: 2px solid #fff;
+                  box-shadow: 0 0 0 1px rgba(28, 26, 46, .25); box-sizing: border-box; }
+.stops:focus-visible .track b { outline: 2px solid #1c1a2e; outline-offset: 1px; }
+.stops .marks span { white-space: nowrap; }
+/* each label is as wide as its bold version, so picking one doesn't shift the others */
+.stops .marks span { display: inline-flex; flex-direction: column; align-items: center; }
+.stops .marks span::after { content: attr(data-t); font-weight: 800; height: 0; overflow: hidden;
+                             visibility: hidden; }
 
 /* switches */
-.switch { appearance: none; flex: none; position: relative; width: 34px; height: 20px; margin: 0; border-radius: 999px;
-          background: rgba(28, 26, 46, .2); cursor: pointer; transition: background .15s; }
-.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-                 background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); transition: transform .15s; }
+.switch { appearance: none; flex: none; position: relative; width: 34px; height: 20px; margin: 0;
+          border-radius: 999px; background: rgba(28, 26, 46, .2); cursor: pointer; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                 border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); transition: transform .15s; }
 .switch:checked { background: #1c1a2e; }
 .switch:checked::after { transform: translateX(14px); }
 .opts .switch { width: 28px; height: 16px; }

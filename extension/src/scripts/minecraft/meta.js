@@ -4,11 +4,16 @@
     id: 'minecraft',
     name: 'Minecraft world',
     description: 'The round is redrawn in Minecraft.',
+    section: 'streetview',
     defaultEnabled: false,
-    turnsOn: [{ id: 'nmpz', key: 'noMove' }], // each panorama costs a generation; No move can be unticked again
+    // each panorama costs a generation; No move can be unticked again
+    turnsOn: [{ id: 'nmpz', key: 'noMove' }],
     options: [
-      { key: 'hq', label: 'High quality (slower; a few rounds a day)', type: 'checkbox', default: false },
-      { key: 'code', label: 'Code', type: 'text', default: '', placeholder: 'optional', secret: true, hidden: true },
+      { key: 'hq', label: 'High quality (limited)', type: 'checkbox', default: false },
+      {
+        key: 'code', label: 'Extra usage', type: 'text', default: '',
+        placeholder: 'Code', secret: true, hidden: true,
+      },
     ],
   });
 })();

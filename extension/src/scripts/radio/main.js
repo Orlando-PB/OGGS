@@ -1,7 +1,7 @@
-// Radio mode: Street View is hidden and a live station from near the round's location
-// plays instead (Radio Browser, radio-browser.info: the round's coordinates go there to
-// find stations, the audio streams from each station's own server). Nothing about the
-// station shows until the guess is in.
+// Radio mode: Street View is hidden and a live station near the round's location plays
+// instead. Stations come from Radio Browser (radio-browser.info), which is sent the round's
+// coordinates. The audio streams from each station's own server. Nothing about the station
+// shows until the guess is in.
 (() => {
   const ggs = globalThis.__ggs;
 
@@ -16,16 +16,19 @@
   const AD_STREAMS = /zeno\.fm|zenomedia|adswizz|streamtheworld\.com|tritondigital|[?&]aw_0_/i;
 
   // Streamer mode: talk stations only, by Radio Browser's tags.
-  const TALK_TAGS = /\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|informa|notizie|public radio|comedy|debate|politics)/i;
-  const MUSIC_TAGS = /\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|soul|funk|blues|folk|indie|christian|gospel)\b/i;
+  const TALK_TAGS = new RegExp('\\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|'
+    + 'informa|notizie|public radio|comedy|debate|politics)', 'i');
+  const MUSIC_TAGS = new RegExp('\\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|'
+    + 'country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|'
+    + 'soul|funk|blues|folk|indie|christian|gospel)\\b', 'i');
   const isTalk = s => TALK_TAGS.test(s.tags) && !MUSIC_TAGS.test(s.tags);
 
   const START_MS = 8000; // a stream that hasn't started playing by now is skipped
-  const STALL_MS = 8000; // ...and so is one that has been buffering this long
+  const STALL_MS = 8000; // so is one that has been buffering this long
 
   // ---- silence GeoGuessr's own music and sounds while radio mode is on ----
   // Wrapped at document_start so every AudioContext and media element the page makes is
-  // seen: contexts are suspended and other <audio>/<video> elements muted while `muting`.
+  // seen. While `muting`, contexts are suspended and other <audio>/<video> elements muted.
   const RealAudioContext = window.AudioContext;
   const contexts = new Set(), ours = new WeakSet();
   let muting = false;
@@ -57,13 +60,16 @@
   }
 
   async function search(params) {
-    const q = new URLSearchParams({ is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params });
+    const q = new URLSearchParams({
+      is_https: 'true', hidebroken: 'true', order: 'clickcount', reverse: 'true', ...params,
+    });
     const r = await fetch(`${API}?${q}`);
     if (!r.ok) throw new Error(`Radio Browser: HTTP ${r.status}`);
     // http streams are blocked on an https page; HLS needs a library
     return (await r.json()).filter(s => s.url_resolved?.startsWith('https://') && !s.hls);
   }
-  const near = (lat, lng, dist, limit) => search({ geo_lat: lat, geo_long: lng, geo_distance: dist * 1000, limit });
+  const near = (lat, lng, dist, limit) =>
+    search({ geo_lat: lat, geo_long: lng, geo_distance: dist * 1000, limit });
 
   async function findStations(lat, lng, talkOnly) {
     let list = [];
@@ -94,18 +100,21 @@
       return !seen.has(k) && seen.add(k);
     });
     const ads = s => AD_STREAMS.test(s.url_resolved) || AD_STREAMS.test(s.url);
-    return [...list.filter(s => !ads(s)), ...list.filter(ads)]; // keeps popularity order within each
+    // ad-free first, each half still in popularity order
+    return [...list.filter(s => !ads(s)), ...list.filter(ads)];
   }
 
   const km = (a, b) => {
     const rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
     return Math.round(12742 * Math.asin(Math.sqrt(h)));
   };
   const esc = ggs.esc;
   const describe = (s, loc) => {
     const where = [s.state, s.country].filter(Boolean).join(', ');
-    const dist = s.geo_lat != null && loc ? ` · ${km(loc, { lat: s.geo_lat, lng: s.geo_long })} km from the spot` : '';
+    const dist = s.geo_lat != null && loc
+      ? ` · ${km(loc, { lat: s.geo_lat, lng: s.geo_long })} km from the spot` : '';
     return where + dist;
   };
 
@@ -115,7 +124,8 @@
     pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
     next: '<svg viewBox="0 0 24 24"><path d="M6 5l9 7-9 7zM16 5h2v14h-2z"/></svg>',
     prev: '<svg viewBox="0 0 24 24"><path d="M18 5l-9 7 9 7zM6 5h2v14H6z"/></svg>',
-    vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+    vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/>'
+      + '<path d="M16 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   };
   const YELLOW = '#fecd19', GREEN = '#6cb928';
   const CSS = `
@@ -123,9 +133,10 @@
             font: 14px/1.3 neo-sans, var(--default-font, system-ui), system-ui, -apple-system, sans-serif; }
     :host([hidden]) { display: none !important; }
     * { box-sizing: border-box; }
-    .label { font-size: 11px; font-weight: 700; font-style: italic; letter-spacing: .08em; text-transform: uppercase;
-             color: rgba(255, 255, 255, .55); }
-    .status { font-size: 13px; color: rgba(255, 255, 255, .85); font-variant-numeric: tabular-nums; min-height: 17px; }
+    .label { font-size: 11px; font-weight: 700; font-style: italic; letter-spacing: .08em;
+             text-transform: uppercase; color: rgba(255, 255, 255, .55); }
+    .status { font-size: 13px; color: rgba(255, 255, 255, .85); font-variant-numeric: tabular-nums;
+              min-height: 17px; }
     .controls { display: flex; align-items: center; gap: 6px; }
     button { all: unset; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
              cursor: pointer; color: #fff; }
@@ -140,21 +151,23 @@
     /* stage: fills the panorama's space, GeoGuessr-purple, outline in the middle */
     :host(.stage) { position: absolute; inset: 0;
                     background: radial-gradient(circle at 50% 42%, #33277e 0%, #1a1450 42%, #0d0a2a 100%); }
-    :host(.stage) .wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
-                          justify-content: center; gap: 10px; }
+    :host(.stage) .wrap { position: absolute; inset: 0; display: flex; flex-direction: column;
+                          align-items: center; justify-content: center; gap: 10px; }
     :host(.stage) canvas { width: min(56vh, 48vw, 560px); }
     :host(.stage) .side { display: flex; flex-direction: column; align-items: center; gap: 10px; }
     :host(.stage) .info { text-align: center; }
-    :host(.stage) .controls { padding: 6px 12px 6px 6px; border-radius: 999px; background: rgba(16, 12, 48, .7);
-                              border: 1px solid rgba(255, 255, 255, .12); }
+    :host(.stage) .controls { padding: 6px 12px 6px 6px; border-radius: 999px;
+                              background: rgba(16, 12, 48, .7); border: 1px solid rgba(255, 255, 255, .12); }
     :host(.stage) .extra { display: none; }
 
     /* mini: compact bar top-left */
-    :host(.mini) { position: fixed; left: 16px; top: 84px; z-index: 2147483000; } /* below GeoGuessr's logo */
+    /* below GeoGuessr's logo */
+    :host(.mini) { position: fixed; left: 16px; top: 84px; z-index: 2147483000; }
     :host(.mini) .wrap { display: grid; grid-template-columns: 64px 1fr; gap: 4px 10px; align-items: center;
                          width: 330px; padding: 8px 12px 8px 8px; border-radius: 14px;
                          background: linear-gradient(180deg, rgba(60, 48, 140, .85), rgba(22, 17, 62, .9));
-                         border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .7); }
+                         border: 1px solid rgba(255, 255, 255, .14);
+                         box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .7); }
     :host(.mini) canvas { width: 64px; }
     :host(.mini) .side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
     :host(.mini) .status { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -167,14 +180,18 @@
     .reveal b { display: block; font-size: 15px; font-style: italic; }
     .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }`;
 
-  // ---- the visual: a shape blending between random country outlines (chosen without the
-  // round's location, so they give nothing away), rippling with the volume; a circle while
-  // loading, an icon on play/pause/skip ----
+  // ---- the visual ----
+  // A shape blending between random country outlines, rippling with the volume. They are
+  // chosen without the round's location, so they give nothing away. A circle while loading,
+  // an icon on play, pause or skip.
   const MORPH_MS = 3000;
   const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
   const ICON_POLYS = {
     play: [[[-0.4, -0.55], [0.55, 0], [-0.4, 0.55]]],
-    pause: [[[-0.45, -0.55], [-0.13, -0.55], [-0.13, 0.55], [-0.45, 0.55]], [[0.13, -0.55], [0.45, -0.55], [0.45, 0.55], [0.13, 0.55]]],
+    pause: [
+      [[-0.45, -0.55], [-0.13, -0.55], [-0.13, 0.55], [-0.45, 0.55]],
+      [[0.13, -0.55], [0.45, -0.55], [0.45, 0.55], [0.13, 0.55]],
+    ],
     skip: [[[-0.55, -0.5], [0.2, 0], [-0.55, 0.5]], [[0.25, -0.5], [0.5, -0.5], [0.5, 0.5], [0.25, 0.5]]],
     back: [[[-0.5, -0.5], [-0.25, -0.5], [-0.25, 0.5], [-0.5, 0.5]], [[0.55, -0.5], [0.55, 0.5], [-0.2, 0]]],
   };
@@ -189,14 +206,20 @@
       const en = [p[0] + (b[0] - p[0]) * d / lb, p[1] + (b[1] - p[1]) * d / lb];
       for (let k = 0; k <= 6; k++) {
         const t = k / 6, u = 1 - t;
-        out.push([u * u * st[0] + 2 * u * t * p[0] + t * t * en[0], u * u * st[1] + 2 * u * t * p[1] + t * t * en[1]]);
+        out.push([
+          u * u * st[0] + 2 * u * t * p[0] + t * t * en[0],
+          u * u * st[1] + 2 * u * t * p[1] + t * t * en[1],
+        ]);
       }
     });
     return out;
   }
   // m points evenly spaced round a closed polygon
   function loop(poly, m) {
-    const seg = poly.map((p, i) => Math.hypot(poly[(i + 1) % poly.length][0] - p[0], poly[(i + 1) % poly.length][1] - p[1]));
+    const seg = poly.map((p, i) => {
+      const q = poly[(i + 1) % poly.length];
+      return Math.hypot(q[0] - p[0], q[1] - p[1]);
+    });
     const total = seg.reduce((a, v) => a + v, 0), out = [];
     for (let j = 0, i = 0, acc = 0; j < m; j++) {
       const d = (j / m) * total;
@@ -213,12 +236,14 @@
     const circle = new Float32Array(n); // same start (top) and winding as the outlines
     for (let i = 0; i < K; i++) {
       const a = -Math.PI / 2 + (i / K) * Math.PI * 2;
-      circle[2 * i] = Math.cos(a) * 0.8; circle[2 * i + 1] = Math.sin(a) * 0.8;
+      circle[2 * i] = Math.cos(a) * 0.8;
+      circle[2 * i + 1] = Math.sin(a) * 0.8;
     }
     const base = new Float32Array(n), shape = new Float32Array(n), ring = new Float32Array(n);
     const icons = {};
     for (const [name, polys] of Object.entries(ICON_POLYS)) {
-      icons[name] = { parts: polys.length, pts: Float32Array.from(polys.flatMap(p => loop(soften(p), K / polys.length))) };
+      const pts = Float32Array.from(polys.flatMap(p => loop(soften(p), K / polys.length)));
+      icons[name] = { parts: polys.length, pts };
     }
     let flashName = null, flashUntil = 0, iconMix = 0, iconTarget = null, parts = 1, partsAt = 0;
     const iconCur = new Float32Array(n); // the icon on show, easing from one icon to the next
@@ -237,7 +262,8 @@
         for (let i = 0; i <= per; i++) {
           const j = (o + (i % per)) * 2, k = (o + ((i + 1) % per)) * 2;
           const mx = c + (p[j] + p[k]) / 2 * s, my = c + (p[j + 1] + p[k + 1]) / 2 * s;
-          if (i === 0) g.moveTo(mx, my); else g.quadraticCurveTo(c + p[j] * s, c + p[j + 1] * s, mx, my);
+          if (i === 0) g.moveTo(mx, my);
+          else g.quadraticCurveTo(c + p[j] * s, c + p[j + 1] * s, mx, my);
         }
         g.closePath();
       }
@@ -247,7 +273,8 @@
     function normal(p, i) {
       const a = ((i + K - 2) % K) * 2, b = ((i + 2) % K) * 2;
       const tx = p[b] - p[a], ty = p[b + 1] - p[a + 1], len = Math.hypot(tx, ty) || 1;
-      nx = ty / len; ny = -tx / len;
+      nx = ty / len;
+      ny = -tx / len;
     }
     const wave = (i, t, ph) => {
       const th = (i / K) * Math.PI * 2;
@@ -264,7 +291,12 @@
       if (!n) return;
 
       let p = (now - since) / MORPH_MS;
-      if (p >= 1) { from = to; to = pick(from); since = now; p = 0; }
+      if (p >= 1) {
+        from = to;
+        to = pick(from);
+        since = now;
+        p = 0;
+      }
       const m = p * p * (3 - 2 * p);
       load += ((loading ? 1 : 0) - load) * 0.05;
       level += (vol - level) * (vol > level ? 0.35 : 0.07);
@@ -283,7 +315,11 @@
       if (target) {
         if (iconMix < 0.01) iconCur.set(base); // start from the shape as it is
         for (let i = 0; i < n; i++) iconCur[i] += (target.pts[i] - iconCur[i]) * 0.18;
-        if (iconTarget !== want) { iconTarget = want; partsAt = now + 150; } // split/join once it's partway there
+        // split or join once it's partway there
+        if (iconTarget !== want) {
+          iconTarget = want;
+          partsAt = now + 150;
+        }
       } else iconTarget = null;
       iconMix += ((target ? 1 : 0) - iconMix) * 0.18;
       if (iconMix > 0.001) for (let i = 0; i < n; i++) base[i] += (iconCur[i] - base[i]) * iconMix;
@@ -345,8 +381,8 @@
   }
 
   // ---- streamer mode: skip music ----
-  // Music puts far more of its energy below 90 Hz than speech. A new station is listened
-  // to silently for PRE_MS first, then the last BASS_MS are checked every quarter second.
+  // Music puts far more of its energy below 90 Hz than speech does. A new station is
+  // listened to silently for PRE_MS first, then the last BASS_MS are checked every 250 ms.
   const PRE_MS = 3000, BASS_MS = 7000, BASS_EVERY_MS = 250, BASS_SHARE = 0.2;
   function musicCheck() {
     let recent = [];
@@ -361,7 +397,13 @@
       music(now, ms) {
         if (this.span(now) < ms * 0.95) return false;
         let r = 0, l = 0, a = 0, k = 0;
-        for (const f of recent) if (now - f[0] <= ms) { r += f[1]; l += f[2]; a += f[3]; k++; }
+        for (const f of recent) {
+          if (now - f[0] > ms) continue;
+          r += f[1];
+          l += f[2];
+          a += f[3];
+          k++;
+        }
         return k > 0 && r / k >= 0.005 && a > 0 && l / a > BASS_SHARE;
       },
     };
@@ -370,14 +412,17 @@
   function start(cfg) {
     const hidePano = document.createElement('style');
     hidePano.textContent = HIDE_PANO_CSS;
-    const setPano = show => (show ? hidePano.remove() : (document.head ?? document.documentElement).append(hidePano));
+    const setPano = show => (show
+      ? hidePano.remove()
+      : (document.head ?? document.documentElement).append(hidePano));
     setPano(cfg.showStreetView);
 
     muteGame(true);
-    let audio = null, node = null, ctx = null, analyser = null, gain = null, td = null, fd = null, tuning = false;
-    let preListen = false, allowMusic = false, lastCheck = 0;
+    let audio = null, node = null, ctx = null, analyser = null, gain = null, td = null, fd = null;
+    let tuning = false, preListen = false, allowMusic = false, lastCheck = 0;
     const music = musicCheck();
-    let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0, blocked = false, userPaused = false, skipping = 0;
+    let volume = 0.6, watchdog = 0, stallTimer = 0, waitingSince = 0;
+    let blocked = false, userPaused = false, skipping = 0;
     let host = null, root = null, draw = null, raf = 0, lastT = 0, lastMove = 0, live = false;
     let round = null, loc = null, stations = [], idx = 0;
 
@@ -392,7 +437,10 @@
         <div class="wrap">
           <canvas></canvas>
           <div class="side">
-            <div class="info"><div class="label">${cfg.streamerMode ? 'Talk radio' : 'Live radio'}</div><div class="status"></div></div>
+            <div class="info">
+              <div class="label">${cfg.streamerMode ? 'Talk radio' : 'Live radio'}</div>
+              <div class="status"></div>
+            </div>
             <div class="controls">
               <button class="prev" title="Previous station">${ICON.prev}</button>
               <button class="play">${ICON.pause}</button>
@@ -417,19 +465,34 @@
       $('.play').onclick = togglePlay;
       $('canvas').onclick = togglePlay;
       $('.wrap').onclick = e => { if (e.target === e.currentTarget) togglePlay(); };
-      $('.prev').onclick = () => { draw.flash('back', 600); tune(idx - 1); };
-      $('.next').onclick = () => { draw.flash('skip', 600); tune(idx + 1); };
-      $('input').oninput = e => { volume = +e.target.value; if (audio) audio.volume = volume; };
+      $('.prev').onclick = () => {
+        draw.flash('back', 600);
+        tune(idx - 1);
+      };
+      $('.next').onclick = () => {
+        draw.flash('skip', 600);
+        tune(idx + 1);
+      };
+      $('input').oninput = e => {
+        volume = +e.target.value;
+        if (audio) audio.volume = volume;
+      };
       draw = blob($('canvas'));
       let playing = null;
       const frame = now => {
         raf = requestAnimationFrame(frame);
         if (host.hidden) return;
         const t = audio?.currentTime ?? 0;
-        if (t !== lastT) { lastT = t; lastMove = now; }
+        if (t !== lastT) {
+          lastT = t;
+          lastMove = now;
+        }
         live = !!audio && !audio.paused && now - lastMove < 400; // sound is arriving
         const isPlaying = !!audio && !audio.paused;
-        if (isPlaying !== playing) $('.play').innerHTML = (playing = isPlaying) ? ICON.pause : ICON.play;
+        if (isPlaying !== playing) {
+          playing = isPlaying;
+          $('.play').innerHTML = playing ? ICON.pause : ICON.play;
+        }
         // loudness: measured when the stream allows it (CORS), otherwise a made-up wobble
         let vol = 0;
         if (node && live) {
@@ -449,7 +512,10 @@
             }
             music.push(rms, low, all, now);
             if (preListen) {
-              if (music.span(now) >= PRE_MS * 0.95) { if (music.music(now, PRE_MS)) musicSkip(); else unmute(); }
+              if (music.span(now) >= PRE_MS * 0.95) {
+                if (music.music(now, PRE_MS)) musicSkip();
+                else unmute();
+              }
             } else if (now - lastCheck >= BASS_EVERY_MS) {
               lastCheck = now;
               if (music.music(now, BASS_MS)) musicSkip();
@@ -459,20 +525,27 @@
           vol = 0.3 + 0.25 * Math.abs(Math.sin(t * 5.3) * Math.sin(t * 1.7 + 1));
         }
         const wait = waitingSince && !blocked ? (Date.now() - waitingSince) / START_MS : 0;
-        if (wait) setStatus(`Station ${idx + 1} of ${stations.length} · waiting for audio ${Math.max(0, Math.ceil(START_MS / 1000 * (1 - wait)))}s`);
-        else if (live && cfg.streamerMode && !skipping) {
+        if (wait) {
+          const left = Math.max(0, Math.ceil(START_MS / 1000 * (1 - wait)));
+          setStatus(`Station ${idx + 1} of ${stations.length} · waiting for audio ${left}s`);
+        } else if (live && cfg.streamerMode && !skipping) {
           const note = allowMusic ? '' : !node ? " · can't check this one for music"
             : preListen ? ' · checking for music…' : '';
           const text = `Station ${idx + 1} of ${stations.length}${note}`;
           if ($('.status').textContent !== text) setStatus(text);
         }
-        draw(now, { vol, loading: tuning || (!!waitingSince && !blocked) || preListen, hold: userPaused && audio?.paused ? 'pause' : null });
+        draw(now, {
+          vol,
+          loading: tuning || (!!waitingSince && !blocked) || preListen,
+          hold: userPaused && audio?.paused ? 'pause' : null,
+        });
       };
       raf = requestAnimationFrame(frame);
     }
 
     function place(inRound) {
-      const pano = !cfg.showStreetView && inRound && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
+      const pano = !cfg.showStreetView && inRound
+        && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
       if (pano?.parentElement) {
         if (host.previousElementSibling !== pano) pano.after(host);
         host.className = 'stage';
@@ -524,19 +597,23 @@
         node.connect(analyser);
       }
       preListen = readable && !!cfg.streamerMode && !allowMusic;
-      if (gain) { gain.gain.cancelScheduledValues(0); gain.gain.value = preListen ? 0 : 1; }
+      if (gain) {
+        gain.gain.cancelScheduledValues(0);
+        gain.gain.value = preListen ? 0 : 1;
+      }
       let failed = false;
       const fail = () => {
         if (failed || a !== audio) return;
         failed = true;
-        // no CORS, so streamer mode can't check it: prefer stations it can
+        // without CORS streamer mode can't check it, so prefer stations it can
         if (readable && cfg.streamerMode && !allowMusic && !startPaused && tryCheckable()) return;
         if (readable) load(url, false, startPaused);
         else skip('stream failed');
       };
       a.onerror = fail;
       a.onplaying = () => {
-        clearTimeout(watchdog); clearTimeout(stallTimer);
+        clearTimeout(watchdog);
+        clearTimeout(stallTimer);
         waitingSince = 0;
         setStatus(`Station ${idx + 1} of ${stations.length}`);
       };
@@ -565,9 +642,11 @@
       userPaused = paused;
       allowMusic = paused;
       lastCheck = 0;
-      clearTimeout(skipping); skipping = 0;
+      clearTimeout(skipping);
+      skipping = 0;
       $('.reveal').innerHTML = '';
-      clearTimeout(watchdog); clearTimeout(stallTimer);
+      clearTimeout(watchdog);
+      clearTimeout(stallTimer);
       blocked = false;
       if (cfg.streamerMode && !paused && navigator.userActivation?.hasBeenActive === false) {
         // the music check needs a click first, so wait rather than play unchecked
@@ -582,7 +661,9 @@
         return setStatus('Only music stations nearby · press play to hear it anyway');
       }
       waitingSince = Date.now();
-      watchdog = setTimeout(() => !blocked && (!audio || audio.currentTime < 0.5) && skip('no audio'), START_MS);
+      watchdog = setTimeout(() => {
+        if (!blocked && (!audio || audio.currentTime < 0.5)) skip('no audio');
+      }, START_MS);
       load(stations[idx].url_resolved, cors);
     }
     function unmute() {
@@ -590,12 +671,16 @@
       gain?.gain.setTargetAtTime(1, ctx.currentTime, 0.08);
     }
 
-    // Music in streamer mode: skip to the next station not yet caught playing music; if all
-    // have been, back to the first, paused.
+    // Music in streamer mode: skip to the next station not yet caught playing music. If all
+    // have been, go back to the first one, paused.
     const flaggedFor = new WeakMap(); // station list -> stations caught playing music
     const uncheckableFor = new WeakMap(); // station list -> stations whose sound can't be read
-    const setFor = map => { const set = map.get(stations) ?? new Set(); map.set(stations, set); return set; };
-    // moves an uncheckable station to the back; false if no checkable one is left after it
+    const setFor = map => {
+      const set = map.get(stations) ?? new Set();
+      map.set(stations, set);
+      return set;
+    };
+    // Moves an uncheckable station to the back. False if no checkable one is left after it.
     function tryCheckable() {
       const st = stations[idx], bad = setFor(uncheckableFor), music = setFor(flaggedFor);
       bad.add(st);
@@ -624,7 +709,10 @@
       }, 600);
     }
     function skip(why) {
-      if (stations.length < 2) { waitingSince = 0; return setStatus(`Station ${why}`); }
+      if (stations.length < 2) {
+        waitingSince = 0;
+        return setStatus(`Station ${why}`);
+      }
       tune(idx + 1);
     }
     const unblock = () => {
@@ -637,22 +725,37 @@
 
     async function newRound(key) {
       round = key;
-      stations = []; loc = null;
+      stations = [];
+      loc = null;
       drop();
-      clearTimeout(watchdog); clearTimeout(stallTimer);
-      waitingSince = 0; blocked = false;
+      clearTimeout(watchdog);
+      clearTimeout(stallTimer);
+      waitingSince = 0;
+      blocked = false;
       $('.reveal').innerHTML = '';
       setStatus('Tuning…');
       tuning = true;
       loc = await ggs.game.roundLocation().catch(() => null);
       if (round !== key) return;
-      if (!loc) { tuning = false; return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`); }
+      if (!loc) {
+        tuning = false;
+        return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
+      }
       let failed = null;
-      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(err => { failed = err; return []; });
+      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(err => {
+        failed = err;
+        return [];
+      });
       if (round !== key) return;
-      if (failed) { tuning = false; ggs.log('radio: station search failed', failed); return setStatus(`Station search failed (${failed.message})`); }
+      if (failed) {
+        tuning = false;
+        ggs.log('radio: station search failed', failed);
+        return setStatus(`Station search failed (${failed.message})`);
+      }
       tuning = false;
-      if (!stations.length) return setStatus(cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
+      if (!stations.length) {
+        return setStatus(cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
+      }
       tune(0);
     }
 
@@ -667,7 +770,12 @@
     const tick = setInterval(() => {
       const inGame = !!ggs.game.context();
       const inRound = !!ggs.maps.guessMapElement();
-      if (!inGame) { drop(); if (host) host.hidden = true; round = null; return; }
+      if (!inGame) {
+        drop();
+        if (host) host.hidden = true;
+        round = null;
+        return;
+      }
       if (inRound && !host) create();
       if (!host) return;
       host.hidden = false;
@@ -691,7 +799,8 @@
         clearTimeout(skipping);
         window.removeEventListener('pointerdown', unblock, true);
         window.removeEventListener('keydown', unblock, true);
-        clearTimeout(watchdog); clearTimeout(stallTimer);
+        clearTimeout(watchdog);
+        clearTimeout(stallTimer);
         drop();
         ctx?.close().catch(() => {});
         muteGame(false);

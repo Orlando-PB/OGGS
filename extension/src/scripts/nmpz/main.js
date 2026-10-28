@@ -9,7 +9,7 @@
   ggs.scripts.nmpz = {
     start(cfg) {
       apply(cfg);
-      return { stop() { apply(null); }, update: apply };
+      return { stop: () => apply(null), update: apply };
     },
   };
 })();

@@ -1,31 +1,41 @@
-// The one WebGL hook. The Maps API uploads every Street View tile with
-// texImage2D/texSubImage2D from an <img>; this wraps those two methods (and
-// generateMipmap, to know which textures need it again after a re-upload).
+// The one WebGL hook. The Maps API uploads every Street View tile from an <img> with
+// texImage2D or texSubImage2D, and this wraps both. It also wraps generateMipmap, to know
+// which textures need it again after a re-upload, and deleteTexture, to know which are gone.
 //
-// For each tile upload a record is made ({ gl, name, args, url, key, img, tex, ... }) and
-// the registered filters (redraw, lying-signs, gradient) get a turn, in order, to swap the source
-// for a canvas. A filter that needs time can keep the record and later push a new source
-// into the same texture with upload(rec, source). Uploads of anything else pass straight
-// through. The API never re-uploads a tile already on screen, so replay() loads every
-// remembered tile again (browser cache) and runs it through the same path: that's how
-// switching a script on or off mid-round takes effect.
+// Each tile upload gets a record ({ gl, name, args, url, key, img, tex, ... }). The registered
+// filters (redraw, lying-signs, gradient) then get a turn, in order, to swap the source for a
+// canvas. A filter that needs time can keep the record and push a new source into the same
+// texture later with upload(rec, source). Other uploads pass straight through.
+// The API never re-uploads a tile already on screen. So replay() loads every remembered tile
+// again (from the browser cache) and runs it through the same path. That's how switching a
+// script on or off mid-round takes effect.
+//
+// Chaos mode makes that instant by preparing a little before it switches something.
+// preload() fetches and decodes every remembered tile, so the next replay doesn't wait.
+// prerender(fn) runs the panorama on screen through fn ahead of time, one tile per idle
+// slice, for a filter to hand out during its first replay.
 (() => {
   const ggs = globalThis.__ggs;
-  const MAX = 1200;                           // records kept (zoom 4 is 512 tiles per panorama)
+  // Records kept. Zoom 4 is 512 tiles per panorama.
+  const MAX = 1200;
   const records = [];
   const mipTex = new WeakSet();
-  const filters = [];                         // [{ fn, order }], lowest order first
-  const orig = new Map();                     // prototype -> { texImage2D, texSubImage2D }, unwrapped
+  // [{ fn, order }], lowest order first.
+  const filters = [];
+  // prototype -> the unwrapped { texImage2D, texSubImage2D }.
+  const orig = new Map();
 
-  // filter((rec, source) => source, order): source is the <img> or what an earlier filter returned
+  // filter((rec, source) => source, order). source is the <img> or an earlier filter's result.
   function filter(fn, order = 0) {
     filters.push({ fn, order });
     filters.sort((a, b) => a.order - b.order);
   }
-  // A record is live while its texture exists and nothing newer has gone into the same
-  // slot; a record replaced by a later upload is marked stale so a filter finishing late
-  // can't write an old tile over the one now on screen.
-  const live = rec => !rec.stale && !rec.gl.isContextLost() && rec.gl.isTexture(rec.tex);
+  // A record is live while its texture exists and nothing newer has gone into the same slot.
+  // A record replaced by a later upload is marked stale, so a filter finishing late can't
+  // write an old tile over the one now on screen. Deleted textures are noted as the game
+  // deletes them. gl.isTexture would wait on the GPU process, hundreds of times a replay.
+  const deleted = new WeakSet();
+  const live = rec => !rec.stale && !deleted.has(rec.tex) && !rec.gl.isContextLost();
 
   function makeRecord(gl, name, args, img) {
     const url = img.currentSrc || img.src;
@@ -36,12 +46,14 @@
     return {
       gl, name, args, url, img, tex, target, key: ggs.tileKey(url),
       crossOrigin: img.crossOrigin, referrerPolicy: img.referrerPolicy,
-      flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
+      flip: gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),
+      premul: gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),
     };
   }
   function remember(rec) {
-    // one record per (texture, face, level, offset): a re-upload replaces the older one
-    const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
+    // One record per (texture, face, level, offset). A re-upload replaces the older one.
+    const same = r => r.gl === rec.gl && r.tex === rec.tex && r.name === rec.name
+      && r.args[0] === rec.args[0] && r.args[1] === rec.args[1]
       && (rec.name !== 'texSubImage2D' || (r.args[2] === rec.args[2] && r.args[3] === rec.args[3]));
     const i = records.findIndex(same);
     if (i >= 0) records.splice(i, 1)[0].stale = true;
@@ -53,7 +65,11 @@
     remember(rec);
     let source = rec.img;
     for (const f of filters) {
-      try { source = f.fn(rec, source) ?? source; } catch (err) { ggs.log('tiles: filter failed', err); }
+      try {
+        source = f.fn(rec, source) ?? source;
+      } catch (err) {
+        ggs.log('tiles: filter failed', err);
+      }
     }
     return source;
   }
@@ -64,13 +80,16 @@
     if (!live(rec)) return false;
     const [, param] = ggs.glBinding(gl, rec.target);
     const prevTex = gl.getParameter(param);
-    const prevFlip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL), prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+    const prevFlip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+    const prevPremul = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
     gl.bindTexture(rec.target, rec.tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, rec.flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, rec.premul);
     try {
-      orig.get(gl instanceof WebGL2RenderingContext ? WebGL2RenderingContext.prototype : WebGLRenderingContext.prototype)[rec.name]
-        .call(gl, ...rec.args, source);
+      const proto = gl instanceof WebGL2RenderingContext
+        ? WebGL2RenderingContext.prototype
+        : WebGLRenderingContext.prototype;
+      orig.get(proto)[rec.name].call(gl, ...rec.args, source);
       if (mipTex.has(rec.tex)) gl.generateMipmap(rec.target);
     } finally {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, prevFlip);
@@ -92,22 +111,35 @@
             try {
               const rec = makeRecord(this, name, a.slice(0, i), a[i]);
               if (rec) a[i] = handle(rec);
-            } catch (err) { ggs.log('tiles: hook failed', err); }
+            } catch (err) {
+              ggs.log('tiles: hook failed', err);
+            }
           }
           return fn.apply(this, a);
         };
       }
+      const del = P.deleteTexture;
+      P.deleteTexture = function (tex) {
+        if (tex) deleted.add(tex);
+        return del.call(this, tex);
+      };
       const gen = P.generateMipmap;
       P.generateMipmap = function (target) {
-        try { mipTex.add(this.getParameter(ggs.glBinding(this, target)[1])); } catch {}
+        try {
+          mipTex.add(this.getParameter(ggs.glBinding(this, target)[1]));
+        } catch {}
         return gen.call(this, target);
       };
     }
   }
-  try { install(); } catch (err) { ggs.log('tiles: hook failed', err); }
+  try {
+    install();
+  } catch (err) {
+    ggs.log('tiles: hook failed', err);
+  }
 
-  // The renderer only redraws on a view change, so nudge it after an upload: a heading
-  // change held for a frame, and a mouse move over the canvas (either alone can be swallowed).
+  // The renderer only redraws on a view change, so nudge it after an upload. It gets a heading
+  // change held for a frame and a mouse move over the canvas, since either alone can be swallowed.
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
 
@@ -122,43 +154,153 @@
       } catch {}
     }
     await new Promise(r => requestAnimationFrame(r));
-    for (const [p, pov] of nudged) { try { p.setPov(pov); } catch {} }
+    for (const [p, pov] of nudged) {
+      try {
+        p.setPov(pov);
+      } catch {}
+    }
     for (const c of document.querySelectorAll('canvas')) {
       const r = c.getBoundingClientRect();
-      if (r.width < 200 || r.height < 200) continue; // the guess map and our own canvases are small or hidden
+      // The guess map and our own canvases are small or hidden.
+      if (r.width < 200 || r.height < 200) continue;
       const init = { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
       c.dispatchEvent(new MouseEvent('mousemove', init));
       c.dispatchEvent(new PointerEvent('pointermove', init));
     }
   }
 
-  // Calls made in the same tick are merged into one replay.
-  let scheduled = null;
+  // A fresh, decoded copy of a remembered tile from the browser cache.
+  // Kept until the next replay uses it.
+  // url -> Promise<img | null>
+  const loaded = new Map();
+  function load(r) {
+    if (!loaded.has(r.url)) {
+      const img = new Image();
+      if (r.crossOrigin != null) img.crossOrigin = r.crossOrigin;
+      if (r.referrerPolicy) img.referrerPolicy = r.referrerPolicy;
+      img.src = r.url;
+      loaded.set(r.url, img.decode().then(() => img, () => null));
+      if (loaded.size > MAX) loaded.delete(loaded.keys().next().value);
+    }
+    return loaded.get(r.url);
+  }
+  function preload() {
+    records.filter(live).forEach(load);
+  }
+
+  // The live tiles of the newest panorama, the ones on screen first (closest zoom, newest).
+  function onScreen() {
+    const all = records.filter(r => r.key && live(r));
+    const pano = all.at(-1)?.key.pano;
+    return all.filter(r => r.key.pano === pano).reverse().sort((a, b) => b.key.z - a.key.z);
+  }
+  // The game's spare time between frames, or short timer slices without idle callbacks.
+  const idle = () => new Promise(res => (window.requestIdleCallback
+    ? requestIdleCallback(res, { timeout: 100 })
+    : setTimeout(() => res({ timeRemaining: () => 8 }))));
+  // prerender(fn(img, key) -> source) -> { ready(), get(url), cancel() }
+  function prerender(fn) {
+    const out = new Map();
+    let stopped = false, done = false;
+    (async () => {
+      const list = onScreen();
+      // Fetched together, drawn one by one.
+      const imgs = list.map(load);
+      let slice = await idle();
+      for (let i = 0; i < list.length; i++) {
+        const img = await imgs[i];
+        if (stopped) return;
+        if (img) {
+          try {
+            out.set(list[i].url, fn(img, list[i].key));
+          } catch (err) {
+            ggs.log('tiles: prerender failed', err);
+          }
+        }
+        // Keeps the game smooth.
+        if (slice.timeRemaining() < 3) slice = await idle();
+      }
+      done = true;
+    })();
+    return {
+      ready: () => done,
+      get: url => out.get(url),
+      cancel() {
+        stopped = true;
+        out.clear();
+      },
+    };
+  }
+
+  // Calls made in the same tick are merged into one replay. Tiles already loaded go up first,
+  // then the rest as they arrive, newest first (the likeliest to be on screen).
+  // Each frame does at most SLICE ms of work or PIXELS of texture. The GPU process does the
+  // uploads after the calls return, so a time limit alone lets too many through. This way a
+  // replay of hundreds of tiles never holds up the game's frames or a click. A repaint now and
+  // then shows the ones done. A newer replay stops the running one. Records it hadn't reached
+  // are still live, so the new one picks them up.
+  const SLICE = 8, PIXELS = 8 * 512 * 512;
+  const nextFrame = () => new Promise(r => (document.hidden
+    ? setTimeout(r)
+    : requestAnimationFrame(() => setTimeout(r))));
+  let scheduled = null, current = null, painting = null;
+  const showSoFar = () => {
+    painting ??= repaint().finally(() => {
+      painting = null;
+    });
+  };
   function replay() {
     if (scheduled) return scheduled;
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
-      const old = records.filter(live);
-      records.length = 0;
-      for (const r of old) r.stale = true;      // the copies made below take their place
-      let n = 0;
-      await Promise.all(old.map(async r => {
-        const img = new Image();
-        if (r.crossOrigin != null) img.crossOrigin = r.crossOrigin;
-        if (r.referrerPolicy) img.referrerPolicy = r.referrerPolicy;
-        img.src = r.url;
-        try { await img.decode(); } catch { return; }
+      if (current) current.stopped = true;
+      const run = current = { stopped: false };
+      const old = records.filter(live).reverse();
+      const ready = new Set(loaded.keys());
+      const first = old.filter(r => ready.has(r.url));
+      const rest = old.filter(r => !ready.has(r.url));
+      // Fetched together, put up one by one.
+      rest.forEach(load);
+      let n = 0, spent = 0, pixels = 0, shown = performance.now();
+      for (const [i, r] of [...first, ...rest].entries()) {
+        // The loaded ones are up. The rest may take a while.
+        if (i === first.length && n) showSoFar();
+        const img = await load(r);
+        if (run.stopped) return n;
+        // Gone, or the game put something newer there.
+        if (!img || !live(r)) continue;
+        const t = performance.now();
         try {
+          // handle() calls remember(), which marks r stale.
           const rec = { ...r, img, stale: false };
-          if (upload(rec, handle(rec))) n++;
-        } catch (err) { ggs.log('tiles: replay failed', err); }
-      }));
+          const source = handle(rec);
+          if (upload(rec, source)) {
+            n++;
+            // Tiny tiles cost something too.
+            pixels += Math.max(PIXELS / 64, (source.width || 512) * (source.height || 512));
+          }
+        } catch (err) {
+          ggs.log('tiles: replay failed', err);
+        }
+        spent += performance.now() - t;
+        if (spent < SLICE && pixels < PIXELS) continue;
+        if (performance.now() - shown > 150) {
+          shown = performance.now();
+          showSoFar();
+        }
+        await nextFrame();
+        spent = pixels = 0;
+        if (run.stopped) return n;
+      }
+      current = null;
+      loaded.clear();
       if (n) ggs.debug(`tiles: replayed ${n} of ${old.length}`);
+      await painting;
       await repaint();
       return n;
     });
     return scheduled;
   }
 
-  ggs.tiles = { filter, upload, live, replay, repaint, count: () => records.length };
+  ggs.tiles = { filter, upload, live, replay, repaint, preload, prerender, count: () => records.length };
 })();

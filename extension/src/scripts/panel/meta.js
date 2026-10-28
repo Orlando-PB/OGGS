@@ -6,11 +6,15 @@
     name: 'OGGS tab',
     description: 'Hide the OGGS tab bottom left; Alt+O (Option+O on a Mac) still opens the panel.',
     defaultEnabled: false,
-    group: 'controls',
+    section: 'ui',
+    group: 'ui',
     flat: true,
     ui: true,
     options: [
-      { key: 'hideTab', label: 'Hide OGGS tab · Alt+O / Option+O reopens', type: 'checkbox', default: false },
+      {
+        key: 'hideTab', label: 'Hide OGGS tab · Alt+O / Option+O reopens',
+        type: 'checkbox', default: false,
+      },
     ],
   });
 })();

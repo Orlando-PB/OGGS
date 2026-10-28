@@ -1,14 +1,19 @@
 // Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess). An app page in an
-// iframe sits where the guess map was; the real map stays in the page, invisible, and the
+// iframe sits where the guess map was. The real map stays in the page, invisible, and the
 // guess goes through it. This handles the hidden map, the frame and its messages, the
 // hover-to-expand size, a blank board each round, placing the pin and pressing Guess.
-//   ggs.board({ id, app, size(roomW, roomH, boardH) -> { w, h }, guessDelay, answer, onMessage(d), onTick(inRound) })
+//   ggs.board({ id, app, size(roomW, roomH, boardH) -> { w, h }, guessDelay, answer,
+//               onMessage(d), onTick(inRound) })
 //     -> { post(msg), place(guess) -> ok, press(guess, waitMs), status(text), created, stop() }
-// The app talks by postMessage: up 'ready', 'height' { h }, 'guess' { guess: { lat, lng } } the
-// moment its Guess is pressed (the pin goes on the hidden map straight away), 'done' once its
-// animation is over (GeoGuessr's Guess is pressed guessDelay ms later), and its own messages
-// (passed to onMessage); down 'reset' each round, 'answer' { lat, lng } each round when `answer` is set
-// (lat null until the round's location is known), plus whatever the script posts.
+// Messages up from the app:
+//   'ready', 'height' { h }
+//   'guess' { guess: { lat, lng } } when its Guess is pressed. The pin goes down at once.
+//   'done' once its animation is over. GeoGuessr's Guess is pressed guessDelay ms later.
+//   anything else goes to onMessage.
+// Messages down to the app:
+//   'reset' each round
+//   'answer' { lat, lng } each round when `answer` is set (lat null until it's known)
+//   plus whatever the script posts.
 (() => {
   const ggs = globalThis.__ggs;
 
@@ -23,29 +28,35 @@
             transition: transform .18s ease-out, opacity .18s ease-out; }
     :host(.collapsed) { opacity: .6; }
     :host([hidden]) { display: none !important; }
-    iframe { display: block; width: 100%; height: 100%; border: 0; border-radius: 12px; background: #f4efe6;
-             box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .6); }
-    .status { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; padding: 4px 10px; border-radius: 999px;
-              font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; background: #c92a2a; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; border-radius: 12px;
+             background: #f4efe6; box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .6); }
+    .status { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; padding: 4px 10px;
+              border-radius: 999px; font: 600 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+              color: #fff; background: #c92a2a; }
     .status:empty { display: none; }`;
   const MARGIN = 16;
-  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600; // small until hovered, like GeoGuessr's map
+  // Small until hovered, like GeoGuessr's map.
+  const COLLAPSED_W = 320, COLLAPSE_DELAY = 600;
   const RETRY_MS = 500, TRIES = 10;
-  const AWAY_MS = 1500; // the guess map gone this long = a result screen, so the board clears
+  // The guess map gone this long means a result screen, so the board clears.
+  const AWAY_MS = 1500;
 
   ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
     let host = null, frame, statusEl, ready = false, queued = [];
     let expanded = false, collapseTimer = 0, pressTimer = 0, boardH = 0;
     let wasInRound = false, awaySince = 0, placed = false, answerRound, lastGuess = null;
-    let spot = null, spotKey = ''; // where the board sits; measured once per round and window size
+    // Where the board sits. Measured once per round and window size.
+    let spot = null, spotKey = '';
 
     const hideMap = document.createElement('style');
     hideMap.textContent = HIDE_MAP_CSS;
     (document.head ?? document.documentElement).append(hideMap);
 
     const post = msg => (ready ? frame.contentWindow.postMessage(msg, origin) : queued.push(msg));
-    const status = text => { if (statusEl) statusEl.textContent = text ?? ''; };
+    const status = text => {
+      if (statusEl) statusEl.textContent = text ?? '';
+    };
 
     function create() {
       host = document.createElement('div');
@@ -55,7 +66,10 @@
       frame = root.querySelector('iframe');
       statusEl = root.querySelector('.status');
       frame.src = ggs.extBase + app;
-      host.addEventListener('mouseenter', () => { clearTimeout(collapseTimer); setExpanded(true); });
+      host.addEventListener('mouseenter', () => {
+        clearTimeout(collapseTimer);
+        setExpanded(true);
+      });
       host.addEventListener('mouseleave', () => {
         clearTimeout(collapseTimer);
         collapseTimer = setTimeout(() => setExpanded(false), COLLAPSE_DELAY);
@@ -74,27 +88,43 @@
     function layout() {
       const key = `${innerWidth}x${innerHeight}|${ggs.game.roundKey()}`;
       const el = (!spot || key !== spotKey) && (ggs.maps.guessButton() ?? ggs.maps.guessMapElement());
-      if (el) { // with no map on screen (between rounds) the last spot stays
+      // With no map on screen (between rounds) the last spot stays.
+      if (el) {
         const anchor = el.getBoundingClientRect();
-        const right = Math.max(MARGIN, innerWidth - anchor.right), bottom = Math.max(MARGIN, innerHeight - anchor.bottom);
+        const right = Math.max(MARGIN, innerWidth - anchor.right);
+        const bottom = Math.max(MARGIN, innerHeight - anchor.bottom);
         spot = { right, bottom, roomW: innerWidth - right - MARGIN, roomH: innerHeight - bottom - MARGIN };
         spotKey = key;
       }
       if (!spot) return;
       const { w, h } = size(spot.roomW, spot.roomH, boardH);
       const scale = expanded ? 1 : Math.min(1, COLLAPSED_W / w);
-      Object.assign(host.style, { right: `${spot.right}px`, bottom: `${spot.bottom}px`, width: `${w}px`, height: `${h}px`,
-                                  transform: `scale(${scale})` });
+      Object.assign(host.style, {
+        right: `${spot.right}px`,
+        bottom: `${spot.bottom}px`,
+        width: `${w}px`,
+        height: `${h}px`,
+        transform: `scale(${scale})`,
+      });
     }
 
     const onFrameMessage = e => {
       if (!frame || e.origin !== origin || e.source !== frame.contentWindow) return;
       const d = e.data ?? {};
-      if (d.ggs === 'ready') { ready = true; queued.splice(0).forEach(post); }
-      else if (d.ggs === 'height') { boardH = d.h; if (host.style.width) layout(); }
-      else if (d.ggs === 'guess') lastGuess = place(d.guess) ? d.guess : null;
-      else if (d.ggs === 'done') { if (lastGuess) press(lastGuess, guessDelay); lastGuess = null; }
-      else onMessage?.(d);
+      if (d.ggs === 'ready') {
+        ready = true;
+        queued.splice(0).forEach(post);
+      } else if (d.ggs === 'height') {
+        boardH = d.h;
+        if (host.style.width) layout();
+      } else if (d.ggs === 'guess') {
+        lastGuess = place(d.guess) ? d.guess : null;
+      } else if (d.ggs === 'done') {
+        if (lastGuess) press(lastGuess, guessDelay);
+        lastGuess = null;
+      } else {
+        onMessage?.(d);
+      }
     };
     window.addEventListener('message', onFrameMessage);
 
@@ -112,19 +142,25 @@
       return true;
     }
 
-    // GeoGuessr's Guess button can take a moment to appear or enable after the pin goes down,
-    // so keep trying for a few seconds, putting the pin down again once in case it was missed.
-    // With no button on the page at all (some layouts only show it on hover), Space instead.
+    // GeoGuessr's Guess button can take a moment to appear or enable after the pin goes down.
+    // So keep trying for a few seconds, and put the pin down again once in case it was missed.
+    // With no button on the page at all (some layouts only show it on hover), press Space.
     // A new round clears pressTimer (tick below), so this never presses into the next round.
     function press(guess, wait, n = 1) {
       clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
-        if (!ggs.maps.guessMapElement()) return; // already guessed or moved on
+        // Already guessed or moved on.
+        if (!ggs.maps.guessMapElement()) return;
         if (ggs.maps.submitGuess()) return;
-        if (n === 2) { try { ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false }); } catch {} }
+        if (n === 2) {
+          try {
+            ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
+          } catch {}
+        }
         if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
         if (n < TRIES) return press(guess, RETRY_MS, n + 1);
-        status(`Guess placed, but couldn't press Guess (${ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found'})`);
+        const why = ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found';
+        status(`Guess placed, but couldn't press Guess (${why})`);
         ggs.maps.debug();
       }, wait);
     }
@@ -135,7 +171,8 @@
       answerRound = round;
       post({ ggs: 'answer', lat: null });
       ggs.game.roundLocation()
-        .then(loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
+        .then(loc => loc && ggs.game.roundKey() === round
+          && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }))
         .catch(() => {});
     }
 

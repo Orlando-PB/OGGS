@@ -6,23 +6,35 @@
   ggs.log = (...args) => console.log('%c[OGGS]', 'color:#40c057;font-weight:bold', ...args);
   ggs.debug = () => {};
 
-  // JSON in this site's localStorage; fails quietly (private mode, quota).
+  // JSON in this site's localStorage. Fails quietly (private mode, full quota).
   ggs.store = {
-    get(key, fallback = null) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
-    set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+    get(key, fallback = null) {
+      try {
+        return JSON.parse(localStorage.getItem(key)) ?? fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    set(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch {}
+    },
   };
-  if (ggs.store.get('ggsDebug')) ggs.debug = ggs.log; // localStorage.ggsDebug = 1 for chatter
+  // Set localStorage.ggsDebug = 1 for debug logging.
+  if (ggs.store.get('ggsDebug')) ggs.debug = ggs.log;
   ggs.esc = s => String(s ?? '').replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
 
-  // Street View tiles: the URLs the Maps API loads them from, and the pano/x/y/zoom in them.
+  // Street View tile URLs, and the pano/x/y/zoom in them.
   ggs.TILE = /streetviewpixels-pa\.googleapis\.com\/v1\/tile|cbk\d*\.google\.com\/cbk\?/;
   ggs.tileKey = url => {
     const m = /panoid=([^&]+).*?[&?]x=(\d+)&y=(\d+)&zoom=(\d+)/.exec(url);
     return m && { pano: m[1], x: +m[2], y: +m[3], z: +m[4] };
   };
-  // [bind target, binding parameter] for a texImage2D target
-  ggs.glBinding = (gl, target) =>
-    target === gl.TEXTURE_2D ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D] : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
+  // [bind target, binding parameter] for a texImage2D target.
+  ggs.glBinding = (gl, target) => target === gl.TEXTURE_2D
+    ? [gl.TEXTURE_2D, gl.TEXTURE_BINDING_2D]
+    : [gl.TEXTURE_CUBE_MAP, gl.TEXTURE_BINDING_CUBE_MAP];
 
   // ---- settings, relayed from bridge.js ----
   const listeners = [];
@@ -46,7 +58,49 @@
     statusFns.forEach(fn => fn(id, text));
     window.postMessage({ ggs: 'status', id, text }, location.origin);
   };
-  ggs.onStatus = fn => { statusFns.push(fn); for (const [id, text] of Object.entries(status)) fn(id, text); };
+  ggs.onStatus = fn => {
+    statusFns.push(fn);
+    for (const [id, text] of Object.entries(status)) fn(id, text);
+  };
+  // Lets a script change one of its stored settings. Saved like the in-page panel's changes.
+  ggs.saveSetting = (id, changes) => {
+    const settings = { ...ggs.settings, [id]: { ...ggs.settings?.[id], ...changes } };
+    window.postMessage({ ggs: 'save', settings }, location.origin);
+  };
+
+  // ---- microphone permission, for the scripts that listen (Scream to look, Speech jammer) ----
+  // ggs.mic.state is 'granted', 'denied', 'prompt' or '' (not known yet). It goes out as the
+  // '_mic' status line so the settings form can warn. ggs.mic.ask() asks for it and resolves
+  // to true or false. The stream is closed at once. The popup asks by saving settings._mic.ask.
+  ggs.mic = { state: '' };
+  const setMic = s => {
+    if (s === ggs.mic.state) return;
+    ggs.mic.state = s;
+    ggs.status('_mic', s);
+  };
+  try {
+    navigator.permissions.query({ name: 'microphone' }).then(p => {
+      setMic(p.state);
+      p.onchange = () => setMic(p.state);
+    }, () => {});
+  } catch {}
+  ggs.mic.ask = () => navigator.mediaDevices.getUserMedia({ audio: true }).then(
+    s => {
+      s.getTracks().forEach(t => t.stop());
+      setMic('granted');
+      return true;
+    },
+    err => {
+      if (err?.name === 'NotAllowedError') setMic('denied');
+      return false;
+    });
+  // The first settings only set the baseline, so a reload doesn't ask again.
+  let askSeen;
+  ggs.onSettings(all => {
+    const at = all._mic?.ask ?? null;
+    if (askSeen !== undefined && at !== askSeen) ggs.mic.ask();
+    askSeen = at;
+  });
 
   // ---- keys ----
   // Key events inside our panels (data-ggs-ui) stop here, so GeoGuessr's hotkeys don't fire.
@@ -61,7 +115,7 @@
     const t = e.composedPath()[0];
     return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   };
-  // ggs.hotkey(match, fn) -> unregister; runs before GeoGuessr's own handlers
+  // ggs.hotkey(match, fn) returns an unregister function. Runs before GeoGuessr's own handlers.
   const hotkeys = new Set();
   ggs.hotkey = (match, fn) => {
     const h = { match, fn };

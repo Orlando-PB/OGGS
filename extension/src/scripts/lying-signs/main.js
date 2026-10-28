@@ -1,67 +1,170 @@
-// Lying signs: every Street View tile (via ggs.tiles, core/tiles.js) has its text found
-// by a detector in a worker (worker.js, PP-OCRv4 on onnxruntime-web, loaded from
-// ggs.extBase), painted over, and new text (another script, language or Minecraft glyphs)
-// written on top. A blurred copy goes up while the detector works, then the edited tile
-// replaces it in the same texture.
+// Lying signs: text on every Street View tile (via ggs.tiles, core/tiles.js) is found by a
+// detector in a worker (worker.js: PP-OCRv4 on onnxruntime-web, loaded from ggs.extBase),
+// painted over, and replaced with new text in another script, language or Minecraft glyphs.
+// A blurred tile shows while the detector works, then the edit replaces it in the same texture.
 (() => {
   const ggs = globalThis.__ggs;
-  const DET_SIZE = 768;                       // detector input; 512-px tiles are upscaled so small text is found
-  const MIN_CONTRAST = 45;                    // below this text-vs-sign RGB difference a box is ignored
+  // Detector input size. 512-px tiles are upscaled so small text is found.
+  const DET_SIZE = 768;
+  // Boxes whose text differs from the sign by less than this (summed RGB) are ignored.
+  const MIN_CONTRAST = 45;
+  // Letter height as a share of the box height, for boxes cut by a tile edge.
+  const TEXT_OF_BOX = 0.8;
   const VENDOR = 'src/scripts/lying-signs/vendor/';
 
   const ENGLISH = [
-    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing', 'JackSucksAtClips',
-    'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol', 'No Context JackSucksAtLife', 'Sock Outlet 42',
-    'ShopSmellsOfApricots', 'Apricot Outlet', 'qwerty', 'Fudge', 'pretty decent kitchen', 'Geography Stuff', 'Jack & Oscar',
-    'Minecraft', 'Becky', 'Rick', 'Kai', 'Kong', 'Flossy', 'Kazoo', 'Toothbrush', 'Spudger', 'Rhombus', 'Unicycle', 'Beanie',
-    'Lovely', 'Guinness', 'Playbutton', 'Pie Shop', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg',
-    'Seychelles', 'Car Bar', 'Black tape', 'Vatican', 'Australia', 'Nottinghamshire', 'Welsh', 'Spanish', 'Español', 'Reddit',
-    'Knick-Knacks', 'Doodle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday', 'Piglin', 'Skyblock',
-    'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Ukulele', 'Weel', 'Toilet', 'Zigzag',
-    'Oscar', 'Zigzag Road', 'Oscar Was Here', 'Jack Was Here', 'Sucks At Life', 'Sucks At Geography', 'Not Luxembourg',
-    'Definitely Kyrgyzstan', 'Probably Ohio', 'Bolivia?', 'Wrong Country', 'Trust The Bollard', 'Follow The Tape', 'Guess Again',
-    'Plonk Here', '5000 Points', '4,999', 'Zero Points', 'Round 5', 'Gen 4', 'Trekker', 'Snow Cam', 'Rifts', 'Google Car',
-    'Socks For Sale', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch', 'Silver Playbutton', 'Diamond Playbutton',
-    'Mossy Bench', 'Jaxsucksatlife', 'Sucks', 'Mossy', 'Apricots', 'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby',
-    'Rhombus Road', 'Unicycle Lane', 'Spudger Street', 'Flossy Avenue', 'Guinness Bar', 'Vampire Weekend', 'Piglin Bank',
-    'Skyblock Island', 'Harmony Hollow Hotel', 'Misprint Museum', 'Briefcase Depot', 'Wig Emporium', 'Recycling Centre',
-    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', "Becky's Lunch", 'Kong King', 'Rick Roll',
-    'Kale Salad', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep', 'Bus Stop', 'Pancakes', 'Otter', 'Gravy',
-    'Wrong Way', 'Mild Peril', 'Beware Of Jack', 'Oscar Crossing', 'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
+    'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing',
+    'JackSucksAtClips', 'JackSucksAtPopUpPirate', 'JackSucksAtEspañol', 'JackApestaEnEspañol',
+    'No Context JackSucksAtLife', 'Sock Outlet 42', 'ShopSmellsOfApricots', 'Apricot Outlet', 'qwerty',
+    'Fudge', 'pretty decent kitchen', 'Geography Stuff', 'Jack & Oscar', 'Minecraft', 'Becky', 'Rick', 'Kai',
+    'Kong', 'Flossy', 'Kazoo', 'Toothbrush', 'Spudger', 'Rhombus', 'Unicycle', 'Beanie', 'Lovely', 'Guinness',
+    'Playbutton', 'Pie Shop', 'Tesla', 'Autopilot', 'Geography', 'Flag', 'Europe', 'Luxembourg', 'Seychelles',
+    'Car Bar', 'Black tape', 'Vatican', 'Australia', 'Nottinghamshire', 'Welsh', 'Spanish', 'Español',
+    'Reddit', 'Knick-Knacks', 'Doodle', 'Nelly', 'Jeremy', 'Vampire', 'Harmony Hollow', 'Minecraft Monday',
+    'Piglin', 'Skyblock', 'Hacker Trolling', 'Misprint', 'Briefcase', 'Wigs', 'Recycling', 'Bush', 'Ukulele',
+    'Weel', 'Toilet', 'Zigzag', 'Oscar', 'Zigzag Road', 'Oscar Was Here', 'Jack Was Here', 'Sucks At Life',
+    'Sucks At Geography', 'Not Luxembourg', 'Definitely Kyrgyzstan', 'Probably Ohio', 'Bolivia?',
+    'Wrong Country', 'Trust The Bollard', 'Follow The Tape', 'Guess Again', 'Plonk Here', '5000 Points',
+    '4,999', 'Zero Points', 'Round 5', 'Gen 4', 'Trekker', 'Snow Cam', 'Rifts', 'Google Car',
+    'Socks For Sale', 'Bingo', 'Big Bang', 'Nature Websites', 'Pop Up Pirate', 'Jacksucks Merch',
+    'Silver Playbutton', 'Diamond Playbutton', 'Mossy Bench', 'Jaxsucksatlife', 'Sucks', 'Mossy', 'Apricots',
+    'Toothbrush Factory', 'Kazoo Kid', 'Beanie Baby', 'Rhombus Road', 'Unicycle Lane', 'Spudger Street',
+    'Flossy Avenue', 'Guinness Bar', 'Vampire Weekend', 'Piglin Bank', 'Skyblock Island',
+    'Harmony Hollow Hotel', 'Misprint Museum', 'Briefcase Depot', 'Wig Emporium', 'Recycling Centre',
+    'Bush Tucker', 'Weel Deel', 'Toilet Tour', 'Nelly The Elephant', 'Jeremy Fisher', "Becky's Lunch",
+    'Kong King', 'Rick Roll', 'Kale Salad', 'Cheese', 'Left Only', 'Badger', 'Toast', 'No Parking', 'Sheep',
+    'Bus Stop', 'Pancakes', 'Otter', 'Gravy', 'Wrong Way', 'Mild Peril', 'Beware Of Jack', 'Oscar Crossing',
+    'Free Points', 'Actually Chile', 'Nice Try', 'Welcome To Wales',
   ];
   // Indexed by the "script" option; 0 is random (one script per panorama).
   const WORDS = [
     null,
-    ['สวัสดี', 'ถนน', 'ตลาด', 'โรงเรียน', 'วัด', 'ร้านอาหาร', 'ทางออก', 'ระวัง', 'หยุด', 'กรุงเทพ', 'เชียงใหม่', 'ภูเก็ต', 'ห้ามจอด', 'โรงแรม', 'ธนาคาร', 'สถานี', 'ตำรวจ', 'ยินดีต้อนรับ', 'ก๋วยเตี๋ยว', 'ชายหาด',
-      'ขอนแก่น', 'พัทยา', 'อยุธยา', 'หาดใหญ่', 'นครราชสีมา', 'ซอย', 'ทางเข้า', 'ห้องน้ำ', 'ร้านกาแฟ', 'ร้านขายยา', 'โรงพยาบาล', 'ตลาดน้ำ', 'ปั๊มน้ำมัน', 'มหาวิทยาลัย', 'สนามบิน', 'ท่าเรือ', 'ลดความเร็ว', 'ทางม้าลาย', 'ห้ามเข้า', 'ส้มตำ', 'ผัดไทย', 'ข้าวมันไก่', 'ชาเย็น', 'เซเว่น', 'นวดแผนไทย', 'ร้านซ่อมรถ', 'ร้านทอง', 'อู่รถ', 'บ้านพัก', 'ที่จอดรถ'],
-    ['გამარჯობა', 'ქუჩა', 'ბაზარი', 'სკოლა', 'თბილისი', 'გასასვლელი', 'ფრთხილად', 'გაჩერდი', 'ბათუმი', 'ქუთაისი', 'სასტუმრო', 'ბანკი', 'აფთიაქი', 'პოლიცია', 'რესტორანი', 'ღვინო', 'ხაჭაპური', 'მოგესალმებით',
-      'რუსთავი', 'გორი', 'ზუგდიდი', 'ფოთი', 'თელავი', 'მცხეთა', 'ბორჯომი', 'გუდაური', 'სვანეთი', 'კახეთი', 'შესასვლელი', 'ტუალეტი', 'კაფე', 'საავადმყოფო', 'უნივერსიტეტი', 'აეროპორტი', 'სადგური', 'მეტრო', 'ავტოსადგომი', 'გაჩერება', 'შეამცირე სიჩქარე', 'ხინკალი', 'ჩურჩხელა', 'ლობიანი', 'ჭაჭა', 'მაღაზია', 'ბაზრობა', 'ეკლესია', 'მუზეუმი', 'თეატრი', 'სამრეცხაო'],
-    ['안녕하세요', '도로', '시장', '학교', '서울', '출구', '주의', '정지', '부산', '식당', '주차금지', '호텔', '은행', '약국', '경찰', '편의점', '지하철', '환영합니다', '김치', '노래방',
-      '인천', '대구', '대전', '광주', '제주도', '수원', '울산', '강남', '홍대', '명동', '입구', '화장실', '카페', '병원', '대학교', '공항', '기차역', '버스정류장', '주차장', '서행', '횡단보도', '진입금지', '치킨', '삼겹살', '비빔밥', '떡볶이', '소주', '피시방', '찜질방', '세탁소', '미용실', '부동산', '치과', '교회', '박물관'],
-    ['مرحبا', 'شارع', 'سوق', 'مدرسة', 'مخرج', 'انتبه', 'قف', 'مطعم', 'القاهرة', 'دبي', 'فندق', 'بنك', 'صيدلية', 'شرطة', 'ممنوع الوقوف', 'أهلا وسهلا', 'مسجد', 'محطة',
-      'الرياض', 'جدة', 'عمّان', 'بيروت', 'الدوحة', 'مسقط', 'الرباط', 'تونس', 'بغداد', 'الإسكندرية', 'مدخل', 'حمام', 'مقهى', 'مستشفى', 'جامعة', 'مطار', 'محطة القطار', 'موقف الباص', 'موقف سيارات', 'خفف السرعة', 'ممنوع الدخول', 'شاورما', 'فلافل', 'كنافة', 'قهوة', 'بقالة', 'مخبز', 'جزار', 'كنيسة', 'متحف', 'مغسلة', 'صالون', 'عقارات', 'ميناء'],
-    ['привет', 'улица', 'рынок', 'школа', 'выход', 'осторожно', 'стоп', 'Москва', 'магазин', 'аптека', 'банк', 'гостиница', 'полиция', 'вокзал', 'добро пожаловать', 'Новосибирск', 'шаурма', 'парковка запрещена',
-      'Санкт-Петербург', 'Казань', 'Екатеринбург', 'Владивосток', 'Сочи', 'Омск', 'Минск', 'Киев', 'Алматы', 'Бишкек', 'вход', 'туалет', 'кафе', 'больница', 'университет', 'аэропорт', 'станция', 'остановка', 'парковка', 'въезд запрещён', 'пешеходный переход', 'продукты', 'пельмени', 'борщ', 'блины', 'квас', 'пекарня', 'мясо', 'церковь', 'музей', 'театр', 'прачечная', 'парикмахерская', 'шиномонтаж', 'автосервис', 'почта', 'дом культуры'],
-    ['Αθήνα', 'οδός', 'αγορά', 'σχολείο', 'έξοδος', 'προσοχή', 'στοπ', 'ταβέρνα', 'λιμάνι', 'ξενοδοχείο', 'τράπεζα', 'φαρμακείο', 'αστυνομία', 'καλώς ήρθατε', 'Θεσσαλονίκη', 'σουβλάκι', 'παραλία',
-      'Πάτρα', 'Ηράκλειο', 'Λάρισα', 'Βόλος', 'Ρόδος', 'Κέρκυρα', 'Χανιά', 'Σαντορίνη', 'Μύκονος', 'Λευκωσία', 'είσοδος', 'τουαλέτα', 'καφενείο', 'νοσοκομείο', 'πανεπιστήμιο', 'αεροδρόμιο', 'σταθμός', 'στάση', 'πάρκινγκ', 'απαγορεύεται η στάθμευση', 'γύρος', 'μουσακάς', 'φέτα', 'ούζο', 'φούρνος', 'κρεοπωλείο', 'εκκλησία', 'μουσείο', 'θέατρο', 'περίπτερο', 'κομμωτήριο', 'βουλκανιζατέρ', 'ταχυδρομείο', 'πλατεία', 'λεωφόρος'],
-    ['שלום', 'רחוב', 'שוק', 'בית ספר', 'יציאה', 'זהירות', 'עצור', 'מסעדה', 'תל אביב', 'ירושלים', 'מלון', 'בנק', 'בית מרקחת', 'משטרה', 'ברוכים הבאים', 'חניה אסורה', 'פלאפל', 'תחנה',
-      'חיפה', 'באר שבע', 'אילת', 'נתניה', 'הרצליה', 'צפת', 'טבריה', 'כניסה', 'שירותים', 'בית קפה', 'בית חולים', 'אוניברסיטה', 'שדה תעופה', 'תחנת רכבת', 'תחנת אוטובוס', 'חניון', 'האט', 'מעבר חצייה', 'אין כניסה', 'שווארמה', 'חומוס', 'סביח', 'מאפייה', 'מכולת', 'קצבייה', 'בית כנסת', 'מוזיאון', 'תיאטרון', 'מכבסה', 'מספרה', 'דואר', 'שדרות', 'כיכר', 'גן ילדים', 'קופת חולים'],
-    ['東京', '駅', '市場', '学校', '出口', '注意', '止まれ', '食堂', '大阪', '銀行', '駐車禁止', 'ホテル', '薬局', '警察', 'ようこそ', 'ラーメン', '温泉', '京都', '北海道', 'コンビニ',
-      '名古屋', '福岡', '札幌', '神戸', '横浜', '広島', '仙台', '沖縄', '奈良', '長崎', '入口', 'トイレ', '喫茶店', '病院', '大学', '空港', 'バス停', '駐車場', '徐行', '横断歩道', '進入禁止', '寿司', 'うどん', 'カレー', '焼肉', '居酒屋', 'パン屋', '肉屋', '神社', '寺', '博物館', '交番', '郵便局', '美容室', 'ガソリンスタンド', '自動販売機', '商店街', '一方通行', '踏切', '公園'],
-    ['नमस्ते', 'सड़क', 'बाज़ार', 'विद्यालय', 'निकास', 'सावधान', 'रुकिए', 'दिल्ली', 'होटल', 'मुंबई', 'बैंक', 'दवाखाना', 'पुलिस', 'स्वागत है', 'पार्किंग नहीं', 'चाय', 'रेलवे स्टेशन', 'मंदिर',
-      'कोलकाता', 'चेन्नई', 'बेंगलुरु', 'जयपुर', 'लखनऊ', 'वाराणसी', 'आगरा', 'पुणे', 'गोवा', 'काठमांडू', 'प्रवेश', 'शौचालय', 'ढाबा', 'अस्पताल', 'विश्वविद्यालय', 'हवाई अड्डा', 'बस अड्डा', 'धीरे चलें', 'प्रवेश निषेध', 'समोसा', 'चाट', 'बिरयानी', 'दाल', 'लस्सी', 'मिठाई', 'किराना', 'मस्जिद', 'गुरुद्वारा', 'संग्रहालय', 'डाकघर', 'नाई', 'पंचर', 'साइकिल', 'रिक्शा', 'गली', 'चौक', 'नगर पालिका', 'जल'],
-    ['Երևան', 'փողոց', 'շուկա', 'դպրոց', 'ելք', 'զգույշ', 'կանգ', 'ռեստորան', 'հյուրանոց', 'բանկ', 'դեղատուն', 'ոստիկանություն', 'բարի գալուստ', 'Գյումրի', 'լավաշ', 'կայարան',
-      'Վանաձոր', 'Դիլիջան', 'Սևան', 'Գորիս', 'Ջերմուկ', 'Էջմիածին', 'Արարատ', 'մուտք', 'զուգարան', 'սրճարան', 'հիվանդանոց', 'համալսարան', 'օդանավակայան', 'կանգառ', 'ավտոկայանատեղի', 'կայանելն արգելված է', 'խորոված', 'դոլմա', 'թան', 'կոնյակ', 'հացատուն', 'մսավաճառ', 'եկեղեցի', 'թանգարան', 'թատրոն', 'փոստ', 'վարսավիրանոց', 'անվադող', 'պողոտա', 'հրապարակ', 'դպրոց թիվ 5', 'մանկապարտեզ'],
+    [
+      'สวัสดี', 'ถนน', 'ตลาด', 'โรงเรียน', 'วัด', 'ร้านอาหาร', 'ทางออก', 'ระวัง', 'หยุด', 'กรุงเทพ',
+      'เชียงใหม่', 'ภูเก็ต', 'ห้ามจอด', 'โรงแรม', 'ธนาคาร', 'สถานี', 'ตำรวจ', 'ยินดีต้อนรับ', 'ก๋วยเตี๋ยว',
+      'ชายหาด', 'ขอนแก่น', 'พัทยา', 'อยุธยา', 'หาดใหญ่', 'นครราชสีมา', 'ซอย', 'ทางเข้า', 'ห้องน้ำ',
+      'ร้านกาแฟ', 'ร้านขายยา', 'โรงพยาบาล', 'ตลาดน้ำ', 'ปั๊มน้ำมัน', 'มหาวิทยาลัย', 'สนามบิน', 'ท่าเรือ',
+      'ลดความเร็ว', 'ทางม้าลาย', 'ห้ามเข้า', 'ส้มตำ', 'ผัดไทย', 'ข้าวมันไก่', 'ชาเย็น', 'เซเว่น', 'นวดแผนไทย',
+      'ร้านซ่อมรถ', 'ร้านทอง', 'อู่รถ', 'บ้านพัก', 'ที่จอดรถ',
+    ],
+    [
+      'გამარჯობა', 'ქუჩა', 'ბაზარი', 'სკოლა', 'თბილისი', 'გასასვლელი', 'ფრთხილად', 'გაჩერდი', 'ბათუმი',
+      'ქუთაისი', 'სასტუმრო', 'ბანკი', 'აფთიაქი', 'პოლიცია', 'რესტორანი', 'ღვინო', 'ხაჭაპური', 'მოგესალმებით',
+      'რუსთავი', 'გორი', 'ზუგდიდი', 'ფოთი', 'თელავი', 'მცხეთა', 'ბორჯომი', 'გუდაური', 'სვანეთი', 'კახეთი',
+      'შესასვლელი', 'ტუალეტი', 'კაფე', 'საავადმყოფო', 'უნივერსიტეტი', 'აეროპორტი', 'სადგური', 'მეტრო',
+      'ავტოსადგომი', 'გაჩერება', 'შეამცირე სიჩქარე', 'ხინკალი', 'ჩურჩხელა', 'ლობიანი', 'ჭაჭა', 'მაღაზია',
+      'ბაზრობა', 'ეკლესია', 'მუზეუმი', 'თეატრი', 'სამრეცხაო',
+    ],
+    [
+      '안녕하세요', '도로', '시장', '학교', '서울', '출구', '주의', '정지', '부산', '식당', '주차금지',
+      '호텔', '은행', '약국', '경찰', '편의점', '지하철', '환영합니다', '김치', '노래방', '인천', '대구',
+      '대전', '광주', '제주도', '수원', '울산', '강남', '홍대', '명동', '입구', '화장실', '카페', '병원',
+      '대학교', '공항', '기차역', '버스정류장', '주차장', '서행', '횡단보도', '진입금지', '치킨', '삼겹살',
+      '비빔밥', '떡볶이', '소주', '피시방', '찜질방', '세탁소', '미용실', '부동산', '치과', '교회', '박물관',
+    ],
+    [
+      'مرحبا', 'شارع', 'سوق', 'مدرسة', 'مخرج', 'انتبه', 'قف', 'مطعم', 'القاهرة', 'دبي', 'فندق', 'بنك',
+      'صيدلية', 'شرطة', 'ممنوع الوقوف', 'أهلا وسهلا', 'مسجد', 'محطة', 'الرياض', 'جدة', 'عمّان', 'بيروت',
+      'الدوحة', 'مسقط', 'الرباط', 'تونس', 'بغداد', 'الإسكندرية', 'مدخل', 'حمام', 'مقهى', 'مستشفى', 'جامعة',
+      'مطار', 'محطة القطار', 'موقف الباص', 'موقف سيارات', 'خفف السرعة', 'ممنوع الدخول', 'شاورما', 'فلافل',
+      'كنافة', 'قهوة', 'بقالة', 'مخبز', 'جزار', 'كنيسة', 'متحف', 'مغسلة', 'صالون', 'عقارات', 'ميناء',
+    ],
+    [
+      'привет', 'улица', 'рынок', 'школа', 'выход', 'осторожно', 'стоп', 'Москва', 'магазин', 'аптека',
+      'банк', 'гостиница', 'полиция', 'вокзал', 'добро пожаловать', 'Новосибирск', 'шаурма',
+      'парковка запрещена', 'Санкт-Петербург', 'Казань', 'Екатеринбург', 'Владивосток', 'Сочи', 'Омск',
+      'Минск', 'Киев', 'Алматы', 'Бишкек', 'вход', 'туалет', 'кафе', 'больница', 'университет', 'аэропорт',
+      'станция', 'остановка', 'парковка', 'въезд запрещён', 'пешеходный переход', 'продукты', 'пельмени',
+      'борщ', 'блины', 'квас', 'пекарня', 'мясо', 'церковь', 'музей', 'театр', 'прачечная', 'парикмахерская',
+      'шиномонтаж', 'автосервис', 'почта', 'дом культуры',
+    ],
+    [
+      'Αθήνα', 'οδός', 'αγορά', 'σχολείο', 'έξοδος', 'προσοχή', 'στοπ', 'ταβέρνα', 'λιμάνι', 'ξενοδοχείο',
+      'τράπεζα', 'φαρμακείο', 'αστυνομία', 'καλώς ήρθατε', 'Θεσσαλονίκη', 'σουβλάκι', 'παραλία', 'Πάτρα',
+      'Ηράκλειο', 'Λάρισα', 'Βόλος', 'Ρόδος', 'Κέρκυρα', 'Χανιά', 'Σαντορίνη', 'Μύκονος', 'Λευκωσία',
+      'είσοδος', 'τουαλέτα', 'καφενείο', 'νοσοκομείο', 'πανεπιστήμιο', 'αεροδρόμιο', 'σταθμός', 'στάση',
+      'πάρκινγκ', 'απαγορεύεται η στάθμευση', 'γύρος', 'μουσακάς', 'φέτα', 'ούζο', 'φούρνος', 'κρεοπωλείο',
+      'εκκλησία', 'μουσείο', 'θέατρο', 'περίπτερο', 'κομμωτήριο', 'βουλκανιζατέρ', 'ταχυδρομείο', 'πλατεία',
+      'λεωφόρος',
+    ],
+    [
+      'שלום', 'רחוב', 'שוק', 'בית ספר', 'יציאה', 'זהירות', 'עצור', 'מסעדה', 'תל אביב', 'ירושלים', 'מלון',
+      'בנק', 'בית מרקחת', 'משטרה', 'ברוכים הבאים', 'חניה אסורה', 'פלאפל', 'תחנה', 'חיפה', 'באר שבע', 'אילת',
+      'נתניה', 'הרצליה', 'צפת', 'טבריה', 'כניסה', 'שירותים', 'בית קפה', 'בית חולים', 'אוניברסיטה',
+      'שדה תעופה', 'תחנת רכבת', 'תחנת אוטובוס', 'חניון', 'האט', 'מעבר חצייה', 'אין כניסה', 'שווארמה', 'חומוס',
+      'סביח', 'מאפייה', 'מכולת', 'קצבייה', 'בית כנסת', 'מוזיאון', 'תיאטרון', 'מכבסה', 'מספרה', 'דואר',
+      'שדרות', 'כיכר', 'גן ילדים', 'קופת חולים',
+    ],
+    [
+      '東京', '駅', '市場', '学校', '出口', '注意', '止まれ', '食堂', '大阪', '銀行', '駐車禁止', 'ホテル',
+      '薬局', '警察', 'ようこそ', 'ラーメン', '温泉', '京都', '北海道', 'コンビニ', '名古屋', '福岡', '札幌',
+      '神戸', '横浜', '広島', '仙台', '沖縄', '奈良', '長崎', '入口', 'トイレ', '喫茶店', '病院', '大学',
+      '空港', 'バス停', '駐車場', '徐行', '横断歩道', '進入禁止', '寿司', 'うどん', 'カレー', '焼肉',
+      '居酒屋', 'パン屋', '肉屋', '神社', '寺', '博物館', '交番', '郵便局', '美容室', 'ガソリンスタンド',
+      '自動販売機', '商店街', '一方通行', '踏切', '公園',
+    ],
+    [
+      'नमस्ते', 'सड़क', 'बाज़ार', 'विद्यालय', 'निकास', 'सावधान', 'रुकिए', 'दिल्ली', 'होटल', 'मुंबई', 'बैंक',
+      'दवाखाना', 'पुलिस', 'स्वागत है', 'पार्किंग नहीं', 'चाय', 'रेलवे स्टेशन', 'मंदिर', 'कोलकाता', 'चेन्नई',
+      'बेंगलुरु', 'जयपुर', 'लखनऊ', 'वाराणसी', 'आगरा', 'पुणे', 'गोवा', 'काठमांडू', 'प्रवेश', 'शौचालय', 'ढाबा',
+      'अस्पताल', 'विश्वविद्यालय', 'हवाई अड्डा', 'बस अड्डा', 'धीरे चलें', 'प्रवेश निषेध', 'समोसा', 'चाट',
+      'बिरयानी', 'दाल', 'लस्सी', 'मिठाई', 'किराना', 'मस्जिद', 'गुरुद्वारा', 'संग्रहालय', 'डाकघर', 'नाई',
+      'पंचर', 'साइकिल', 'रिक्शा', 'गली', 'चौक', 'नगर पालिका', 'जल',
+    ],
+    [
+      'Երևան', 'փողոց', 'շուկա', 'դպրոց', 'ելք', 'զգույշ', 'կանգ', 'ռեստորան', 'հյուրանոց', 'բանկ',
+      'դեղատուն', 'ոստիկանություն', 'բարի գալուստ', 'Գյումրի', 'լավաշ', 'կայարան', 'Վանաձոր', 'Դիլիջան',
+      'Սևան', 'Գորիս', 'Ջերմուկ', 'Էջմիածին', 'Արարատ', 'մուտք', 'զուգարան', 'սրճարան', 'հիվանդանոց',
+      'համալսարան', 'օդանավակայան', 'կանգառ', 'ավտոկայանատեղի', 'կայանելն արգելված է', 'խորոված', 'դոլմա',
+      'թան', 'կոնյակ', 'հացատուն', 'մսավաճառ', 'եկեղեցի', 'թանգարան', 'թատրոն', 'փոստ', 'վարսավիրանոց',
+      'անվադող', 'պողոտա', 'հրապարակ', 'դպրոց թիվ 5', 'մանկապարտեզ',
+    ],
     ENGLISH,
-    ['Ausfahrt', 'Bäckerei', 'Achtung', 'Bahnhof', 'Schule', 'Markt', 'Apotheke', 'Einbahnstraße', 'Halt', 'Willkommen', 'Rathaus', 'Gasthaus', 'Metzgerei', 'Parkverbot', 'Polizei', 'Tankstelle', 'Biergarten', 'Umleitung', 'Vorsicht', 'Schnitzel', 'Kindergarten', 'Wurst',
-      'Berlin', 'München', 'Hamburg', 'Köln', 'Frankfurt', 'Stuttgart', 'Dresden', 'Leipzig', 'Nürnberg', 'Bremen', 'Wien', 'Zürich', 'Hauptstraße', 'Bahnhofstraße', 'Kirchgasse', 'Am Markt', 'Dorfplatz', 'Einfahrt', 'Ausgang', 'Eingang', 'Toilette', 'Krankenhaus', 'Universität', 'Flughafen', 'Haltestelle', 'Parkplatz', 'Fußgängerzone', 'Sackgasse', 'Baustelle', 'Spielstraße', 'Anlieger frei', 'Zone 30', 'Feuerwehr', 'Sparkasse', 'Volksbank', 'Friseur', 'Fahrschule', 'Imbiss', 'Döner', 'Currywurst', 'Brezel', 'Konditorei', 'Eisdiele', 'Weinstube', 'Brauerei', 'Bierstube', 'Kirche', 'Friedhof', 'Museum', 'Schwimmbad', 'Sporthalle', 'Gemeinde', 'Landkreis', 'Autobahn', 'Radweg', 'Wanderweg', 'Bushaltestelle', 'Zahnarzt', 'Reifen', 'Autohaus', 'Werkstatt', 'Blumen', 'Getränkemarkt', 'Postfiliale', 'Bürgeramt', 'Freibad', 'Schloss', 'Burg', 'Zum Hirschen', 'Zum Löwen', 'Gasthof Adler'],
-    ['Salida', 'Panadería', 'Cuidado', 'Escuela', 'Mercado', 'Farmacia', 'Playa', 'Alto', 'Calle', 'Bienvenidos', 'Ayuntamiento', 'Carnicería', 'Prohibido aparcar', 'Policía', 'Gasolinera', 'Desvío', 'Peligro', 'Churros', 'Cerveza', 'Iglesia', 'Estación',
-      'Madrid', 'Barcelona', 'Sevilla', 'Valencia', 'Bilbao', 'Málaga', 'Granada', 'Zaragoza', 'Ciudad de México', 'Buenos Aires', 'Bogotá', 'Lima', 'Santiago', 'Quito', 'La Paz', 'Montevideo', 'Calle Mayor', 'Avenida', 'Plaza', 'Paseo', 'Carretera', 'Entrada', 'Baños', 'Bar', 'Cafetería', 'Hospital', 'Universidad', 'Aeropuerto', 'Parada', 'Aparcamiento', 'Estacionamiento', 'Ceda el paso', 'Despacio', 'Obras', 'Zona escolar', 'Bomberos', 'Banco', 'Caja', 'Peluquería', 'Autoescuela', 'Tapas', 'Paella', 'Tortilla', 'Jamón', 'Bodega', 'Frutería', 'Pescadería', 'Ferretería', 'Papelería', 'Museo', 'Piscina', 'Polideportivo', 'Cementerio', 'Correos', 'Taller', 'Neumáticos', 'Llantas', 'Farmacia de guardia', 'Se vende', 'Se alquila', 'Abierto', 'Cerrado', 'Rebajas', 'Empanadas', 'Arepas', 'Tacos', 'Ceviche'],
-    ['Sortie', 'Boulangerie', 'Attention', 'École', 'Marché', 'Pharmacie', 'Gare', 'Arrêt', 'Rue', 'Bienvenue', 'Mairie', 'Boucherie', 'Stationnement interdit', 'Police', 'Tabac', 'Déviation', 'Danger', 'Croissant', 'Fromage', 'Église', 'Plage',
-      'Paris', 'Lyon', 'Marseille', 'Bordeaux', 'Toulouse', 'Nantes', 'Lille', 'Strasbourg', 'Nice', 'Montpellier', 'Bruxelles', 'Genève', 'Montréal', 'Québec', 'Dakar', 'Abidjan', 'Rue de la Gare', 'Grande Rue', 'Place de la Mairie', 'Avenue', 'Route de', 'Chemin', 'Impasse', 'Entrée', 'Toilettes', 'Café', 'Brasserie', 'Hôpital', 'Université', 'Aéroport', 'Parking', 'Cédez le passage', 'Ralentir', 'Travaux', 'Zone 30', 'Pompiers', 'Banque', 'Crédit Agricole', 'Coiffeur', 'Auto-école', 'Pâtisserie', 'Charcuterie', 'Fromagerie', 'Poissonnerie', 'Épicerie', 'Cave', 'Baguette', 'Crêperie', 'Pain', 'Vin', 'Musée', 'Piscine', 'Gymnase', 'Cimetière', 'La Poste', 'Garage', 'Pneus', 'Fleuriste', 'Librairie', 'Presse', 'À vendre', 'À louer', 'Ouvert', 'Fermé', 'Soldes', 'Salle des fêtes', 'Camping', 'Château', 'Abbaye', 'Office de tourisme'],
+    [
+      'Ausfahrt', 'Bäckerei', 'Achtung', 'Bahnhof', 'Schule', 'Markt', 'Apotheke', 'Einbahnstraße', 'Halt',
+      'Willkommen', 'Rathaus', 'Gasthaus', 'Metzgerei', 'Parkverbot', 'Polizei', 'Tankstelle', 'Biergarten',
+      'Umleitung', 'Vorsicht', 'Schnitzel', 'Kindergarten', 'Wurst', 'Berlin', 'München', 'Hamburg', 'Köln',
+      'Frankfurt', 'Stuttgart', 'Dresden', 'Leipzig', 'Nürnberg', 'Bremen', 'Wien', 'Zürich', 'Hauptstraße',
+      'Bahnhofstraße', 'Kirchgasse', 'Am Markt', 'Dorfplatz', 'Einfahrt', 'Ausgang', 'Eingang', 'Toilette',
+      'Krankenhaus', 'Universität', 'Flughafen', 'Haltestelle', 'Parkplatz', 'Fußgängerzone', 'Sackgasse',
+      'Baustelle', 'Spielstraße', 'Anlieger frei', 'Zone 30', 'Feuerwehr', 'Sparkasse', 'Volksbank',
+      'Friseur', 'Fahrschule', 'Imbiss', 'Döner', 'Currywurst', 'Brezel', 'Konditorei', 'Eisdiele',
+      'Weinstube', 'Brauerei', 'Bierstube', 'Kirche', 'Friedhof', 'Museum', 'Schwimmbad', 'Sporthalle',
+      'Gemeinde', 'Landkreis', 'Autobahn', 'Radweg', 'Wanderweg', 'Bushaltestelle', 'Zahnarzt', 'Reifen',
+      'Autohaus', 'Werkstatt', 'Blumen', 'Getränkemarkt', 'Postfiliale', 'Bürgeramt', 'Freibad', 'Schloss',
+      'Burg', 'Zum Hirschen', 'Zum Löwen', 'Gasthof Adler',
+    ],
+    [
+      'Salida', 'Panadería', 'Cuidado', 'Escuela', 'Mercado', 'Farmacia', 'Playa', 'Alto', 'Calle',
+      'Bienvenidos', 'Ayuntamiento', 'Carnicería', 'Prohibido aparcar', 'Policía', 'Gasolinera', 'Desvío',
+      'Peligro', 'Churros', 'Cerveza', 'Iglesia', 'Estación', 'Madrid', 'Barcelona', 'Sevilla', 'Valencia',
+      'Bilbao', 'Málaga', 'Granada', 'Zaragoza', 'Ciudad de México', 'Buenos Aires', 'Bogotá', 'Lima',
+      'Santiago', 'Quito', 'La Paz', 'Montevideo', 'Calle Mayor', 'Avenida', 'Plaza', 'Paseo', 'Carretera',
+      'Entrada', 'Baños', 'Bar', 'Cafetería', 'Hospital', 'Universidad', 'Aeropuerto', 'Parada',
+      'Aparcamiento', 'Estacionamiento', 'Ceda el paso', 'Despacio', 'Obras', 'Zona escolar', 'Bomberos',
+      'Banco', 'Caja', 'Peluquería', 'Autoescuela', 'Tapas', 'Paella', 'Tortilla', 'Jamón', 'Bodega',
+      'Frutería', 'Pescadería', 'Ferretería', 'Papelería', 'Museo', 'Piscina', 'Polideportivo', 'Cementerio',
+      'Correos', 'Taller', 'Neumáticos', 'Llantas', 'Farmacia de guardia', 'Se vende', 'Se alquila',
+      'Abierto', 'Cerrado', 'Rebajas', 'Empanadas', 'Arepas', 'Tacos', 'Ceviche',
+    ],
+    [
+      'Sortie', 'Boulangerie', 'Attention', 'École', 'Marché', 'Pharmacie', 'Gare', 'Arrêt', 'Rue',
+      'Bienvenue', 'Mairie', 'Boucherie', 'Stationnement interdit', 'Police', 'Tabac', 'Déviation', 'Danger',
+      'Croissant', 'Fromage', 'Église', 'Plage', 'Paris', 'Lyon', 'Marseille', 'Bordeaux', 'Toulouse',
+      'Nantes', 'Lille', 'Strasbourg', 'Nice', 'Montpellier', 'Bruxelles', 'Genève', 'Montréal', 'Québec',
+      'Dakar', 'Abidjan', 'Rue de la Gare', 'Grande Rue', 'Place de la Mairie', 'Avenue', 'Route de',
+      'Chemin', 'Impasse', 'Entrée', 'Toilettes', 'Café', 'Brasserie', 'Hôpital', 'Université', 'Aéroport',
+      'Parking', 'Cédez le passage', 'Ralentir', 'Travaux', 'Zone 30', 'Pompiers', 'Banque',
+      'Crédit Agricole', 'Coiffeur', 'Auto-école', 'Pâtisserie', 'Charcuterie', 'Fromagerie', 'Poissonnerie',
+      'Épicerie', 'Cave', 'Baguette', 'Crêperie', 'Pain', 'Vin', 'Musée', 'Piscine', 'Gymnase', 'Cimetière',
+      'La Poste', 'Garage', 'Pneus', 'Fleuriste', 'Librairie', 'Presse', 'À vendre', 'À louer', 'Ouvert',
+      'Fermé', 'Soldes', 'Salle des fêtes', 'Camping', 'Château', 'Abbaye', 'Office de tourisme',
+    ],
     'galactic',
   ];
   const GALACTIC_INDEX = WORDS.length - 1;
+  // Arabic and Hindi letters join, so on a vertical sign the word is turned, not stacked.
+  const JOINED = new Set([4, 9]);
 
   // Minecraft's enchanting-table letters as strokes on a 10x10 grid (a single point is a dot).
   const GALACTIC = [
@@ -102,8 +205,12 @@
       const glyph = GALACTIC[Math.floor(rand() * GALACTIC.length)];
       const gx = x0 + i * adv, s = (adv - gap) / 10;
       for (const line of glyph) {
-        if (line.length === 1) { g.beginPath(); g.arc(gx + line[0][0] * s, y0 + line[0][1] * (h / 10), g.lineWidth * 0.7, 0, 7); g.fill(); continue; }
         g.beginPath();
+        if (line.length === 1) {
+          g.arc(gx + line[0][0] * s, y0 + line[0][1] * (h / 10), g.lineWidth * 0.7, 0, 7);
+          g.fill();
+          continue;
+        }
         line.forEach(([x, y], k) => (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10)));
         g.stroke();
       }
@@ -113,21 +220,25 @@
   // Randomness seeded on a sign's place in the panorama, so it reads the same at every zoom.
   function hash(str) {
     let h = 2166136261;
-    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
     return h >>> 0;
   }
   function rng(seed) {
     let a = seed >>> 0;
-    return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  }
-  function boxSeed(k, raw, W) {
-    if (!k) return hash(`${raw.cx | 0},${raw.cy | 0}`);
-    const scale = 1 / (W * 2 ** k.z) * 4096;
-    return hash(`${k.pano}:${Math.round((k.x * W + raw.cx) * scale)}:${Math.round((k.y * W + raw.cy) * scale)}`);
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
   }
 
   let active = null;                          // cfg while the script is on
-  const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, paths: {} };
+  const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, editMs: 0, editMax: 0 };
   ggs.lyingSigns = { stats };
 
   // ---- detector worker ----
@@ -138,7 +249,10 @@
     workerReady = (async () => {
       if (!ggs.extBase) throw new Error('extension base URL not known yet');
       const u = f => ggs.extBase + VENDOR + f;
-      const blobUrl = async (url, type) => URL.createObjectURL(new Blob([await (await fetch(url)).arrayBuffer()], { type }));
+      const blobUrl = async (url, type) => {
+        const bytes = await (await fetch(url)).arrayBuffer();
+        return URL.createObjectURL(new Blob([bytes], { type }));
+      };
       const [src, ort, mjs, wasm, model] = await Promise.all([
         fetch(ggs.extBase + 'src/scripts/lying-signs/worker.js').then(r => r.text()),
         blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
@@ -149,33 +263,59 @@
       worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
       worker.onmessage = e => {
         const m = e.data;
-        if (m.type === 'boxes') { stats.detected++; stats.detectMs += m.ms; waiting.get(m.id)?.(m.boxes); waiting.delete(m.id); }
-        else if (m.type === 'error') { stats.failed++; ggs.log('lying-signs: detector error', m.message); waiting.get(m.id)?.(null); waiting.delete(m.id); }
+        if (m.type === 'boxes') {
+          stats.detected++;
+          stats.detectMs += m.ms;
+          waiting.get(m.id)?.(m.boxes);
+          waiting.delete(m.id);
+        } else if (m.type === 'error') {
+          stats.failed++;
+          ggs.log('lying-signs: detector error', m.message);
+          waiting.get(m.id)?.(null);
+          waiting.delete(m.id);
+        }
       };
       const backend = await new Promise((res, rej) => {
-        const onmsg = e => { if (e.data.type === 'ready') { worker.removeEventListener('message', onmsg); res(e.data.backend); } else if (e.data.type === 'error') rej(new Error(e.data.message)); };
+        const onmsg = e => {
+          if (e.data.type === 'ready') {
+            worker.removeEventListener('message', onmsg);
+            res(e.data.backend);
+          } else if (e.data.type === 'error') {
+            rej(new Error(e.data.message));
+          }
+        };
         worker.addEventListener('message', onmsg);
         worker.postMessage({ type: 'init', ort, mjs, wasm, model }, [model]);
       });
       stats.backend = backend;
       ggs.debug(`lying-signs: text detector ready (${backend})`);
     })();
-    workerReady.catch(err => { ggs.log('lying-signs: text detector failed to load', err); workerReady = null; });
+    workerReady.catch(err => {
+      ggs.log('lying-signs: text detector failed to load', err);
+      // Close the half-started worker so a retry doesn't leave it running.
+      worker?.terminate();
+      worker = null;
+      workerReady = null;
+    });
     return workerReady;
   }
-  // Detection queue: the tile nearest to where you're looking first. A queued tile whose
-  // textures are gone or overwritten (pano changed) is dropped unrun, tiles of panoramas
-  // no longer shown are dropped as soon as the panorama moves on, and the queue is capped
-  // so moving quickly never builds a backlog (a dropped tile is detected again if it is
-  // uploaded again).
-  const queue = [];                           // [{ img, cfg, res, alive, url }]
+  // Detection queue, nearest tile to the view first. Tiles whose textures are gone, or whose
+  // panorama is no longer shown, are dropped unrun. The queue is capped so moving quickly
+  // never builds a backlog. A dropped tile is detected if it is uploaded again.
+  const queue = [];                           // [{ img, res, alive, url }]
   let inflight = 0;
   const MAX_INFLIGHT = 2, MAX_QUEUE = 300;
-  ggs.lyingSigns.debug = () => ({ queue: queue.length, inflight, waiting: waiting.size, tiles: tiles.size });
-  function detect(img, cfg, alive, url) {
+  ggs.lyingSigns.debug = () => ({
+    queue: queue.length, inflight, waiting: waiting.size,
+    tiles: tiles.size, panos: signs.size, stale: stale.size,
+  });
+  function detect(img, alive, url) {
     return new Promise(res => {
-      queue.push({ img, cfg, res, alive, url });
-      while (queue.length > MAX_QUEUE) { stats.skipped = (stats.skipped || 0) + 1; queue.shift().res(null); }
+      queue.push({ img, res, alive, url });
+      while (queue.length > MAX_QUEUE) {
+        stats.skipped = (stats.skipped || 0) + 1;
+        queue.shift().res(null);
+      }
       pump();
     });
   }
@@ -184,7 +324,10 @@
     for (const p of panos) { try { shown.add(p.getPano()); } catch {} }
     for (let i = queue.length - 1; i >= 0; i--) {
       const id = ggs.tileKey(queue[i].url)?.pano;
-      if (id && !shown.has(id)) { stats.skipped = (stats.skipped || 0) + 1; queue.splice(i, 1)[0].res(null); }
+      if (id && !shown.has(id)) {
+        stats.skipped = (stats.skipped || 0) + 1;
+        queue.splice(i, 1)[0].res(null);
+      }
     }
   }
   function tileDistance(url) {
@@ -193,7 +336,11 @@
     const { pano: id, x, y, z } = k;
     for (const p of panos) {
       let pov, centre;
-      try { if (p.getPano() !== id) continue; pov = p.getPov(); centre = p.getPhotographerPov?.()?.heading; } catch { continue; }
+      try {
+        if (p.getPano() !== id) continue;
+        pov = p.getPov();
+        centre = p.getPhotographerPov?.()?.heading;
+      } catch { continue; }
       if (!pov || centre == null) return null;
       const cols = 2 ** z, rows = Math.max(1, 2 ** (z - 1));
       const heading = centre + ((+x + 0.5) / cols - 0.5) * 360;
@@ -218,16 +365,22 @@
     try {
       await detector();
       const job = pickJob();
-      if (!job) return; // another pump took the last one while the detector loaded
-      if (!job.alive()) { stats.skipped = (stats.skipped || 0) + 1; job.res(null); return; }
+      // another pump may have taken the last job while the detector loaded
+      if (!job) return;
+      if (!job.alive()) {
+        stats.skipped = (stats.skipped || 0) + 1;
+        job.res(null);
+        return;
+      }
       const bitmap = await createImageBitmap(job.img);
       const boxes = await new Promise(r => {
         const id = ++nextId;
         waiting.set(id, r);
-        worker.postMessage({ type: 'detect', id, bitmap, size: DET_SIZE, thresh: 0.25, boxThresh: 0.45 }, [bitmap]);
+        const msg = { type: 'detect', id, bitmap, size: DET_SIZE, thresh: 0.25, boxThresh: 0.45 };
+        worker.postMessage(msg, [bitmap]);
       });
       job.res(boxes);
-    } catch (err) {
+    } catch {
       stats.failed++;
       for (const j of queue.splice(0)) j.res(null);
     } finally {
@@ -236,117 +389,205 @@
     }
   }
 
-  // ---- tiles ----
-  const tiles = new Map();                    // url -> { boxes, cfg, canvas, pending: [upload records] }
-  const grid = new Map();                     // "pano/zoom/x/y" -> same entry, for finding a tile's children
-  const gridKey = ggs.tileKey;
+  // ---- signs ----
+  // Every text box found in a panorama, at any zoom, in panorama units (1 = its width), with
+  // what was decided about it: skipped or not, letter height, colour, the word written.
+  // A sign found at one zoom is drawn into the tiles of every zoom on screen, so zooming in
+  // or out shows the same words.
+  const signs = new Map();                    // pano -> [sign]
+  const detectedTiles = new Set();            // "pano/z/x/y" the detector has run on
+  const tileId = k => `${k.pano}/${k.z}/${k.x}/${k.y}`;
+  const MAX_PANOS = 20;
 
-  // Zooming out: a parent tile is assembled from its four edited children (or grandchildren).
-  function childCanvas(k, depth) {
-    const t = grid.get(`${k.pano}/${k.z}/${k.x}/${k.y}`);
-    if (t?.canvas) return t.canvas;
-    if (depth === 0) return null;
-    const parts = [];
-    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const c = childCanvas({ pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy }, depth - 1);
-      if (!c) return null;
-      parts.push([dx, dy, c]);
-    }
-    const c = new OffscreenCanvas(parts[0][2].width, parts[0][2].height), g = c.getContext('2d');
-    g.imageSmoothingQuality = 'high';
-    for (const [dx, dy, src] of parts) g.drawImage(src, (dx * c.width) / 2, (dy * c.height) / 2, c.width / 2, c.height / 2);
-    return c;
+  function toTile(sg, k, W) {
+    const u = W * 2 ** k.z;
+    return {
+      cx: sg.cx * u - k.x * W, cy: sg.cy * u - k.y * W, w: sg.w * u, h: sg.h * u,
+      angle: sg.angle, vertical: sg.vertical, sign: sg,
+    };
   }
-  // Zooming in: a detected parent's boxes, scaled into this tile.
-  function inheritedBoxes(k, W, H) {
-    for (let up = 1; up <= 2; up++) {
-      const f = 2 ** up, px = Math.floor(k.x / f), py = Math.floor(k.y / f);
-      const t = grid.get(`${k.pano}/${k.z - up}/${px}/${py}`);
-      if (!t?.boxes) continue;
-      const ox = (k.x - px * f) * (W / f), oy = (k.y - py * f) * (H / f); // this tile's origin in the parent
-      const out = [];
-      for (const b of t.boxes) {
-        const cx = (b.cx - ox) * f, cy = (b.cy - oy) * f, w = b.w * f, h = b.h * f;
-        const r = Math.hypot(w, h) / 2;
-        if (cx + r < 0 || cy + r < 0 || cx - r > W || cy - r > H) continue;
-        out.push({ ...b, cx, cy, w, h, mask: { ...b.mask, x: (b.mask.x - ox) * f, y: (b.mask.y - oy) * f, w: b.mask.w * f, h: b.mask.h * f } });
+  function touches(sg, k, W) {
+    const b = toTile(sg, k, W), r = Math.hypot(b.w, b.h) / 2;
+    return b.cx + r > 0 && b.cy + r > 0 && b.cx - r < W && b.cy - r < W;
+  }
+  const signsIn = (k, W) => (signs.get(k.pano) || [])
+    .filter(sg => touches(sg, k, W))
+    .map(sg => toTile(sg, k, W));
+
+  // Adds a tile's detections, biggest first. A known sign wins, as it may span tiles, unless a
+  // new box is bigger and covers its middle (the other zoom only saw a sliver of it).
+  function addSigns(k, W, found) {
+    if (!signs.has(k.pano)) {
+      signs.set(k.pano, []);
+      if (signs.size > MAX_PANOS) {
+        const old = signs.keys().next().value;
+        signs.delete(old);
+        for (const id of detectedTiles) if (id.startsWith(old + '/')) detectedTiles.delete(id);
       }
-      return out;
     }
-    return null;
+    const list = signs.get(k.pano), u = W * 2 ** k.z, added = [], removed = [];
+    for (const b of found.slice().sort((a, c) => c.w * c.h - a.w * a.h)) {
+      const sg = {
+        cx: (k.x * W + b.cx) / u, cy: (k.y * W + b.cy) / u, w: b.w / u, h: b.h / u,
+        angle: b.angle, vertical: b.vertical, words: {},
+      };
+      const covered = list.filter(o => inside(o, sg) && sg.w * sg.h > o.w * o.h);
+      if (list.some(o => !covered.includes(o) && inside(sg, o))) continue;
+      for (const o of covered) {
+        list.splice(list.indexOf(o), 1);
+        removed.push(o);
+      }
+      sg.seed = hash(`${k.pano}:${Math.round(sg.cx * 4096)}:${Math.round(sg.cy * 4096)}`);
+      list.push(sg);
+      added.push(sg);
+    }
+    return { added, removed };
   }
-  // Draws whichever edited children exist onto `canvas`; true if all four were there.
-  function overlayChildren(canvas, k) {
-    if (!k) return false;
-    const g = canvas.getContext('2d');
-    g.imageSmoothingQuality = 'high';
-    let n = 0;
+  // whether b's middle is inside box a
+  function inside(b, a) {
+    const dx = b.cx - a.cx, dy = b.cy - a.cy, c = Math.cos(a.angle), s = Math.sin(a.angle);
+    return Math.abs(dx * c + dy * s) < a.w / 2 && Math.abs(-dx * s + dy * c) < a.h / 2;
+  }
+  // Known well enough to edit without waiting: the detector ran on this tile, on its parent
+  // or grandparent, or on all its children (or grandchildren).
+  function covered(k) {
+    if (detectedTiles.has(tileId(k))) return true;
+    for (let up = 1; up <= 2; up++) {
+      const f = 2 ** up;
+      const parent = { pano: k.pano, z: k.z - up, x: Math.floor(k.x / f), y: Math.floor(k.y / f) };
+      if (detectedTiles.has(tileId(parent))) return true;
+    }
+    return kidsCovered(k, 2);
+  }
+  function kidsCovered(k, depth) {
+    if (depth === 0) return false;
     for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const c = childCanvas({ pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy }, 1);
-      if (!c) continue;
-      g.drawImage(c, (dx * canvas.width) / 2, (dy * canvas.height) / 2, canvas.width / 2, canvas.height / 2);
-      n++;
+      const c = { pano: k.pano, z: k.z + 1, x: 2 * k.x + dx, y: 2 * k.y + dy };
+      if (!detectedTiles.has(tileId(c)) && !kidsCovered(c, depth - 1)) return false;
     }
-    return n === 4;
+    return true;
   }
-  // What goes into WebGL now for this tile: the edit if known, otherwise a blur while the
-  // detector works. Skips tiles another script already swapped for a canvas.
+
+  // ---- tiles ----
+  // url -> { key, img, canvas, cfg, recs: [upload records], drawn: Set of signs }
+  const tiles = new Map();
+
+  // What goes into WebGL for this tile: the edit if the area is known, otherwise a blur while
+  // the detector works. Tiles another script already swapped for a canvas are left alone.
   ggs.tiles.filter((rec, img) => {
     if (!active || !(img instanceof HTMLImageElement)) return img;
-    const url = rec.url;
-    stats.paths.gl = (stats.paths.gl || 0) + 1;
+    const url = rec.url, k = ggs.tileKey(url);
+    if (!k) return img;
     let t = tiles.get(url);
-    if (t && t.cfg !== active) { t.canvas = null; t.cfg = active; if (t.boxes) t.canvas = editSync(img, t.boxes, active, t.key); }
-    if (t?.canvas) return t.canvas;
-    const k = gridKey(url);
     if (!t) {
-      t = { boxes: null, cfg: active, canvas: null, pending: [], key: k };
+      t = { key: k, img, canvas: null, cfg: null, recs: [], drawn: new Set() };
       tiles.set(url, t);
-      if (k) grid.set(`${k.pano}/${k.z}/${k.x}/${k.y}`, t);
-      if (tiles.size > 800) { const [oldUrl, old] = tiles.entries().next().value; tiles.delete(oldUrl); if (old.key) grid.delete(`${old.key.pano}/${old.key.z}/${old.key.x}/${old.key.y}`); }
+      if (tiles.size > 800) tiles.delete(tiles.keys().next().value);
       stats.seen++;
-      // all four children already edited: assemble, no detection needed
-      const fromKids = k && childCanvas(k, 2);
-      if (fromKids && fromKids !== t.canvas) { t.canvas = fromKids; t.boxes = []; stats.assembled = (stats.assembled || 0) + 1; return t.canvas; }
-      // parent already detected: its boxes now, and this zoom's detection adds small text
-      const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-      const inherited = k && inheritedBoxes(k, W, H);
-      if (inherited) { t.inherited = inherited; t.boxes = inherited; t.canvas = editSync(img, inherited, active, k); stats.inherited = (stats.inherited || 0) + 1; }
-      const alive = () => t.pending.some(ggs.tiles.live);
-      detect(img, active, alive, url).then(boxes => {
-        if (!boxes) { if (!t.inherited) tiles.delete(url); t.pending = []; return; } // skipped or failed; a later upload retries
-        t.boxes = t.inherited ? merge(t.inherited, boxes) : boxes;
-        stats.boxes += boxes.length;
-        flush(t, img);
-      });
     }
-    t.pending.push(rec);
-    if (t.canvas) return t.canvas;
-    const ph = blurred(img);
-    overlayChildren(ph, k);
-    return ph;
+    t.img = img;
+    t.recs = t.recs.filter(ggs.tiles.live);
+    t.recs.push(rec);
+    if (!detectedTiles.has(tileId(k)) && !t.queued) queueDetect(t, url);
+    if (t.canvas && t.cfg === active) return t.canvas;
+    if (covered(k)) {
+      editTile(t);
+      return t.canvas;
+    }
+    t.canvas = null;
+    return blurred(img);
   }, 1);
-  // Inherited boxes win; a detected box is added only if it isn't over one of them.
-  function merge(inherited, detected) {
-    const out = inherited.slice();
-    for (const b of detected) {
-      const hit = inherited.some(i => Math.abs(b.cx - i.cx) < (b.w + i.w) / 2 && Math.abs(b.cy - i.cy) < (b.h + i.h) / 2);
-      if (!hit) out.push(b);
-    }
-    return out;
+
+  function queueDetect(t, url) {
+    const k = t.key, W = t.img.naturalWidth || t.img.width;
+    t.queued = true;
+    detect(t.img, () => t.recs.some(ggs.tiles.live), url).then(found => {
+      t.queued = false;
+      if (!found) return;                     // skipped or failed; a later upload retries
+      detectedTiles.add(tileId(k));
+      stats.boxes += found.length;
+      const { added, removed } = addSigns(k, W, found);
+      if (!active) return;
+      // it was showing the blur
+      if (!t.canvas || t.cfg !== active) {
+        editTile(t);
+        upload(t);
+      }
+      refresh(k.pano, added, removed, t);
+    });
   }
 
-  // Boxes are in: edit the tile and push it into every texture it went to.
-  function flush(t, img) {
-    if (!active) { t.pending = []; return; }
+  // The whole tile from the original, with every known sign; or, with `more`, just those
+  // signs drawn onto the edit already there.
+  function editTile(t, more) {
+    const W = t.img.naturalWidth || t.img.width;
+    const boxes = more ? more.map(sg => toTile(sg, t.key, W)) : signsIn(t.key, W);
+    if (!more) t.drawn = new Set();
+    t.canvas = editSync(t.img, boxes, active, t.key, more ? t.canvas : null);
+    for (const b of boxes) t.drawn.add(b.sign);
     t.cfg = active;
-    t.canvas = editSync(img, t.boxes, active, t.key);
-    overlayChildren(t.canvas, t.key);
-    for (const r of t.pending) {
-      try { if (ggs.tiles.upload(r, t.canvas)) stats.edited++; }
-      catch (err) { stats.failed++; if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err); }
+  }
+  // New signs in a panorama are drawn into every edited tile they touch, at any zoom, and
+  // those tiles go to WebGL again. A tile that drew a since-replaced sign is redone. The tile
+  // just detected (`now`) is done at once, the rest a few at a time in idle time, so a burst
+  // of detections never stalls a frame.
+  const stale = new Map();                    // tile -> Set of signs to add, or 'all' to redo it
+  let draining = false;
+  function refresh(pano, added, removed, now) {
+    for (const t of tiles.values()) {
+      if (t.key.pano !== pano || !t.canvas || t.cfg !== active) continue;
+      const W = t.img.naturalWidth || t.img.width;
+      if (removed.some(sg => t.drawn.has(sg))) {
+        stale.set(t, 'all');
+        continue;
+      }
+      const mine = added.filter(sg => touches(sg, t.key, W) && !t.drawn.has(sg));
+      if (!mine.length || stale.get(t) === 'all') continue;
+      if (!stale.has(t)) stale.set(t, new Set());
+      for (const sg of mine) stale.get(t).add(sg);
     }
-    t.pending = [];
+    if (stale.has(now)) redo(now);
+    drain();
+  }
+  function redo(t) {
+    const job = stale.get(t);
+    stale.delete(t);
+    if (!t.canvas || t.cfg !== active) return;
+    if (job === 'all') editTile(t);
+    else {
+      const more = [...job].filter(sg => !t.drawn.has(sg));
+      if (!more.length) return;
+      editTile(t, more);
+    }
+    upload(t);
+  }
+  const idle = () => new Promise(res => (window.requestIdleCallback
+    ? requestIdleCallback(res, { timeout: 200 })
+    : setTimeout(() => res({ timeRemaining: () => 8 }), 16)));
+  async function drain() {
+    if (draining) return;
+    draining = true;
+    try {
+      while (stale.size) {
+        const slice = await idle();
+        do {
+          redo(stale.keys().next().value);
+        } while (stale.size && slice.timeRemaining() > 6);
+      }
+    } finally {
+      draining = false;
+    }
+  }
+  function upload(t) {
+    t.recs = t.recs.filter(ggs.tiles.live);
+    for (const r of t.recs) {
+      try {
+        if (ggs.tiles.upload(r, t.canvas)) stats.edited++;
+      } catch (err) {
+        stats.failed++;
+        if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err);
+      }
+    }
   }
 
   // ---- the edits ----
@@ -361,24 +602,57 @@
     return c;
   }
 
-  // Edits a tile with the detector's boxes; returns an OffscreenCanvas.
-  function editSync(src, boxes, cfg, key) {
+  // Edits a tile with the detector's boxes and returns an OffscreenCanvas. With `onto`, an
+  // earlier edit of the same tile, only the given boxes are added to it.
+  function editSync(src, boxes, cfg, key, onto) {
+    const t0 = performance.now();
     const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
-    const c = new OffscreenCanvas(W, H);
+    const c = onto || new OffscreenCanvas(W, H);
     const g = c.getContext('2d', { willReadFrequently: true });
-    g.drawImage(src, 0, 0);
-    nadir(g, key, W, H);
-    for (const raw of boxes) {
-      if (raw.h < 4 || raw.w < 4) continue;
-      const rand = rng(boxSeed(key, raw, W));
+    if (!onto) {
+      g.drawImage(src, 0, 0);
+      nadir(g, key, W, H);
+    }
+    for (const raw of usable(boxes, key, H)) {
+      const rand = rng(raw.sign.seed);
       let script = cfg.script | 0;
       if (!WORDS[script]) script = 0;
-      if (script === 0) script = 1 + hash('script:' + (key?.pano || '')) % (WORDS.length - 1); // one script per panorama
+      // random: one script per panorama
+      if (script === 0) script = 1 + hash('script:' + (key?.pano || '')) % (WORDS.length - 1);
       const list = WORDS[script];
       const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
-      try { replaceBox(g, src, raw, script, pick, rand); } catch (err) { stats.failed++; if (stats.failed < 4) ggs.log('lying-signs: box failed', err); }
+      try {
+        replaceBox(g, raw, script, pick, rand, W);
+      } catch (err) {
+        stats.failed++;
+        if (stats.failed < 4) ggs.log('lying-signs: box failed', err);
+      }
     }
+    const ms = performance.now() - t0;
+    stats.editMs += ms;
+    stats.editMax = Math.max(stats.editMax, ms);
     return c;
+  }
+
+  // The boxes worth editing: big enough at this zoom, and not on the ground.
+  function usable(boxes, key, H) {
+    return boxes.filter(b => {
+      if (b.h < 4 || b.w < 4) return false;
+      if (onGround(key, b, H)) {
+        stats.ground = (stats.ground || 0) + 1;
+        return false;
+      }
+      return true;
+    });
+  }
+  // Road markings, tyres, drain covers: anything below GROUND_PITCH, or a big box a little
+  // below the horizon (a shop sign there is seldom more than a few degrees tall).
+  const GROUND_PITCH = -30;
+  function onGround(k, b, H) {
+    if (!k) return false;
+    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H);   // degrees per tile pixel
+    const pitch = 90 - (k.y * H + b.cy) * deg;
+    return pitch < GROUND_PITCH || (pitch < -8 && Math.min(b.w, b.h) * deg > 6);
   }
 
   // The bottom of the panorama (the car) is stretched too much for the detector, so
@@ -387,7 +661,8 @@
   function nadir(g, k, W, H) {
     if (!k) return;
     const rows = Math.max(1, 2 ** (k.z - 1));
-    const top = Math.max(0, ((90 - NADIR_PITCH) / 180 * rows - k.y) * H); // tile y where the cap starts
+    // tile y where the mosaic starts
+    const top = Math.max(0, ((90 - NADIR_PITCH) / 180 * rows - k.y) * H);
     if (top >= H) return;
     const band = H - top, fade = Math.min(10, band);
     const small = new OffscreenCanvas(Math.max(1, W / 16 | 0), Math.max(1, band / 16 | 0));
@@ -396,161 +671,414 @@
     l.imageSmoothingQuality = 'high';
     l.drawImage(small, 0, 0, W, band);
     const grad = l.createLinearGradient(0, 0, 0, fade);
-    grad.addColorStop(0, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,0,0,1)');
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,1)');
     l.globalCompositeOperation = 'destination-in';
-    l.fillStyle = grad; l.fillRect(0, 0, W, fade);
-    l.fillStyle = '#000'; l.fillRect(0, fade, W, band - fade);
+    l.fillStyle = grad;
+    l.fillRect(0, 0, W, fade);
+    l.fillStyle = '#000';
+    l.fillRect(0, fade, W, band - fade);
     g.drawImage(layer, 0, top);
     stats.nadir = (stats.nadir || 0) + 1;
   }
 
-  function replaceBox(g, src, raw, script, pick, rand) {
-    const p = raw.h * 0.12;                  // the detector's box hugs the strokes; give them room
-    const bw = Math.ceil(raw.w + 2 * p), bh = Math.ceil(raw.h + 2 * p);
-    const feather = Math.max(3, Math.min(12, Math.round(bh * 0.35)));
-    const ring = Math.max(3, Math.round(bh * 0.25)), gap = 2;
-    const pad = gap + ring + feather + 2;
-    const tw = bw + 2 * pad, th = bh + 2 * pad;
-    const box = { x: pad, y: pad, w: bw, h: bh };
-    // the tile, rotated so this text runs level; outside the tile stays transparent
-    const temp = new OffscreenCanvas(tw, th), t = temp.getContext('2d', { willReadFrequently: true });
-    const toLevel = ctx => { ctx.translate(tw / 2, th / 2); ctx.rotate(-raw.angle); ctx.translate(-raw.cx, -raw.cy); };
-    t.save(); toLevel(t); t.drawImage(src, 0, 0); t.restore();
-
-    const { bg, fg, contrast } = colours(t, box, tw, th);
-    if (contrast < MIN_CONTRAST) { stats.lowContrast = (stats.lowContrast || 0) + 1; return; } // clouds, brickwork, foliage: not text
-    const layer = edgeFill(t, box, bg, tw, th, gap, ring, feather);
-
-    // new text, on its own layer (its shape also goes into the mask)
-    const text = new OffscreenCanvas(tw, th), x = text.getContext('2d');
-    x.fillStyle = `rgb(${fg.join(',')})`;
-    if (script === GALACTIC_INDEX) drawGalactic(x, box, rand);
-    else {
-      const word = pick();
-      let size = Math.max(5, Math.floor(box.h)), m;
-      const fits = () => { x.font = `bold ${size}px sans-serif`; m = x.measureText(word); return m.width <= box.w - 2 && m.actualBoundingBoxAscent + m.actualBoundingBoxDescent <= box.h - 2; };
-      while (!fits() && size > 5) size--;
-      const glyphH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
-      x.fillText(word, box.x + (box.w - m.width) / 2, box.y + (box.h - glyphH) / 2 + m.actualBoundingBoxAscent);
+  // Replaces one line of text. Works in a frame rotated so the text runs level, cut to the
+  // tile, so a huge box inherited from a zoomed-out tile costs no more than its part on this
+  // tile. The old strokes are told apart from the sign by colour, grown a little to take their
+  // halo, and filled in from the sign around them, so the sign's colour and gradients stay.
+  // The new word goes on top at the old text's height and colour.
+  function replaceBox(g, raw, script, pick, rand, tileW) {
+    const W = g.canvas.width, H = g.canvas.height;
+    // level text is copied, not resampled
+    const angle = Math.abs(raw.angle) < 0.01 ? 0 : raw.angle;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    // the frame's origin, on a pixel
+    const ox = Math.round(raw.cx), oy = Math.round(raw.cy);
+    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa, bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
+    // the box hugs the strokes, so give them room
+    const pad = raw.h * 0.12, hw = raw.w / 2 + pad, hh = raw.h / 2 + pad;
+    const ctx = Math.max(4, Math.round(raw.h * 0.3));             // sign around the box, for the fill
+    // the tile's extent in the frame
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const [x, y] of [[0, 0], [W, 0], [0, H], [W, H]]) {
+      const u = (x - ox) * ca + (y - oy) * sa, v = -(x - ox) * sa + (y - oy) * ca;
+      u0 = Math.min(u0, u);
+      u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v);
+      v1 = Math.max(v1, v);
     }
-    layer.getContext('2d').drawImage(text, 0, 0);
+    const rx = Math.floor(Math.max(bu - hw - ctx, u0)), ry = Math.floor(Math.max(bv - hh - ctx, v0));
+    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx, h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
+    if (w < 4 || h < 4) return;
+    // Strokes are looked for in the detector's own box. The padding is room to grow them into.
+    const box = [
+      Math.max(0, Math.round(bu - raw.w / 2 - rx)), Math.max(0, Math.round(bv - raw.h / 2 - ry)),
+      Math.min(w, Math.round(bu + raw.w / 2 - rx)), Math.min(h, Math.round(bv + raw.h / 2 - ry)),
+    ];
+    if (box[2] - box[0] < 3 || box[3] - box[1] < 3) return;
+    // the box isn't cut by the tile edge
+    const whole = bu - hw - rx > 0 && bv - hh - ry > 0 && bu + hw - rx < w && bv + hh - ry < h;
 
-    // mask: the old text's blob (from the detector) and the new glyphs, both grown so
-    // every stroke is covered, then feathered a long way out
-    const mask = new OffscreenCanvas(tw, th), mk = mask.getContext('2d', { willReadFrequently: true });
-    const old = raw.mask;
-    const small = new OffscreenCanvas(old.cols, old.rows), sd = new ImageData(old.cols, old.rows);
-    for (let i = 0; i < old.data.length; i++) sd.data[i * 4 + 3] = old.data[i] ? 255 : 0;
-    small.getContext('2d').putImageData(sd, 0, 0);
-    mk.save(); toLevel(mk);
-    mk.filter = `blur(${Math.max(2, bh * 0.22)}px)`;
-    mk.drawImage(small, old.x, old.y, old.w, old.h);
-    mk.restore();
-    mk.filter = `blur(${Math.max(1.5, bh * 0.08)}px)`;
-    mk.drawImage(text, 0, 0);
-    mk.filter = 'none';
-    // grown blobs become solid where there's any coverage, then the edge is feathered
-    const md = mk.getImageData(0, 0, tw, th), core = new Uint8ClampedArray(md.data.length);
-    for (let i = 3; i < md.data.length; i += 4) core[i] = md.data[i] > 20 ? 255 : 0;
-    mk.putImageData(new ImageData(core, tw, th), 0, 0);
-    const soft = new OffscreenCanvas(tw, th), sf = soft.getContext('2d', { willReadFrequently: true });
-    sf.filter = `blur(${feather / 2}px)`;
-    sf.drawImage(mask, 0, 0);
-    const fd = sf.getImageData(0, 0, tw, th);
-    // ...but never past the sign: everything is confined to a soft rounded region a
-    // little larger than the box, so the fill can't spill onto whatever is behind it
-    const lim = new OffscreenCanvas(tw, th), lc = lim.getContext('2d', { willReadFrequently: true });
-    const grow = Math.max(2, bh * 0.15);
-    lc.filter = `blur(${Math.max(1.5, bh * 0.08)}px)`;
-    lc.fillStyle = '#000';
-    lc.beginPath();
-    lc.roundRect(box.x - grow, box.y - grow, box.w + 2 * grow, box.h + 2 * grow, Math.min(box.w, box.h) * 0.45);
-    lc.fill();
-    const ld = lc.getImageData(0, 0, tw, th).data;
-    for (let i = 3; i < fd.data.length; i += 4) fd.data[i] = ((core[i] ? 255 : fd.data[i]) * ld[i]) / 255;
-    sf.putImageData(fd, 0, 0);
+    const temp = new OffscreenCanvas(w, h), t = temp.getContext('2d', { willReadFrequently: true });
+    t.translate(-rx, -ry);
+    t.rotate(-angle);
+    t.translate(-ox, -oy);
+    t.drawImage(g.canvas, 0, 0);                                  // outside the tile stays transparent
+    t.setTransform(1, 0, 0, 1, 0, 0);
+    const img = t.getImageData(0, 0, w, h), d = img.data;
 
-    const l = layer.getContext('2d');
-    l.globalCompositeOperation = 'destination-in';
-    l.drawImage(soft, 0, 0);
+    // Decisions made while the whole box is on the tile are kept on the sign for every zoom.
+    const sign = raw.sign, fit = sign.fit;
+    if (fit?.skip) return;
+    const grow = 1 + Math.round(raw.h * 0.04);
+    const s = strokes(d, w, h, box, grow);
+    const skip = !s ? 'lowContrast' : !fit && watermark(raw, tileW, s.bg, s.fg) ? 'watermark' : null;
+    // clouds, brickwork, foliage, Google's marks: not text to replace
+    if (skip) {
+      stats[skip] = (stats[skip] || 0) + 1;
+      if (whole && !fit) sign.fit = { skip };
+      return;
+    }
+    const surf = surface(d, w, h, s, grow + 1);
+    const levels = pushPull(d, s.mask, w, h);
+    texture(d, s.mask, w, h, box, levels, s.grain);
+    // only the old strokes are replaced
+    for (let i = 0; i < w * h; i++) if (!s.mask[i]) d[i * 4 + 3] = 0;
+    t.putImageData(img, 0, 0);
+
+    // Letter height, position and colour are measured once the whole box is on the tile, then
+    // kept. Until then a box cut by the tile edge is sized from the detector.
+    let f = fit;
+    if (!f) {
+      const measured = whole && s.bottom > s.top;
+      f = {
+        textH: measured ? Math.max(0.35, (s.bottom - s.top + 1) / raw.h) : TEXT_OF_BOX,
+        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0, fg: s.fg,
+      };
+      if (whole) sign.fit = f;
+    }
+    const textH = f.textH * raw.h, cy = bv - ry + f.dy * raw.h;
+    // the new word on its own layer, kept to the sign's surface
+    const layer = new OffscreenCanvas(w, h), x = layer.getContext('2d', { willReadFrequently: true });
+    x.fillStyle = `rgb(${f.fg.join(',')})`;
+    if (script === GALACTIC_INDEX) {
+      const glyphH = textH / 0.72;
+      drawGalactic(x, { x: bu - rx - raw.w / 2, y: cy - glyphH / 2, w: raw.w, h: glyphH }, rand);
+    } else {
+      const stacked = raw.vertical && !JOINED.has(script);
+      sign.words[script] ||= chooseWord(textH / raw.h, raw.w / raw.h, pick, stacked);
+      writeWord(x, bu - rx, cy, textH, raw.w, sign.words[script]);
+    }
+    const ld = x.getImageData(0, 0, w, h);
+    for (let i = 0; i < w * h; i++) if (!surf[i]) ld.data[i * 4 + 3] = 0;
+    x.putImageData(ld, 0, 0);
+    t.drawImage(layer, 0, 0);
 
     g.save();
-    g.translate(raw.cx, raw.cy); g.rotate(raw.angle);
-    g.drawImage(layer, -tw / 2, -th / 2);
+    g.translate(ox, oy);
+    g.rotate(angle);
+    g.drawImage(temp, rx, ry);
     g.restore();
   }
 
-  // Fill for the box from the pixels just outside it: each pixel a distance-weighted mix
-  // of the smoothed border colours, so lighting gradients carry across; the border's own
-  // noise is added back as grain.
-  function edgeFill(t, b, bg, w, h, gap, ring, feather) {
-    const d = t.getImageData(0, 0, w, h).data;
-    const sample = (xa, xb, ya, yb) => {
-      xa = Math.max(0, xa); ya = Math.max(0, ya); xb = Math.min(w, xb); yb = Math.min(h, yb);
-      const c = [0, 0, 0]; let n = 0;
-      for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) { const i = (y * w + x) * 4; if (d[i + 3] < 200) continue; c[0] += d[i]; c[1] += d[i + 1]; c[2] += d[i + 2]; n++; }
-      if (!n) return null;
-      const v = [c[0] / n, c[1] / n, c[2] / n];
-      return Math.abs(v[0] - bg[0]) + Math.abs(v[1] - bg[1]) + Math.abs(v[2] - bg[2]) < 90 ? v : null; // a different surface: ignore
-    };
-    const smooth = arr => arr.map((_, i) => {
-      const c = [0, 0, 0]; let n = 0;
-      for (let k = -3; k <= 3; k++) { const v = arr[i + k]; if (v) { c[0] += v[0]; c[1] += v[1]; c[2] += v[2]; n++; } }
-      return n ? [c[0] / n, c[1] / n, c[2] / n] : null;
-    });
-    const L = smooth(Array.from({ length: b.h }, (_, y) => sample(b.x - gap - ring, b.x - gap, b.y + y, b.y + y + 1)));
-    const R = smooth(Array.from({ length: b.h }, (_, y) => sample(b.x + b.w + gap, b.x + b.w + gap + ring, b.y + y, b.y + y + 1)));
-    const T = smooth(Array.from({ length: b.w }, (_, x) => sample(b.x + x, b.x + x + 1, b.y - gap - ring, b.y - gap)));
-    const B = smooth(Array.from({ length: b.w }, (_, x) => sample(b.x + x, b.x + x + 1, b.y + b.h + gap, b.y + b.h + gap + ring)));
-    let dev = 0, dn = 0;
-    for (const arr of [L, R, T, B]) for (const v of arr) if (v) { dev += Math.abs(v[0] - bg[0]) + Math.abs(v[1] - bg[1]) + Math.abs(v[2] - bg[2]); dn++; }
-    const grain = dn ? Math.min(6, dev / dn / 3) : 0;
-    const fill = new ImageData(w, h), f = fill.data;
-    const pad = gap + ring + feather + 2;
-    for (let y = Math.max(0, b.y - pad); y < Math.min(h, b.y + b.h + pad); y++) {
-      for (let x = Math.max(0, b.x - pad); x < Math.min(w, b.x + b.w + pad); x++) {
-        const yy = Math.min(b.h - 1, Math.max(0, y - b.y)), xx = Math.min(b.w - 1, Math.max(0, x - b.x));
-        const parts = [[L[yy], x - b.x + gap + 1], [R[yy], b.x + b.w + gap - x], [T[xx], y - b.y + gap + 1], [B[xx], b.y + b.h + gap - y]];
-        const c = [0, 0, 0]; let ws = 0;
-        for (const [v, dist] of parts) { if (!v) continue; const wgt = 1 / Math.max(1, dist); c[0] += v[0] * wgt; c[1] += v[1] * wgt; c[2] += v[2] * wgt; ws += wgt; }
-        const i = (y * w + x) * 4, n = (Math.random() - 0.5) * 2 * grain;
-        if (ws) { f[i] = c[0] / ws + n; f[i + 1] = c[1] / ws + n; f[i + 2] = c[2] / ws + n; }
-        else { f[i] = bg[0] + n; f[i + 1] = bg[1] + n; f[i + 2] = bg[2] + n; }
-        f[i + 3] = d[i + 3] < 200 ? 0 : 255;   // nothing outside the tile
+  // Of a few seeded words, the one that best fills a box of this shape (`aspect` = width /
+  // height) at this letter height (`textH`, a fraction of the box height). Chosen once per
+  // sign so every zoom writes the same word. `stacked` is for a vertical sign: the characters
+  // go one under another, upright.
+  function chooseWord(textH, aspect, pick, stacked) {
+    measurer.font = 'bold 100px sans-serif';
+    let best = null;
+    for (let k = 0; k < 6; k++) {
+      const word = pick();
+      let fill;
+      if (stacked) fill = aspect * 0.92 / (graphemes(word).length * textH * 1.1);
+      else {
+        const m = measurer.measureText(word);
+        const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
+        fill = aspect * 0.92 / (m.width * textH / gh);
       }
+      if (!best || Math.abs(Math.log(fill)) < Math.abs(Math.log(best.fill))) best = { word, fill };
     }
-    const layer = new OffscreenCanvas(w, h);
-    layer.getContext('2d').putImageData(fill, 0, 0);
-    return layer;
+    return { word: best.word, stacked };
+  }
+  const measurer = new OffscreenCanvas(1, 1).getContext('2d');
+  // Writes a chosen word centred at (cx, cy) with letters textH px tall, stretched a little
+  // to fill boxW, shrunk if it still doesn't fit.
+  function writeWord(t, cx, cy, textH, boxW, { word, stacked }) {
+    if (stacked) {
+      const chars = graphemes(word), step = Math.min(textH * 1.1, boxW * 0.92 / chars.length);
+      t.font = `bold ${step / 1.1}px sans-serif`;
+      t.textAlign = 'center';
+      t.textBaseline = 'middle';
+      chars.forEach((ch, i) => {
+        t.save();
+        t.translate(cx + (i - (chars.length - 1) / 2) * step, cy);
+        t.rotate(-Math.PI / 2);
+        t.fillText(ch, 0, 0);
+        t.restore();
+      });
+      return;
+    }
+    t.font = 'bold 100px sans-serif';
+    let m = t.measureText(word);
+    const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
+    const width = m.width * textH / gh;
+    const sx = Math.min(1.25, Math.max(0.75, boxW * 0.92 / width));
+    let size = 100 * textH / gh;
+    if (width * sx > boxW) size *= boxW / (width * sx);
+    t.font = `bold ${size}px sans-serif`;
+    m = t.measureText(word);
+    t.save();
+    t.translate(cx, cy);
+    t.scale(sx, 1);
+    t.fillText(word, -m.width / 2, (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
+    t.restore();
   }
 
-  // Sign colour: the dominant colour inside the box. Text colour: the pixels that differ most from it.
-  function colours(g, b, W, H) {
-    const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y), x1 = Math.min(W, b.x + b.w), y1 = Math.min(H, b.y + b.h);
-    const w = x1 - x0, h = y1 - y0, d = g.getImageData(x0, y0, w, h).data;
-    const bins = new Map();                   // 32-level colour cube -> [count, r, g, b]
-    const inner = [];
-    for (let i = 0; i < d.length; i += 4) {
+  // The old text inside `box` ([x0, y0, x1, y1]). The sign colour is the commonest one and
+  // the strokes are what's far from it. Returns the strokes as a mask grown by `grow` px,
+  // their colour, the rows they span and how grainy the sign is, or null if nothing stands out.
+  function strokes(d, w, h, box, grow) {
+    const [x0, y0, x1, y1] = box;
+    const bins = new Float64Array(512 * 4);                       // 8-level colour cube: count, r, g, b
+    let n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
       if (d[i + 3] < 200) continue;
-      inner.push(i);
-      const k = (d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5);
-      const e = bins.get(k) || [0, 0, 0, 0];
-      e[0]++; e[1] += d[i]; e[2] += d[i + 1]; e[3] += d[i + 2];
-      bins.set(k, e);
+      n++;
+      const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
+      bins[k]++;
+      bins[k + 1] += d[i];
+      bins[k + 2] += d[i + 1];
+      bins[k + 3] += d[i + 2];
     }
-    if (!inner.length) return { bg: [128, 128, 128], fg: [255, 255, 255], contrast: 0 };
-    let best = null;
-    for (const e of bins.values()) if (!best || e[0] > best[0]) best = e;
-    const bg = [best[1] / best[0], best[2] / best[0], best[3] / best[0]].map(Math.round);
-    inner.sort((a, c) => dist(d, c, bg) - dist(d, a, bg));
-    const top = inner.slice(0, Math.max(1, inner.length / 8 | 0));
-    const fg = [0, 0, 0];
-    for (const i of top) { fg[0] += d[i]; fg[1] += d[i + 1]; fg[2] += d[i + 2]; }
-    for (let k = 0; k < 3; k++) fg[k] = Math.round(fg[k] / top.length);
-    const contrast = dist(d, top[Math.floor(top.length / 2)], bg); // typical text pixel vs the sign colour
-    return { bg, fg, contrast };
+    let b = 0;
+    for (let k = 4; k < bins.length; k += 4) if (bins[k] > bins[b]) b = k;
+    if (!n) return null;
+    const bg = [bins[b + 1] / bins[b], bins[b + 2] / bins[b], bins[b + 3] / bins[b]];
+    const dist = i => Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]);
+    // typical stroke pixel: the median of the eighth furthest from the sign colour
+    const hist = new Uint32Array(766);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      if (d[i + 3] >= 200) hist[dist(i) | 0]++;
+    }
+    let contrast = 765;
+    for (let v = 765, c = 0; v >= 0; v--) {
+      c += hist[v];
+      if (c >= n / 16) {
+        contrast = v;
+        break;
+      }
+    }
+    if (contrast < MIN_CONTRAST) return null;
+    const thr = Math.max(24, contrast * 0.45), strong = contrast * 0.8;
+    const core = new Uint8Array(w * h);
+    const ink = new Float64Array(512 * 4);                        // stroke colours, same cube
+    let top = h, bottom = -1, gsum = 0, gn = 0;
+    const rowMin = Math.max(2, (x1 - x0) * 0.03);
+    for (let y = y0; y < y1; y++) {
+      let row = 0;
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 200) continue;
+        const v = dist(i);
+        if (v > thr) {
+          core[y * w + x] = 1;
+          row++;
+        }
+        if (v > strong) {
+          const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
+          ink[k]++;
+          ink[k + 1] += d[i];
+          ink[k + 2] += d[i + 1];
+          ink[k + 3] += d[i + 2];
+        } else if (v <= thr && x + 1 < x1 && dist(i + 4) <= thr) {
+          // grain: brightness change between neighbouring sign pixels
+          gsum += Math.abs(d[i] + d[i + 1] + d[i + 2] - d[i + 4] - d[i + 5] - d[i + 6]) / 3;
+          gn++;
+        }
+      }
+      if (row >= rowMin) {
+        if (y < top) top = y;
+        bottom = y;
+      }
+    }
+    // text colour: the commonest stroke colour, so an outline or shading doesn't grey the fill
+    let f = 0;
+    for (let k = 4; k < ink.length; k += 4) if (ink[k] > ink[f]) f = k;
+    if (!ink[f]) return null;
+    return {
+      mask: dilate(core, w, h, grow),
+      fg: [1, 2, 3].map(j => Math.round(ink[f + j] / ink[f])),
+      bg, contrast, top, bottom,
+      grain: gn ? Math.min(6, (gsum / gn) * 0.5) : 0,
+    };
   }
-  function dist(d, i, c) { return Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]); }
+  // Google's "© 2025 Google" marks: always the same small size and shape on a tile, grey and
+  // see-through. The background is lightened by about the same fraction in every channel.
+  // Real white or grey lettering is far more opaque.
+  function watermark(raw, tileW, bg, fg) {
+    const h = raw.h / tileW, aspect = raw.w / raw.h;
+    if (raw.vertical || h < 0.018 || h > 0.045 || aspect < 3.5 || aspect > 8) return false;
+    if (Math.max(...fg) - Math.min(...fg) > 30) return false;     // coloured: not the grey mark
+    const a = [0, 1, 2].map(k => (fg[k] - bg[k]) / (256 - bg[k]));
+    return Math.min(...a) > 0.1 && Math.max(...a) < 0.55 && Math.max(...a) - Math.min(...a) < 0.1;
+  }
+  // Where the sign is: pixels of its colour or of the old text's colour. Anything else (a
+  // pole in front, the sky past the end of the sign, the side of a curved building) isn't,
+  // so the new word is cut off there as the old one was. Closed by r px so outlines and
+  // anti-aliasing between the two colours count as sign.
+  function surface(d, w, h, s, r) {
+    const near = (i, c, lim) =>
+      Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < lim;
+    const lim = Math.max(40, s.contrast * 0.45), m = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const j = i * 4;
+      if (d[j + 3] >= 200 && (near(j, s.bg, lim) || near(j, s.fg, lim))) m[i] = 1;
+    }
+    const grown = dilate(m, w, h, r);
+    for (let i = 0; i < w * h; i++) grown[i] = !grown[i];
+    const shrunk = dilate(grown, w, h, r);
+    for (let i = 0; i < w * h; i++) m[i] = !shrunk[i];
+    return m;
+  }
+  const segmenter = new Intl.Segmenter();
+  const graphemes = word => [...segmenter.segment(word)].map(g => g.segment).filter(g => g.trim());
+
+  // Grows a mask by r px in every direction (a square), with running counts along rows, then columns.
+  function dilate(m, w, h, r) {
+    const a = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      let c = 0;
+      for (let x = 0; x < Math.min(r, w); x++) c += m[y * w + x];
+      for (let x = 0; x < w; x++) {
+        if (x + r < w) c += m[y * w + x + r];
+        if (x - r - 1 >= 0) c -= m[y * w + x - r - 1];
+        a[y * w + x] = c > 0;
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let c = 0;
+      for (let y = 0; y < Math.min(r, h); y++) c += a[y * w + x];
+      for (let y = 0; y < h; y++) {
+        if (y + r < h) c += a[(y + r) * w + x];
+        if (y - r - 1 >= 0) c -= a[(y - r - 1) * w + x];
+        out[y * w + x] = c > 0;
+      }
+    }
+    return out;
+  }
+  // Fills the masked pixels of `d` from the rest (push-pull): halve the picture until every
+  // cell has something in it, averaging only known pixels, then on the way back up give each
+  // unknown pixel the smooth, bilinear value from the level above. Linear in the pixel count.
+  function pushPull(d, mask, w, h) {
+    const levels = [];
+    let c = new Float32Array(w * h * 3), wt = new Float32Array(w * h), lw = w, lh = h;
+    for (let i = 0; i < w * h; i++) {
+      if (mask[i] || d[i * 4 + 3] < 200) continue;
+      wt[i] = 1;
+      c[i * 3] = d[i * 4];
+      c[i * 3 + 1] = d[i * 4 + 1];
+      c[i * 3 + 2] = d[i * 4 + 2];
+    }
+    levels.push([c, wt, lw, lh]);
+    while (lw > 1 || lh > 1) {
+      const nw = Math.ceil(lw / 2), nh = Math.ceil(lh / 2);
+      const nc = new Float32Array(nw * nh * 3), nt = new Float32Array(nw * nh);
+      for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+        let s0 = 0, s1 = 0, s2 = 0, ws = 0;
+        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+          const sx = 2 * x + dx, sy = 2 * y + dy;
+          if (sx >= lw || sy >= lh) continue;
+          const j = sy * lw + sx, q = wt[j];
+          s0 += c[j * 3] * q;
+          s1 += c[j * 3 + 1] * q;
+          s2 += c[j * 3 + 2] * q;
+          ws += q;
+        }
+        const j = y * nw + x;
+        if (ws) {
+          nc[j * 3] = s0 / ws;
+          nc[j * 3 + 1] = s1 / ws;
+          nc[j * 3 + 2] = s2 / ws;
+        }
+        nt[j] = Math.min(1, ws);
+      }
+      c = nc;
+      wt = nt;
+      lw = nw;
+      lh = nh;
+      levels.push([c, wt, lw, lh]);
+    }
+    for (let l = levels.length - 2; l >= 0; l--) {
+      const [c, wt, lw, lh] = levels[l], [pc, , pw, ph] = levels[l + 1];
+      for (let y = 0; y < lh; y++) {
+        const fy = Math.min(ph - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+        const y0 = fy | 0, y1 = Math.min(ph - 1, y0 + 1), ty = fy - y0;
+        for (let x = 0; x < lw; x++) {
+          const j = y * lw + x, q = wt[j];
+          if (q >= 1) continue;
+          const fx = Math.min(pw - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
+          const x0 = fx | 0, x1 = Math.min(pw - 1, x0 + 1), tx = fx - x0;
+          for (let k = 0; k < 3; k++) {
+            const up = (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty)
+              + (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
+            c[j * 3 + k] = c[j * 3 + k] * q + up * (1 - q);
+          }
+          wt[j] = 1;
+        }
+      }
+    }
+    const [c0] = levels[0];
+    for (let i = 0; i < w * h; i++) {
+      if (!mask[i]) continue;
+      d[i * 4] = c0[i * 3];
+      d[i * 4 + 1] = c0[i * 3 + 1];
+      d[i * 4 + 2] = c0[i * 3 + 2];
+    }
+    return levels;
+  }
+  // The push-pull fill is smooth, which shows on paving, brick or a grainy sign. Each filled
+  // pixel gets the fine detail (pixel minus its blurred value, clamped) of the pixel mirrored
+  // across the nearest box edge, so the texture outside carries on into the box. With nothing
+  // to mirror it gets plain grain.
+  function texture(d, mask, w, h, box, levels, grain) {
+    const [x0, y0, x1, y1] = box;
+    const L = levels[Math.min(2, levels.length - 1)], f = 2 ** Math.min(2, levels.length - 1);
+    const blurred = (x, y, k) => {
+      const [c, , lw, lh] = L;
+      const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5));
+      const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5));
+      const xa = fx | 0, ya = fy | 0, xb = Math.min(lw - 1, xa + 1), yb = Math.min(lh - 1, ya + 1);
+      const tx = fx - xa, ty = fy - ya;
+      return (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty)
+        + (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty;
+    };
+    const known = (x, y) =>
+      x >= 0 && y >= 0 && x < w && y < h && !mask[y * w + x] && d[(y * w + x) * 4 + 3] >= 200;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!mask[i]) continue;
+      // mirror images across the four edges, nearest edge first
+      const m = [
+        [2 * x0 - x - 1, y, x - x0], [2 * x1 - x - 1, y, x1 - x],
+        [x, 2 * y0 - y - 1, y - y0], [x, 2 * y1 - y - 1, y1 - y],
+      ].sort((a, b) => a[2] - b[2]);
+      const src = m.find(([mx, my]) => known(mx, my));
+      if (src) {
+        const j = (src[1] * w + src[0]) * 4;
+        for (let k = 0; k < 3; k++) {
+          d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
+        }
+      } else {
+        const n = (Math.random() - 0.5) * 2 * grain;
+        d[i * 4] += n;
+        d[i * 4 + 1] += n;
+        d[i * 4 + 2] += n;
+      }
+    }
+  }
 
   // which way you're looking, for the queue order
   const panos = new Set();
@@ -565,7 +1093,11 @@
     ggs.tiles.replay();
     return {
       stop() { active = null; ggs.tiles.replay(); },
-      update(next) { const changed = next.script !== active.script; active = next; if (changed) ggs.tiles.replay(); },
+      update(next) {
+        const changed = next.script !== active.script;
+        active = next;
+        if (changed) ggs.tiles.replay();
+      },
     };
   }
   ggs.scripts['lying-signs'] = { start };

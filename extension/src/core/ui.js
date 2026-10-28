@@ -1,5 +1,5 @@
-// Floating, draggable panel in a shadow root (GeoGuessr's CSS can't reach it). Its
-// position is remembered per panel id.
+// Floating, draggable panel in a shadow root, so GeoGuessr's CSS can't reach it.
+// Its position is remembered per panel id.
 (() => {
   const ggs = globalThis.__ggs;
 
@@ -7,15 +7,18 @@
     :host { all: initial; position: fixed; left: 16px; top: 120px; z-index: 2147483000; }
     :host([hidden]) { display: none !important; }
     .panel { width: 260px; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
-             background: rgba(20, 16, 48, .9); border: 1px solid rgba(255, 255, 255, .14); border-radius: 12px;
-             box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6); backdrop-filter: blur(8px); overflow: hidden; }
-    .head { padding: 7px 12px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-            color: rgba(255, 255, 255, .6); background: rgba(255, 255, 255, .05); cursor: grab; user-select: none; }
+             background: rgba(20, 16, 48, .9); border: 1px solid rgba(255, 255, 255, .14);
+             border-radius: 12px; box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6);
+             backdrop-filter: blur(8px); overflow: hidden; }
+    .head { padding: 7px 12px; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+            text-transform: uppercase; color: rgba(255, 255, 255, .6); background: rgba(255, 255, 255, .05);
+            cursor: grab; user-select: none; }
     .head:active { cursor: grabbing; }
     .body { padding: 10px 12px 12px; }
   `;
 
-  let zTop = 2147483000; // last-used panel sits on top
+  // The last-used panel sits on top.
+  let zTop = 2147483000;
 
   function panel({ id, title, html = '', css = '', pos = { x: 16, y: 120 } }) {
     const host = document.createElement('div');
@@ -37,8 +40,10 @@
 
     const head = root.querySelector('.head');
     head.addEventListener('pointerdown', e => {
-      if (e.target.closest('button')) return;  // a button in the header (close) gets the click, not a drag
-      const r = host.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+      // A button in the header (close) gets the click, not a drag.
+      if (e.target.closest('button')) return;
+      const r = host.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
       head.setPointerCapture(e.pointerId);
       const move = ev => place(ev.clientX - dx, ev.clientY - dy);
       const up = () => {
@@ -57,7 +62,8 @@
       $: sel => root.querySelector(sel),
       show(visible) { host.hidden = !visible; },
       front,
-      clamp() { // pull the panel back on screen (e.g. after it grew)
+      // Pulls the panel back on screen, e.g. after it grew.
+      clamp() {
         const r = host.getBoundingClientRect();
         place(r.left, Math.min(r.top, innerHeight - host.offsetHeight - 8));
       },

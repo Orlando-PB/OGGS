@@ -1,0 +1,13 @@
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'blind',
+    name: 'Blind map',
+    description: 'The guess map goes blank.',
+    section: 'guessing',
+    defaultEnabled: false,
+    excludes: ['draw-guess', 'flag-guess', 'drift'],
+    options: [
+      { key: 'grid', label: 'Grid lines', type: 'checkbox', default: true },
+    ],
+  });
+})();

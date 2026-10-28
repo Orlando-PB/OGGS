@@ -1,24 +1,28 @@
-// Redrawn world (Minecraft world): each panorama is redrawn once, by server/minecraft.php,
+// Redrawn world (Minecraft world). Each panorama is redrawn once by server/minecraft.php
 // and wrapped back over the Street View sphere. ggs.redraw.script(id, style, label) makes
-// the { start } for the script.
+// the { start, prepare } for the script.
 //
 // Street View tiles arrive through ggs.tiles (core/tiles.js). The first tile of a new
-// panorama starts one generation: the panorama id and size go to SERVER, which fetches
-// the tiles from Google, stitches them and calls the image API with the key it holds.
+// panorama starts one generation. The panorama id and size go to SERVER, which fetches the
+// tiles from Google, stitches them and calls the image API with the key it holds.
 // Nothing but that id, the size, a random per-install client id and the optional code
-// leaves the page. Until the picture is back, tiles go up blue; then every tile is swapped
+// leaves the page. Tiles go up blue until the picture is back. Then every tile is swapped
 // for the matching crop, so looking around and zooming never generate again.
-// Generation waits until the panorama has stayed still for a moment, so walking through
-// several positions only redraws the one you stop at; the ones passed through get their
-// real tiles back.
+// Generation waits until the panorama has stayed still for a moment. Walking through several
+// positions only redraws the one you stop at, and the others get their real tiles back.
+// prepare(cfg) (Chaos mode) quietly generates the panorama on screen before the script is
+// switched on, so its tiles can go straight up when it is.
 (() => {
   const ggs = globalThis.__ggs;
-  const SERVER = 'https://oggs.orlandopb.com/minecraft.php'; // holds the prompts, models and daily limits
+  // Holds the prompts, models and daily limits.
+  const SERVER = 'https://oggs.orlandopb.com/minecraft.php';
 
   function clientId() {
     let id = ggs.store.get('ggs-client');
     if (!id) {
-      id = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
+      id = [...crypto.getRandomValues(new Uint8Array(12))]
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
       ggs.store.set('ggs-client', id);
     }
     return id;
@@ -26,56 +30,79 @@
   const code = () => active?.cfg.code || ggs.settings?.minecraft?.code || '';
   async function server(fields, post = false, signal) {
     const body = new URLSearchParams({ ...fields, client: clientId(), code: code() });
-    const r = post ? await fetch(SERVER, { method: 'POST', body, signal }) : await fetch(`${SERVER}?caps=1&${body}`);
+    const r = post
+      ? await fetch(SERVER, { method: 'POST', body, signal })
+      : await fetch(`${SERVER}?caps=1&${body}`);
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.error) throw new Error(j.error || `server HTTP ${r.status}`);
     return j;
   }
 
-  // Typical seconds per generation, from the last rounds; drives the loading bar.
-  const ETA_DEFAULT = { normal: 15, hq: 40 };
+  // Typical seconds per generation, from the last rounds. Drives the loading bar.
+  const ETA_DEFAULT = { normal: 15, hq: 25 };
   const eta = ggs.store.get('ggs-minecraft-eta', {});
-  const etaKey = mode => (active.style === 'minecraft' ? mode : `${active.style}/${mode}`);
+  const etaKey = (style, mode) => (style === 'minecraft' ? mode : `${style}/${mode}`);
+  const etaOf = (style, mode) => eta[etaKey(style, mode)] ?? ETA_DEFAULT[mode];
+  const keyOf = id => `${id}/${active.style}/${modeOf(active.cfg)}`;
 
-  // panoId -> Promise<{ worldWidth, tileWidth, zmax }> (metaSync: the resolved value)
+  // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
   const meta = new Map(), metaSync = new Map();
   function panoMeta(id) {
-    if (!meta.has(id)) meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
-      .then(({ data }) => {
-        const worldWidth = data.tiles.worldSize.width, tileWidth = data.tiles.tileSize.width;
-        const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
-        metaSync.set(id, m);
-        return m;
-      }));
+    if (!meta.has(id)) {
+      meta.set(id, new window.google.maps.StreetViewService().getPanorama({ pano: id })
+        .then(({ data }) => {
+          const worldWidth = data.tiles.worldSize.width;
+          const tileWidth = data.tiles.tileSize.width;
+          const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
+          metaSync.set(id, m);
+          return m;
+        }));
+    }
     return meta.get(id);
   }
   const widthAt = (m, zoom) => Math.ceil(m.worldWidth / 2 ** (m.zmax - zoom));
 
-  const gens = new Map(); // `${panoId}/${style}/${mode}` -> { promise, image, pending: [uploads waiting], error }
-  let active = null, overlay = null; // active: { id, style, label, cfg } while a script is on
+  // `${panoId}/${style}/${mode}` -> { image, pending: [uploads waiting], error, ctrl, mode, t0 }
+  const gens = new Map();
+  // active is { id, style, label, cfg } while a script is on.
+  let active = null, overlay = null;
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
   function shownPano() {
-    for (const p of panos) { try { const id = p.getPano(); if (id) return id; } catch {} }
+    for (const p of panos) {
+      try {
+        const id = p.getPano();
+        if (id) return id;
+      } catch {}
+    }
     return null;
   }
 
-  // Tiles of a panorama that has no generation yet wait here (blue on screen) until the
-  // view has stayed on one panorama for SETTLE ms; then that panorama is generated and the
-  // others get their real tiles back.
+  // Tiles of a panorama with no generation yet wait here, blue on screen, until the view has
+  // stayed on one panorama for SETTLE ms. Then that panorama is generated and the others get
+  // their real tiles back.
   const SETTLE = 800;
-  const waitingPanos = new Map(); // panoId -> [{ rec, img, tw, th }]
+  // panoId -> [{ rec, img, tw, th }]
+  const waitingPanos = new Map();
   let settleTimer = null, latestPano = null;
   function waitFor(id, entry) {
     if (!waitingPanos.has(id)) waitingPanos.set(id, []);
+    // The bar shows from the first blue tile.
+    progressStart(etaOf(active.style, modeOf(active.cfg)), keyOf(id));
     waitingPanos.get(id).push(entry);
-    if (id !== latestPano || !settleTimer) { latestPano = id; clearTimeout(settleTimer); settleTimer = setTimeout(settled, SETTLE); }
+    if (id !== latestPano || !settleTimer) {
+      latestPano = id;
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(settled, SETTLE);
+    }
   }
   function settled() {
     settleTimer = null;
     const id = shownPano() ?? latestPano;
-    // a generation still in flight for a panorama you've moved away from is cancelled
-    for (const [key, g] of gens) if (g.ctrl && !g.image && !g.error && !key.startsWith(`${id}/`)) cancel(key, g);
+    // Cancel generations still in flight for panoramas you've moved away from.
+    for (const [key, g] of gens) {
+      if (g.ctrl && !g.image && !g.error && !key.startsWith(`${id}/`)) cancel(key, g);
+    }
     for (const [pid, entries] of [...waitingPanos]) {
       waitingPanos.delete(pid);
       if (pid === id && active) {
@@ -83,16 +110,22 @@
         g.pending.push(...entries);
         if (g.image || g.error) flush(g);
       } else {
-        for (const { rec, img } of entries) { try { ggs.tiles.upload(rec, img); } catch {} }
+        for (const { rec, img } of entries) {
+          try {
+            ggs.tiles.upload(rec, img);
+          } catch {}
+        }
+        // Passed through, so never generated.
+        if (active && owner === keyOf(pid)) progressHide();
       }
     }
   }
 
   // ---- daily limits ----
-  // The server counts per client id and its log ({ normal: [ms], hq: [ms] }, rolling 24 h)
-  // is the truth; a copy is kept here so a round isn't started once today's limit is used
-  // up. Generations in flight are added on top until the server's answer (which includes
-  // them) replaces the copy, so nothing is counted twice.
+  // The server counts per client id, and its log ({ normal: [ms], hq: [ms] }, rolling 24 h)
+  // is the truth. A copy is kept here so a round isn't started once today's limit is used up.
+  // Generations in flight are added on top until the server's answer, which includes them,
+  // replaces the copy. So nothing is counted twice.
   const DAY = 24 * 3600 * 1000, QKEY = 'ggs-minecraft-quota';
   const Q = {
     tidy(log, other) {
@@ -113,13 +146,17 @@
     },
   };
   let serverLog = {}, log = {}, caps = { normal: 100, hq: 10 }, limitShownFor = null;
-  const inFlight = { normal: [], hq: [] }; // t0 of generations the server hasn't answered yet
+  // t0 of generations the server hasn't answered yet.
+  const inFlight = { normal: [], hq: [] };
   function saveLog(fromServer) {
     if (fromServer) serverLog = Q.tidy(fromServer);
     log = Q.tidy(serverLog, inFlight);
     ggs.store.set(QKEY, serverLog);
     const part = (label, x) => (x.left > 0 ? `${x.left} ${label}` : `${label}: back in ${Q.until(x.resetAt)}`);
-    if (active) ggs.status(active.id, `Today: ${part('rounds', Q.left(log, 'normal', caps.normal))} · ${part('high quality', Q.left(log, 'hq', caps.hq))}${caps.codeOk ? ' · code accepted' : ''}`);
+    if (!active) return;
+    const normal = part('rounds', Q.left(log, 'normal', caps.normal));
+    const hq = part('high quality', Q.left(log, 'hq', caps.hq));
+    ggs.status(active.id, `Today: ${normal} · ${hq}${caps.codeOk ? ' · code accepted' : ''}`);
   }
   async function loadQuota() {
     serverLog = ggs.store.get(QKEY, {});
@@ -135,12 +172,20 @@
   const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
   const allowed = mode => Q.left(log, mode, caps[mode]).left > 0;
   const stats = { uploads: 0, tiles: 0, swapped: 0 };
-  ggs.redraw = { debug: () => ({ active: active && { id: active.id, style: active.style }, tiles: ggs.tiles.count(), ...stats,
-    gens: [...gens].map(([id, g]) => ({ id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null })) }) };
+  ggs.redraw = {
+    debug: () => ({
+      active: active && { id: active.id, style: active.style },
+      tiles: ggs.tiles.count(),
+      ...stats,
+      gens: [...gens].map(([id, g]) => ({
+        id, image: !!g.image, pending: g.pending.length, error: g.error?.message ?? null,
+      })),
+    }),
+  };
 
-  // Cancelled: the request is aborted (the server may still finish and count it if it had
-  // already reached the image API), its tiles get their real pictures back, and coming
-  // back to that panorama generates it again.
+  // Aborts the request. The server may still finish and count it if it had already reached
+  // the image API. The tiles get their real pictures back, and coming back to that panorama
+  // generates it again.
   function cancel(key, g) {
     gens.delete(key);
     g.ctrl.abort();
@@ -151,21 +196,28 @@
     flush(g).then(() => ggs.tiles.repaint(key.split('/')[0]));
     ggs.debug(`${active?.style}: cancelled ${key}`);
   }
-  function generation(id) {
-    const mode = modeOf(active.cfg), style = active.style, key = `${id}/${style}/${mode}`;
+  function generation(id, style = active.style, mode = modeOf(active.cfg)) {
+    const key = `${id}/${style}/${mode}`;
     if (gens.has(key)) return gens.get(key);
     const g = { image: null, pending: [], error: null, ctrl: new AbortController(), mode, t0: Date.now() };
     gens.set(key, g);
-    if (gens.size > 20) { const k = gens.keys().next().value; gens.get(k).image?.close?.(); gens.delete(k); }
+    if (gens.size > 20) {
+      const k = gens.keys().next().value;
+      gens.get(k).image?.close?.();
+      gens.delete(k);
+    }
     const t0 = g.t0;
-    inFlight[mode].push(t0); // counted from the start; the server's log takes over once it answers
+    // Counted from the start. The server's log takes over once it answers.
+    inFlight[mode].push(t0);
     saveLog();
     (async () => {
-      const ek = etaKey(mode);
-      progressStart(eta[ek] ?? ETA_DEFAULT[mode], key);
+      const ek = etaKey(style, mode);
+      progressStart(etaOf(style, mode), key, t0);
       const m = await panoMeta(id);
-      const r = await server({ pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode, style }, true, g.ctrl.signal);
-      if (g.error) return; // cancelled while the server was working
+      const fields = { pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode, style };
+      const r = await server(fields, true, g.ctrl.signal);
+      // Cancelled while the server was working.
+      if (g.error) return;
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog(r.log);
       const img = new Image();
@@ -176,17 +228,20 @@
       await flush(g);
       await ggs.tiles.repaint(id);
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      eta[ek] = Math.round((Date.now() - t0) / 1000 * 0.7 + (eta[ek] ?? (Date.now() - t0) / 1000) * 0.3);
+      const took = (Date.now() - t0) / 1000;
+      eta[ek] = Math.round(took * 0.7 + (eta[ek] ?? took) * 0.3);
       ggs.store.set('ggs-minecraft-eta', eta);
       progressDone(false, key);
     })().catch(err => {
-      if (g.error) return; // cancelled: already tidied up
+      // Cancelled, and already tidied up.
+      if (g.error) return;
       g.error = err;
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog();
       ggs.log(`${style}: generation failed`, err);
       progressDone(true, key);
-      flush(g).then(() => ggs.tiles.repaint(id)); // put the real tiles back
+      // Puts the real tiles back.
+      flush(g).then(() => ggs.tiles.repaint(id));
     });
     return g;
   }
@@ -195,14 +250,20 @@
   function crop(g, m, x, y, zoom, tw, th) {
     const W = widthAt(m, zoom), H = Math.ceil(W / 2), img = g.image;
     const sx = (x * tw / W) * img.width, sy = (y * th / H) * img.height;
-    const sw = Math.min(img.width - sx, (tw / W) * img.width), sh = Math.min(img.height - sy, (th / H) * img.height);
+    const sw = Math.min(img.width - sx, (tw / W) * img.width);
+    const sh = Math.min(img.height - sy, (th / H) * img.height);
     const c = new OffscreenCanvas(tw, th), ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
-    if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw * sw / ((tw / W) * img.width), th * sh / ((th / H) * img.height));
+    if (sw > 0 && sh > 0) {
+      const dw = tw * sw / ((tw / W) * img.width), dh = th * sh / ((th / H) * img.height);
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+    }
     return c;
   }
 
   // ---- tile filter: what goes into WebGL for each tile ----
+  // One filter for every style, at order 0. lying-signs runs after it, sees a canvas and
+  // leaves it alone.
   ggs.tiles.filter((rec, source) => {
     stats.uploads++;
     if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
@@ -213,21 +274,25 @@
       if (limitShownFor !== id) {
         limitShownFor = id;
         const { resetAt } = Q.left(log, mode, caps[mode]);
-        notice(`${active.cfg.hq ? 'High quality' : active.label} limit reached for today · back in ${Q.until(resetAt)}`);
+        const what = active.cfg.hq ? 'High quality' : active.label;
+        notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
       }
       return img;
     }
     const tw = img.naturalWidth || 512, th = img.naturalHeight || 512;
     const g = gens.get(gkey);
-    if (!g) { waitFor(id, { rec, img, tw, th }); return blank(tw, th); }
+    if (!g) {
+      waitFor(id, { rec, img, tw, th });
+      return blank(tw, th);
+    }
     const m = metaSync.get(id);
     if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
     if (g.error) return img;
     g.pending.push({ rec, img, tw, th });
     return blank(tw, th);
-  }, 0); // one filter for every style; before lying-signs, which then sees a canvas and leaves it alone
+  }, 0);
 
-  // The picture is in (or failed): push the crops (or the real tiles) into the textures.
+  // The picture is in, or failed. Pushes the crops, or the real tiles, into the textures.
   async function flush(g) {
     const recs = g.pending.splice(0);
     if (!recs.length) return;
@@ -237,7 +302,9 @@
       try {
         const k = rec.key;
         if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
-      } catch (err) { ggs.log('redraw: re-upload failed', err); }
+      } catch (err) {
+        ggs.log('redraw: re-upload failed', err);
+      }
     }
   }
 
@@ -246,7 +313,8 @@
     if (!blankTile || blankTile.width !== w || blankTile.height !== h) {
       blankTile = new OffscreenCanvas(w, h);
       const ctx = blankTile.getContext('2d');
-      ctx.fillStyle = '#35507f'; // a calm blue while the picture is on its way (black flickered)
+      // A calm blue while the picture is on its way. Black flickered.
+      ctx.fillStyle = '#35507f';
       ctx.fillRect(0, 0, w, h);
     }
     return blankTile;
@@ -254,24 +322,30 @@
 
   // ---- loading bar: eases towards 90% over the last rounds' time, fills when tiles are swapped ----
   const CSS = `
-    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2147483000; pointer-events: none;
-            opacity: 0; transition: opacity .25s; }
+    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+            z-index: 2147483000; pointer-events: none; opacity: 0; transition: opacity .25s; }
     :host([data-on]) { opacity: 1; }
-    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85); backdrop-filter: blur(8px);
-           box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6); font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
+    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85);
+           backdrop-filter: blur(8px); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6);
+           font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
            text-align: center; letter-spacing: .02em; }
     .bar[hidden] { display: none; }
-    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
-    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19; transition: width .1s linear, background .3s; }
+    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12);
+           overflow: hidden; }
+    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19;
+            transition: width .1s linear, background .3s; }
   `;
-  // The bar belongs to the latest generation started (`owner`); an older one finishing
-  // or failing later leaves it alone.
-  let progressTimer = null, owner = null;
-  function progressStart(seconds, key) {
-    if (!overlay) return;
+  // The bar belongs to the latest generation started (`owner`). An older one finishing or
+  // failing later leaves it alone. hideTimer is the fade-out after one finished, cancelled
+  // when the next one starts.
+  let progressTimer = null, owner = null, hideTimer = null;
+  function progressStart(seconds, key, t0 = Date.now()) {
+    // Already showing this one.
+    if (!overlay || key === owner) return;
     owner = key;
     clearInterval(progressTimer);
-    const fill = overlay.fill, t0 = Date.now();
+    clearTimeout(hideTimer);
+    const fill = overlay.fill;
     overlay.text.textContent = 'Loading round…';
     overlay.bar.hidden = false;
     fill.style.width = '0%';
@@ -287,41 +361,107 @@
     owner = null;
     clearInterval(progressTimer);
     overlay.fill.style.width = '100%';
-    if (failed) { overlay.fill.style.background = '#e03131'; overlay.text.textContent = 'Could not redraw this round'; }
-    setTimeout(() => { if (overlay) delete overlay.host.dataset.on; }, failed ? 4000 : 400);
+    if (failed) {
+      overlay.fill.style.background = '#e03131';
+      overlay.text.textContent = 'Could not redraw this round';
+    }
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      if (overlay) delete overlay.host.dataset.on;
+    }, failed ? 4000 : 400);
+  }
+  function progressHide() {
+    owner = null;
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    if (overlay) delete overlay.host.dataset.on;
   }
   function notice(message) {
     if (!overlay) return;
+    owner = null;
     clearInterval(progressTimer);
+    clearTimeout(hideTimer);
     overlay.text.textContent = message;
     overlay.bar.hidden = true;
     overlay.host.dataset.on = '';
-    setTimeout(() => { if (overlay) { delete overlay.host.dataset.on; setTimeout(() => { if (overlay) overlay.bar.hidden = false; }, 300); } }, 4000);
+    hideTimer = setTimeout(() => {
+      if (!overlay) return;
+      delete overlay.host.dataset.on;
+      hideTimer = setTimeout(() => {
+        if (overlay) overlay.bar.hidden = false;
+      }, 300);
+    }, 4000);
   }
 
   function teardown() {
-    active = null; clearTimeout(settleTimer); settleTimer = null; waitingPanos.clear(); clearInterval(progressTimer);
-    overlay?.host.remove(); overlay = null; ggs.tiles.replay();
+    active = null;
+    clearTimeout(settleTimer);
+    settleTimer = null;
+    waitingPanos.clear();
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    owner = null;
+    overlay?.host.remove();
+    overlay = null;
+    ggs.tiles.replay();
+  }
+  // Starts a generation ahead for the panorama on screen. Returns { ready(), failed(), cancel() },
+  // or null when there's nothing to start (no panorama, today's limit used).
+  function prepare(style, cfg) {
+    const id = shownPano(), mode = modeOf(cfg), key = `${id}/${style}/${mode}`;
+    if (active || !id || !allowed(mode)) return null;
+    const g = generation(id, style, mode);
+    return {
+      // Moved on: it starts the usual way.
+      ready: () => !!(g.image || g.error) || shownPano() !== id,
+      // e.g. the server's limit.
+      failed: () => !!g.error,
+      cancel: () => {
+        if (!active && !g.image && !g.error && gens.get(key) === g) cancel(key, g);
+      },
+    };
   }
   function start(id, style, label, cfg) {
-    if (active) teardown(); // only one redraw script at a time
+    // Only one redraw script at a time.
+    if (active) teardown();
     active = { id, style, label, cfg };
     const host = document.createElement('div');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div><div class="bar"><div class="fill"></div></div></div>`;
+    root.innerHTML = `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>`
+      + '<div class="bar"><div class="fill"></div></div></div>';
     document.body.append(host);
-    overlay = { host, text: root.querySelector('.text'), bar: root.querySelector('.bar'), fill: root.querySelector('.fill') };
-    loadQuota().finally(() => ggs.tiles.replay());
+    overlay = {
+      host,
+      text: root.querySelector('.text'),
+      bar: root.querySelector('.bar'),
+      fill: root.querySelector('.fill'),
+    };
+    // A picture made ahead (prepare) goes up at once. One still on its way (made ahead, or
+    // left running by switching off and on) gets the bar from when it started. The tiles go
+    // through at once on the local copy of today's limits. The server checks them anyway,
+    // and its answer comes in behind.
+    const key = keyOf(shownPano()), g = gens.get(key);
+    if (g && !g.image && !g.error) progressStart(etaOf(style, g.mode), key, g.t0);
+    loadQuota();
+    ggs.tiles.replay();
     return {
-      stop() { if (active?.id === id) teardown(); },
+      stop() {
+        if (active?.id === id) teardown();
+      },
       update(c) {
         if (active?.id !== id) return;
-        const codeChanged = c.code !== active.cfg.code, hqChanged = !!c.hq !== !!active.cfg.hq;
+        const codeChanged = c.code !== active.cfg.code;
+        const hqChanged = !!c.hq !== !!active.cfg.hq;
         active.cfg = c;
         if (codeChanged) loadQuota();
         if (hqChanged) ggs.tiles.replay();
       },
     };
   }
-  Object.assign(ggs.redraw, { script: (id, style, label) => ({ start: cfg => start(id, style, label, cfg) }) });
+  Object.assign(ggs.redraw, {
+    script: (id, style, label) => ({
+      start: cfg => start(id, style, label, cfg),
+      prepare: cfg => prepare(style, cfg),
+    }),
+  });
 })();
