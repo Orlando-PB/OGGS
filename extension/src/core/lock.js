@@ -60,7 +60,7 @@
       return () => {
         a.remove();
         b.remove();
-        restore(p, st, OPTS.zoom);
+        restore(st, OPTS.zoom);
       };
     },
     pan(p) {
@@ -85,15 +85,15 @@
         b.remove();
       };
     },
-    move(p, st) {
+    move(_p, st) {
       st.raw(OPTS.move);
-      return () => restore(p, st, OPTS.move);
+      return () => restore(st, OPTS.move);
     },
   };
-  function restore(p, st, keys) {
+  function restore(st, keys) {
     const back = {};
     for (const k of Object.keys(keys)) {
-      back[k] = st.wanted[k] ?? (k === 'disableDoubleClickZoom' ? false : true);
+      back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
     }
     st.raw(back);
   }

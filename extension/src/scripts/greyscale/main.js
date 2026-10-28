@@ -77,7 +77,8 @@
       const hue = HUES[cfg.filter];
       if (!hue) return null;
       drop(pre);
-      const p = (pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) });
+      const p = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) };
+      pre = p;
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {

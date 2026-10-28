@@ -19,7 +19,7 @@
   function setAnswer(layer, [gx, gy], [ax, ay]) {
     layer.querySelector('.flag').setAttribute('transform', `translate(${ax},${ay})`);
     const line = layer.querySelector('line');
-    Object.entries({ x1: gx, y1: gy, x2: ax, y2: ay }).forEach(([k, v]) => line.setAttribute(k, v));
+    for (const [k, v] of Object.entries({ x1: gx, y1: gy, x2: ax, y2: ay })) line.setAttribute(k, v);
   }
 
   // Canvas versions of the same three, for boards drawn on a canvas.

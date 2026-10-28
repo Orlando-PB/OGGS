@@ -83,7 +83,10 @@
   setInterval(() => {
     onPath();
     const now = ggs.game.context()?.mode ?? '';
-    if (now !== mode) ggs.status('_mode', (mode = now));
+    if (now !== mode) {
+      mode = now;
+      ggs.status('_mode', mode);
+    }
   }, 500);
 
   // An empty heartbeat for the "playing now" count on the OGGS stats card (server/card.php):

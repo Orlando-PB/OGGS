@@ -5,7 +5,8 @@
 //   ggs.settingsForm(container, { settings, save(id, key, value) })
 //     -> { setStatus(id, text), update(settings) }
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
 
   const SECTIONS = {
     chaos: 'Chaos mode',
@@ -114,7 +115,7 @@
       const changes = { [key]: value, enabled };
       settings[meta.id] = { ...settings[meta.id], ...changes };
       for (const [k, v] of Object.entries(changes)) save(meta.id, k, v);
-      refreshers.forEach(fn => fn());
+      for (const fn of refreshers) fn();
     };
     const byId = Object.fromEntries(registry.map(m => [m.id, m]));
 
@@ -221,7 +222,9 @@
         return c.map((x, i) => (i === 0 ? THUMB : i === c.length - 1 ? r.width - THUMB : x));
       };
       const draw = () => {
-        labels.forEach((l, i) => l.classList.toggle('on', i === value - opt.min));
+        labels.forEach((l, i) => {
+          l.classList.toggle('on', i === value - opt.min);
+        });
         el.style.setProperty('--x', `${centres()[value - opt.min] ?? 0}px`);
         el.setAttribute('aria-valuenow', value);
       };
@@ -232,7 +235,7 @@
         draw();
         settings[meta.id] = { ...settings[meta.id], [key]: v };
         save(meta.id, key, v);
-        refreshers.forEach(fn => fn());
+        for (const fn of refreshers) fn();
       };
       const at = e => {
         const x = e.clientX - el.getBoundingClientRect().left;
@@ -270,8 +273,9 @@
         if (meta.group) groups[meta.group] = card;
         sections[meta.section ?? 'misc'].append(card);
       }
-      (parts[card.dataset.id] ??= []).push(meta);
+      parts[card.dataset.id] ??= [];
       const metasHere = parts[card.dataset.id];
+      metasHere.push(meta);
       const part = meta.group ? document.createElement('div') : card;
       part.className = meta.group ? 'part' : '';
       part.dataset.id = meta.id;
@@ -325,7 +329,7 @@
           const next = pick ?? !value();
           settings[meta.id] = { ...settings[meta.id], [key]: next };
           save(meta.id, key, next);
-          refreshers.forEach(fn => fn());
+          for (const fn of refreshers) fn();
         });
       }
       statusEls[meta.id] = part.querySelector('.status');
@@ -387,7 +391,7 @@
           } else if (key === 'enabled') {
             autoOff(meta);
           }
-          refreshers.forEach(fn => fn());
+          for (const fn of refreshers) fn();
         });
       }
     }
@@ -426,7 +430,7 @@
     });
 
     // Fills in the section counts.
-    refreshers.forEach(fn => fn());
+    for (const fn of refreshers) fn();
 
     return {
       setStatus(id, text) {
@@ -441,7 +445,7 @@
       },
       update(next) {
         settings = next;
-        refreshers.forEach(fn => fn());
+        for (const fn of refreshers) fn();
       },
     };
   };

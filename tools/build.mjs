@@ -22,7 +22,7 @@ const SERVER = 'https://oggs.orlandopb.com/';
 const RAW = 'https://raw.githubusercontent.com/Orlando-PB/OGGS/main/userscript/oggs.user.js';
 const pageScripts = manifest.content_scripts.find(c => c.world === 'MAIN').js;
 const banner = f => `\n// ${'='.repeat(20)} ${f} ${'='.repeat(Math.max(3, 60 - f.length))}\n`;
-const file = f => readFileSync(join(src, f), 'utf8').trimEnd() + '\n';
+const file = f => `${readFileSync(join(src, f), 'utf8').trimEnd()}\n`;
 const bridge = readFileSync(join(root, 'userscript', 'bridge.js'), 'utf8').replace(
   '__POPUP_CSS__',
   file('popup/popup.css').replace(/`/g, '\\`').replace(/\$\{/g, '\\${'),
@@ -91,6 +91,6 @@ const firefox = {
     gecko_android: { strict_min_version: '142.0' },
   },
 };
-writeFileSync(join(tmp, 'manifest.json'), JSON.stringify(firefox, null, 2) + '\n');
+writeFileSync(join(tmp, 'manifest.json'), `${JSON.stringify(firefox, null, 2)}\n`);
 zip(tmp, `oggs-${manifest.version}-firefox.zip`);
 rmSync(tmp, { recursive: true, force: true });

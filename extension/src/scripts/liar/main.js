@@ -11,7 +11,8 @@
     shapes(ctx) {
       const r = ctx.pick();
       const ids = Object.keys(ggs.aid.hints).sort();
-      const hint = ggs.aid.hints[(ctx.hint = ids[Math.floor(r() * ids.length)])];
+      ctx.hint = ids[Math.floor(r() * ids.length)];
+      const hint = ggs.aid.hints[ctx.hint];
       return hint.shapes({ loc: ctx.loc, rand: ctx.rand, status: ctx.status, cfg: hint.random(r) });
     },
   });

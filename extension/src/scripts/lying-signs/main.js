@@ -218,7 +218,9 @@
           g.fill();
           continue;
         }
-        line.forEach(([x, y], k) => (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10)));
+        line.forEach(([x, y], k) => {
+          (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10));
+        });
         g.stroke();
       }
     }
@@ -263,7 +265,7 @@
         return URL.createObjectURL(new Blob([bytes], { type }));
       };
       const [src, ort, mjs, wasm, model] = await Promise.all([
-        fetch(ggs.extBase + 'src/scripts/lying-signs/worker.js').then(r => r.text()),
+        fetch(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
         blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
         blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
         blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
@@ -453,7 +455,7 @@
       if (signs.size > MAX_PANOS) {
         const old = signs.keys().next().value;
         signs.delete(old);
-        for (const id of detectedTiles) if (id.startsWith(old + '/')) detectedTiles.delete(id);
+        for (const id of detectedTiles) if (id.startsWith(`${old}/`)) detectedTiles.delete(id);
       }
     }
     const list = signs.get(k.pano);
@@ -669,7 +671,7 @@
       let script = cfg.script | 0;
       if (!WORDS[script]) script = 0;
       // random: one script per panorama
-      if (script === 0) script = 1 + (hash('script:' + (key?.pano || '')) % (WORDS.length - 1));
+      if (script === 0) script = 1 + (hash(`script:${key?.pano || ''}`) % (WORDS.length - 1));
       const list = WORDS[script];
       const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
       try {

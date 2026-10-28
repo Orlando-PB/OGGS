@@ -127,7 +127,10 @@
         ]);
       const path = pts => {
         ctx.beginPath();
-        pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        pts.forEach(([x, y], i) => {
+          if (i) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+        });
         ctx.closePath();
       };
       // stroked in the same colour so neighbouring strips don't show a seam
@@ -255,18 +258,18 @@
     }
 
     active = { attach };
-    panos.forEach((_, p) => attach(p));
+    for (const p of panos.keys()) attach(p);
 
     return {
       update(next) {
         const changed = !!next.everywhere !== !!cfg.everywhere;
         cfg = next;
-        if (changed) attached.forEach((_, p) => refresh(p));
+        if (changed) for (const p of attached.keys()) refresh(p);
       },
       stop() {
         active = null;
         for (const st of attached.values()) {
-          st.listeners.forEach(l => l.remove());
+          for (const l of st.listeners) l.remove();
           st.resize.disconnect();
           st.canvas.remove();
         }

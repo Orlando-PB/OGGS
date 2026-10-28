@@ -337,7 +337,9 @@
       return ep;
     }
     const busy = id => [...running].some(ep => ep.id === id);
-    const endAll = () => [...running].forEach(ep => ep.end());
+    const endAll = () => {
+      for (const ep of [...running]) ep.end();
+    };
 
     function spinner(ep, name = pick(Object.keys(SPINNERS)), at = spot()) {
       if (!at) return;
@@ -367,7 +369,7 @@
       const names = Object.keys(SPINNERS)
         .sort(() => Math.random() - 0.5)
         .slice(0, n);
-      names.forEach(name => spinner(ep, name));
+      for (const name of names) spinner(ep, name);
     }
     function loadingBar(ep) {
       const step = BARS[pick(Object.keys(BARS))];
@@ -375,7 +377,8 @@
       let el;
       let at;
       let label = null;
-      if (roll(0.5) && (at = spot())) {
+      if (roll(0.5)) at = spot();
+      if (at) {
         const text = pick(LABELS);
         const speed = pick(['12 KB/s', '3 KB/s', '0 KB/s']);
         el = ep.show(
@@ -434,12 +437,12 @@
         ['240p', 4],
         ['480p', 1.5],
       ];
-      steps.forEach(([q, px], i) =>
+      steps.forEach(([q, px], i) => {
         ep.after((ms * i) / 3, () => {
           ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
           if (badge) badge.querySelector('b').textContent = q;
-        }),
-      );
+        });
+      });
       ep.finally(() => ggs.view.effect('lag-quality', null));
     }
     // Shared with the Street View input queue below.
@@ -520,7 +523,10 @@
         e.weight * (e.grows ? 1 + 3 * k.hard : 1),
       ]);
       let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
-      const fx = list.find(([, w]) => (r -= w) < 0)?.[0];
+      const fx = list.find(([, w]) => {
+        r -= w;
+        return r < 0;
+      })?.[0];
       if (!fx) return;
       const ms = between(...fx.ms) * k.len;
       const ep = episode(fx.id, ms);

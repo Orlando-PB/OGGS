@@ -37,7 +37,8 @@
 // localStorage ("ggs-settings") and travel by the same postMessage the extension uses.
 // src/panel.js sends saves back the same way. The boards and the text detector load from BASE.
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
   const BASE = 'https://oggs.orlandopb.com/';
   const KEY = 'ggs-settings';
   const read = () => {
@@ -236,7 +237,8 @@ section.flat .status:empty { display: none; }
 // Catalogue of scripts, shared by the settings UI and the in-page loader. Each
 // src/scripts/<id>/meta.js pushes its entry onto ggs.registry.
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
   ggs.registry ??= [];
 
   // Stored settings are { "<id>": { enabled, <option>: value } }; gaps get the defaults.
@@ -251,7 +253,8 @@ section.flat .status:empty { display: none; }
 // Shared namespace (globalThis.__ggs): settings, status lines, hotkeys and small helpers.
 // Runs in the page's own JS world, like every file after it.
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
   ggs.scripts ??= {};
   ggs.log = (...args) => console.log('%c[OGGS]', 'color:#40c057;font-weight:bold', ...args);
   ggs.debug = () => {};
@@ -298,7 +301,7 @@ section.flat .status:empty { display: none; }
     if (e.source !== window || e.data?.ggs !== 'settings') return;
     ggs.extBase = e.data.base;
     ggs.settings = e.data.settings ?? {};
-    listeners.forEach(fn => fn(ggs.settings));
+    for (const fn of listeners) fn(ggs.settings);
   });
   window.postMessage({ ggs: 'hello' }, location.origin);
 
@@ -307,7 +310,7 @@ section.flat .status:empty { display: none; }
   const statusFns = [];
   ggs.status = (id, text) => {
     status[id] = text;
-    statusFns.forEach(fn => fn(id, text));
+    for (const fn of statusFns) fn(id, text);
     window.postMessage({ ggs: 'status', id, text }, location.origin);
   };
   ggs.onStatus = fn => {
@@ -342,7 +345,7 @@ section.flat .status:empty { display: none; }
   ggs.mic.ask = () =>
     navigator.mediaDevices.getUserMedia({ audio: true }).then(
       s => {
-        s.getTracks().forEach(t => t.stop());
+        for (const t of s.getTracks()) t.stop();
         setMic('granted');
         return true;
       },
@@ -435,7 +438,8 @@ section.flat .status:empty { display: none; }
   // name -> { fns, made: [[instance, args]] }
   const hooks = {};
   function hook(name, fn) {
-    const h = (hooks[name] ??= { fns: [], made: [] });
+    hooks[name] ??= { fns: [], made: [] };
+    const h = hooks[name];
     h.fns.push(fn);
     for (const [inst, args] of h.made) fn(inst, args);
   }
@@ -444,7 +448,8 @@ section.flat .status:empty { display: none; }
     if (!gm?.Map || !gm.StreetViewPanorama) return;
     clearInterval(hookTimer);
     for (const name of ['Map', 'StreetViewPanorama']) {
-      const h = (hooks[name] ??= { fns: [], made: [] });
+      hooks[name] ??= { fns: [], made: [] };
+      const h = hooks[name];
       try {
         const Orig = gm[name];
         gm[name] = class extends Orig {
@@ -486,7 +491,9 @@ section.flat .status:empty { display: none; }
   function mapFromFiber(el) {
     let node = el;
     let key;
-    while (node && !(key = Object.keys(node).find(k => k.startsWith('__reactFiber$')))) {
+    while (node) {
+      key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
+      if (key) break;
       node = node.parentElement;
     }
     if (!node) return null;
@@ -665,7 +672,7 @@ section.flat .status:empty { display: none; }
       return () => {
         a.remove();
         b.remove();
-        restore(p, st, OPTS.zoom);
+        restore(st, OPTS.zoom);
       };
     },
     pan(p) {
@@ -690,15 +697,15 @@ section.flat .status:empty { display: none; }
         b.remove();
       };
     },
-    move(p, st) {
+    move(_p, st) {
       st.raw(OPTS.move);
-      return () => restore(p, st, OPTS.move);
+      return () => restore(st, OPTS.move);
     },
   };
-  function restore(p, st, keys) {
+  function restore(st, keys) {
     const back = {};
     for (const k of Object.keys(keys)) {
-      back[k] = st.wanted[k] ?? (k === 'disableDoubleClickZoom' ? false : true);
+      back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
     }
     st.raw(back);
   }
@@ -1424,7 +1431,8 @@ section.flat .status:empty { display: none; }
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
       if (current) current.stopped = true;
-      const run = (current = { stopped: false });
+      const run = { stopped: false };
+      current = run;
       const old = records.filter(live).reverse();
       const ready = new Set(loaded.keys());
       const first = old.filter(r => ready.has(r.url));
@@ -2384,7 +2392,7 @@ section.flat .status:empty { display: none; }
   // [lng, lat]). Fetched once, the first time a script asks.
   let geo = null;
   const loadGeo = () =>
-    (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
+    (geo ??= fetch(`${ggs.extBase}src/scripts/draw-guess/app/data/geo.json`)
       .then(r => r.json())
       .catch(err => {
         geo = null;
@@ -2496,7 +2504,7 @@ section.flat .status:empty { display: none; }
   // Each running aid's own-up, called on a guess.
   const owners = new Set();
   const guessed = () => {
-    if (ggs.maps.lastGuess()) owners.forEach(fn => fn());
+    if (ggs.maps.lastGuess()) for (const fn of owners) fn();
   };
   window.addEventListener(
     'click',
@@ -2550,7 +2558,7 @@ section.flat .status:empty { display: none; }
       };
       const make = ({ type, ...o }) => new (gm()[type])({ ...look(), ...o, map });
       const clear = list => {
-        list.forEach(o => o.setMap(null));
+        for (const o of list) o.setMap(null);
         list.length = 0;
       };
       const seed = (what, p) => seeded(`${id}|${what}|${ggs.game.context()?.token}|${p?.lat}|${p?.lng}`);
@@ -2652,7 +2660,7 @@ section.flat .status:empty { display: none; }
           listener = gm().event.addListener(map, 'click', e => {
             if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
           });
-          extras.forEach(o => o.setMap(map));
+          for (const o of extras) o.setMap(map);
           shapesKey = '';
           if (note?.textContent) ctx.note(note.textContent);
           detach?.();
@@ -2853,7 +2861,7 @@ section.flat .status:empty { display: none; }
 
   // A filter that changes nothing, last in line: it only notes when tiles arrive.
   let tileAt = 0;
-  ggs.tiles.filter((rec, source) => {
+  ggs.tiles.filter((_rec, source) => {
     tileAt = performance.now();
     return source;
   }, 99);
@@ -3317,7 +3325,8 @@ section.flat .status:empty { display: none; }
 //   ggs.settingsForm(container, { settings, save(id, key, value) })
 //     -> { setStatus(id, text), update(settings) }
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
 
   const SECTIONS = {
     chaos: 'Chaos mode',
@@ -3426,7 +3435,7 @@ section.flat .status:empty { display: none; }
       const changes = { [key]: value, enabled };
       settings[meta.id] = { ...settings[meta.id], ...changes };
       for (const [k, v] of Object.entries(changes)) save(meta.id, k, v);
-      refreshers.forEach(fn => fn());
+      for (const fn of refreshers) fn();
     };
     const byId = Object.fromEntries(registry.map(m => [m.id, m]));
 
@@ -3533,7 +3542,9 @@ section.flat .status:empty { display: none; }
         return c.map((x, i) => (i === 0 ? THUMB : i === c.length - 1 ? r.width - THUMB : x));
       };
       const draw = () => {
-        labels.forEach((l, i) => l.classList.toggle('on', i === value - opt.min));
+        labels.forEach((l, i) => {
+          l.classList.toggle('on', i === value - opt.min);
+        });
         el.style.setProperty('--x', `${centres()[value - opt.min] ?? 0}px`);
         el.setAttribute('aria-valuenow', value);
       };
@@ -3544,7 +3555,7 @@ section.flat .status:empty { display: none; }
         draw();
         settings[meta.id] = { ...settings[meta.id], [key]: v };
         save(meta.id, key, v);
-        refreshers.forEach(fn => fn());
+        for (const fn of refreshers) fn();
       };
       const at = e => {
         const x = e.clientX - el.getBoundingClientRect().left;
@@ -3582,8 +3593,9 @@ section.flat .status:empty { display: none; }
         if (meta.group) groups[meta.group] = card;
         sections[meta.section ?? 'misc'].append(card);
       }
-      (parts[card.dataset.id] ??= []).push(meta);
+      parts[card.dataset.id] ??= [];
       const metasHere = parts[card.dataset.id];
+      metasHere.push(meta);
       const part = meta.group ? document.createElement('div') : card;
       part.className = meta.group ? 'part' : '';
       part.dataset.id = meta.id;
@@ -3637,7 +3649,7 @@ section.flat .status:empty { display: none; }
           const next = pick ?? !value();
           settings[meta.id] = { ...settings[meta.id], [key]: next };
           save(meta.id, key, next);
-          refreshers.forEach(fn => fn());
+          for (const fn of refreshers) fn();
         });
       }
       statusEls[meta.id] = part.querySelector('.status');
@@ -3699,7 +3711,7 @@ section.flat .status:empty { display: none; }
           } else if (key === 'enabled') {
             autoOff(meta);
           }
-          refreshers.forEach(fn => fn());
+          for (const fn of refreshers) fn();
         });
       }
     }
@@ -3738,7 +3750,7 @@ section.flat .status:empty { display: none; }
     });
 
     // Fills in the section counts.
-    refreshers.forEach(fn => fn());
+    for (const fn of refreshers) fn();
 
     return {
       setStatus(id, text) {
@@ -3753,7 +3765,7 @@ section.flat .status:empty { display: none; }
       },
       update(next) {
         settings = next;
-        refreshers.forEach(fn => fn());
+        for (const fn of refreshers) fn();
       },
     };
   };
@@ -3785,7 +3797,7 @@ section.flat .status:empty { display: none; }
     // The popup's stylesheet, inlined by the userscript build or fetched from the extension.
     const css =
       ggs.panelCss ??
-      (await fetch(ggs.extBase + 'popup/popup.css')
+      (await fetch(`${ggs.extBase}popup/popup.css`)
         .then(r => r.text())
         .catch(() => ''));
     // Opened twice while the fetch was out.
@@ -4485,7 +4497,10 @@ section.flat .status:empty { display: none; }
   }
 
   // the last distance is kept, so switching units rewrites the note straight away
-  const show = ctx => ctx.note(format(ctx.km, (ctx.shownIn = ctx.cfg.units)));
+  const show = ctx => {
+    ctx.shownIn = ctx.cfg.units;
+    ctx.note(format(ctx.km, ctx.shownIn));
+  };
 
   // the clicked spot is kept and measured once the round's location is known
   ggs.scripts.distance = ggs.aid('distance', {
@@ -4587,7 +4602,8 @@ section.flat .status:empty { display: none; }
     shapes(ctx) {
       const r = ctx.pick();
       const ids = Object.keys(ggs.aid.hints).sort();
-      const hint = ggs.aid.hints[(ctx.hint = ids[Math.floor(r() * ids.length)])];
+      ctx.hint = ids[Math.floor(r() * ids.length)];
+      const hint = ggs.aid.hints[ctx.hint];
       return hint.shapes({ loc: ctx.loc, rand: ctx.rand, status: ctx.status, cfg: hint.random(r) });
     },
   });
@@ -4904,7 +4920,7 @@ section.flat .status:empty { display: none; }
   }
 
   // GeoJSON for the map: grey over everything but the country, its outline, and the squashed world.
-  function features(geo, code, shape, world) {
+  function features(geo, shape, world) {
     const own = shape.polys;
     const ring = r => [...r, r[0]];
     // The grey goes right round the world from the country's far side, in steps under 180
@@ -5025,7 +5041,7 @@ section.flat .status:empty { display: none; }
           const gm = ctx.gm;
           ctx.layer?.setMap(null);
           ctx.layer = new gm.Data({ map: ctx.map });
-          ctx.layer.addGeoJson(features(geo, code, s, ctx.cfg.world));
+          ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
           ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
           const b = s.bounds;
           const padLat = (b.north - b.south) * 0.6;
@@ -6003,7 +6019,8 @@ section.flat .status:empty { display: none; }
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
-      const a = (audio = new Audio());
+      const a = new Audio();
+      audio = a;
       ours.add(a);
       a.volume = volume;
       if (cors) ensureCtx();
@@ -6387,7 +6404,10 @@ section.flat .status:empty { display: none; }
         ]);
       const path = pts => {
         ctx.beginPath();
-        pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        pts.forEach(([x, y], i) => {
+          if (i) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+        });
         ctx.closePath();
       };
       // stroked in the same colour so neighbouring strips don't show a seam
@@ -6515,18 +6535,18 @@ section.flat .status:empty { display: none; }
     }
 
     active = { attach };
-    panos.forEach((_, p) => attach(p));
+    for (const p of panos.keys()) attach(p);
 
     return {
       update(next) {
         const changed = !!next.everywhere !== !!cfg.everywhere;
         cfg = next;
-        if (changed) attached.forEach((_, p) => refresh(p));
+        if (changed) for (const p of attached.keys()) refresh(p);
       },
       stop() {
         active = null;
         for (const st of attached.values()) {
-          st.listeners.forEach(l => l.remove());
+          for (const l of st.listeners) l.remove();
           st.resize.disconnect();
           st.canvas.remove();
         }
@@ -6797,7 +6817,9 @@ section.flat .status:empty { display: none; }
           g.fill();
           continue;
         }
-        line.forEach(([x, y], k) => (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10)));
+        line.forEach(([x, y], k) => {
+          (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10));
+        });
         g.stroke();
       }
     }
@@ -6842,7 +6864,7 @@ section.flat .status:empty { display: none; }
         return URL.createObjectURL(new Blob([bytes], { type }));
       };
       const [src, ort, mjs, wasm, model] = await Promise.all([
-        fetch(ggs.extBase + 'src/scripts/lying-signs/worker.js').then(r => r.text()),
+        fetch(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
         blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
         blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
         blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
@@ -7032,7 +7054,7 @@ section.flat .status:empty { display: none; }
       if (signs.size > MAX_PANOS) {
         const old = signs.keys().next().value;
         signs.delete(old);
-        for (const id of detectedTiles) if (id.startsWith(old + '/')) detectedTiles.delete(id);
+        for (const id of detectedTiles) if (id.startsWith(`${old}/`)) detectedTiles.delete(id);
       }
     }
     const list = signs.get(k.pano);
@@ -7248,7 +7270,7 @@ section.flat .status:empty { display: none; }
       let script = cfg.script | 0;
       if (!WORDS[script]) script = 0;
       // random: one script per panorama
-      if (script === 0) script = 1 + (hash('script:' + (key?.pano || '')) % (WORDS.length - 1));
+      if (script === 0) script = 1 + (hash(`script:${key?.pano || ''}`) % (WORDS.length - 1));
       const list = WORDS[script];
       const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
       try {
@@ -8160,7 +8182,8 @@ section.flat .status:empty { display: none; }
       const hue = HUES[cfg.filter];
       if (!hue) return null;
       drop(pre);
-      const p = (pre = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) });
+      const p = { hue, tiles: ggs.tiles.prerender(img => draw(img, hue)) };
+      pre = p;
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {
@@ -8660,7 +8683,9 @@ section.flat .status:empty { display: none; }
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.font = `bold ${Math.round(ch * 0.92)}px ui-monospace, Menlo, Consolas, monospace`;
-    [...RAMP].forEach((c, i) => g.fillText(c, (i + 0.5) * Math.ceil(cw), ch / 2));
+    [...RAMP].forEach((c, i) => {
+      g.fillText(c, (i + 0.5) * Math.ceil(cw), ch / 2);
+    });
     if (atlases.size > 12) atlases.clear();
     atlases.set(key, a);
     return a;
@@ -8731,7 +8756,8 @@ section.flat .status:empty { display: none; }
     prepare(cfg) {
       drop(pre);
       const tiles = ggs.tiles.prerender((img, k) => draw(img, k.z, cfg.look));
-      const p = (pre = { look: cfg.look, tiles });
+      const p = { look: cfg.look, tiles };
+      pre = p;
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {
@@ -8898,7 +8924,7 @@ section.flat .status:empty { display: none; }
         return;
       }
       if (stopped) {
-        stream.getTracks().forEach(t => t.stop());
+        for (const t of stream.getTracks()) t.stop();
         return;
       }
       audio = new AudioContext();
@@ -8917,7 +8943,7 @@ section.flat .status:empty { display: none; }
         cancelAnimationFrame(raf);
         mask.stop();
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
-        stream?.getTracks().forEach(t => t.stop());
+        if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
         status('');
       },
@@ -9283,7 +9309,9 @@ section.flat .status:empty { display: none; }
       return ep;
     }
     const busy = id => [...running].some(ep => ep.id === id);
-    const endAll = () => [...running].forEach(ep => ep.end());
+    const endAll = () => {
+      for (const ep of [...running]) ep.end();
+    };
 
     function spinner(ep, name = pick(Object.keys(SPINNERS)), at = spot()) {
       if (!at) return;
@@ -9313,7 +9341,7 @@ section.flat .status:empty { display: none; }
       const names = Object.keys(SPINNERS)
         .sort(() => Math.random() - 0.5)
         .slice(0, n);
-      names.forEach(name => spinner(ep, name));
+      for (const name of names) spinner(ep, name);
     }
     function loadingBar(ep) {
       const step = BARS[pick(Object.keys(BARS))];
@@ -9321,7 +9349,8 @@ section.flat .status:empty { display: none; }
       let el;
       let at;
       let label = null;
-      if (roll(0.5) && (at = spot())) {
+      if (roll(0.5)) at = spot();
+      if (at) {
         const text = pick(LABELS);
         const speed = pick(['12 KB/s', '3 KB/s', '0 KB/s']);
         el = ep.show(
@@ -9380,12 +9409,12 @@ section.flat .status:empty { display: none; }
         ['240p', 4],
         ['480p', 1.5],
       ];
-      steps.forEach(([q, px], i) =>
+      steps.forEach(([q, px], i) => {
         ep.after((ms * i) / 3, () => {
           ggs.view.effect('lag-quality', { filter: `blur(${px}px) saturate(.85)` });
           if (badge) badge.querySelector('b').textContent = q;
-        }),
-      );
+        });
+      });
       ep.finally(() => ggs.view.effect('lag-quality', null));
     }
     // Shared with the Street View input queue below.
@@ -9466,7 +9495,10 @@ section.flat .status:empty { display: none; }
         e.weight * (e.grows ? 1 + 3 * k.hard : 1),
       ]);
       let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
-      const fx = list.find(([, w]) => (r -= w) < 0)?.[0];
+      const fx = list.find(([, w]) => {
+        r -= w;
+        return r < 0;
+      })?.[0];
       if (!fx) return;
       const ms = between(...fx.ms) * k.len;
       const ep = episode(fx.id, ms);
@@ -9791,7 +9823,7 @@ section.flat .status:empty { display: none; }
       ['#e2e5ea', 0.72],
       ['#b0b5bf', 1],
     ];
-    stops.forEach(([c, at]) => grad.addColorStop(at, c));
+    for (const [c, at] of stops) grad.addColorStop(at, c);
     g.fillStyle = grad;
     g.fillRect(0, 0, w, h);
     g.strokeStyle = 'rgba(255,255,255,.16)';
@@ -9872,7 +9904,8 @@ section.flat .status:empty { display: none; }
     };
 
     function newRound(key) {
-      const r = (round = { key, id: null, strokes: [], used: 0 });
+      const r = { key, id: null, strokes: [], used: 0 };
+      round = r;
       drag = null;
       redraw();
       roundId().then(id => {
@@ -10177,7 +10210,7 @@ section.flat .status:empty { display: none; }
         return;
       }
       if (stopped) {
-        stream.getTracks().forEach(t => t.stop());
+        for (const t of stream.getTracks()) t.stop();
         return;
       }
       audio = new AudioContext({ latencyHint: 'interactive' });
@@ -10190,7 +10223,7 @@ section.flat .status:empty { display: none; }
       stop() {
         stopped = true;
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
-        stream?.getTracks().forEach(t => t.stop());
+        if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
         status('');
       },
@@ -10564,7 +10597,8 @@ section.flat .status:empty { display: none; }
         queue(next);
       }
       for (const [key, e] of active) {
-        const expired = e.round ? over || e.round !== round : inRound && (e.left -= dt) <= 0;
+        if (inRound && !e.round) e.left -= dt;
+        const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
         if (expired) {
           active.delete(key);
           gone = true;
@@ -10579,7 +10613,8 @@ section.flat .status:empty { display: none; }
         }
       }
       if (gone) changed();
-      if (inRound && (next -= dt) <= 0) {
+      if (inRound) next -= dt;
+      if (inRound && next <= 0) {
         next = span = EVERY[cfg.every] * 1000;
         slot();
       }
@@ -10664,7 +10699,7 @@ section.flat .status:empty { display: none; }
   const SCORES = ['[class*="rounds-status_panel"]', '[class*="live-players-count_"]', '[data-ggs-clean]'];
   const HIDDEN = 'data-ggs-clean';
 
-  const rule = sels => sels.join(',\n') + ' { display: none !important; }\n';
+  const rule = sels => `${sels.join(',\n')} { display: none !important; }\n`;
   const css = cfg =>
     (cfg.google ? rule(GOOGLE) : '') + (cfg.logo ? rule(LOGO) : '') + (cfg.progress ? rule(SCORES) : '');
 
@@ -10814,7 +10849,10 @@ section.flat .status:empty { display: none; }
   setInterval(() => {
     onPath();
     const now = ggs.game.context()?.mode ?? '';
-    if (now !== mode) ggs.status('_mode', (mode = now));
+    if (now !== mode) {
+      mode = now;
+      ggs.status('_mode', mode);
+    }
   }, 500);
 
   // An empty heartbeat for the "playing now" count on the OGGS stats card (server/card.php):

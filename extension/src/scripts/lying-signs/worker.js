@@ -36,7 +36,7 @@ async function handle(m) {
       postMessage({ type: 'boxes', id: m.id, boxes, ms: performance.now() - t0 });
     }
   } catch (err) {
-    postMessage({ type: 'error', id: m.id, message: String((err && err.stack) || err) });
+    postMessage({ type: 'error', id: m.id, message: String(err?.stack || err) });
   }
 }
 

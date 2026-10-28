@@ -23,7 +23,7 @@
     // The popup's stylesheet, inlined by the userscript build or fetched from the extension.
     const css =
       ggs.panelCss ??
-      (await fetch(ggs.extBase + 'popup/popup.css')
+      (await fetch(`${ggs.extBase}popup/popup.css`)
         .then(r => r.text())
         .catch(() => ''));
     // Opened twice while the fetch was out.

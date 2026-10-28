@@ -12,7 +12,10 @@
   }
 
   // the last distance is kept, so switching units rewrites the note straight away
-  const show = ctx => ctx.note(format(ctx.km, (ctx.shownIn = ctx.cfg.units)));
+  const show = ctx => {
+    ctx.shownIn = ctx.cfg.units;
+    ctx.note(format(ctx.km, ctx.shownIn));
+  };
 
   // the clicked spot is kept and measured once the round's location is known
   ggs.scripts.distance = ggs.aid('distance', {

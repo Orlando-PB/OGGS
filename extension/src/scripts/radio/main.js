@@ -732,7 +732,8 @@
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
-      const a = (audio = new Audio());
+      const a = new Audio();
+      audio = a;
       ours.add(a);
       a.volume = volume;
       if (cors) ensureCtx();

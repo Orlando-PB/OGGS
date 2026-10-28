@@ -33,7 +33,8 @@
   // name -> { fns, made: [[instance, args]] }
   const hooks = {};
   function hook(name, fn) {
-    const h = (hooks[name] ??= { fns: [], made: [] });
+    hooks[name] ??= { fns: [], made: [] };
+    const h = hooks[name];
     h.fns.push(fn);
     for (const [inst, args] of h.made) fn(inst, args);
   }
@@ -42,7 +43,8 @@
     if (!gm?.Map || !gm.StreetViewPanorama) return;
     clearInterval(hookTimer);
     for (const name of ['Map', 'StreetViewPanorama']) {
-      const h = (hooks[name] ??= { fns: [], made: [] });
+      hooks[name] ??= { fns: [], made: [] };
+      const h = hooks[name];
       try {
         const Orig = gm[name];
         gm[name] = class extends Orig {
@@ -84,7 +86,9 @@
   function mapFromFiber(el) {
     let node = el;
     let key;
-    while (node && !(key = Object.keys(node).find(k => k.startsWith('__reactFiber$')))) {
+    while (node) {
+      key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
+      if (key) break;
       node = node.parentElement;
     }
     if (!node) return null;

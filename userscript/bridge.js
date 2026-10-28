@@ -2,7 +2,8 @@
 // localStorage ("ggs-settings") and travel by the same postMessage the extension uses.
 // src/panel.js sends saves back the same way. The boards and the text detector load from BASE.
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
   const BASE = 'https://oggs.orlandopb.com/';
   const KEY = 'ggs-settings';
   const read = () => {

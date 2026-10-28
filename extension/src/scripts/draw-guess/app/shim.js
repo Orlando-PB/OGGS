@@ -15,7 +15,11 @@
     realFetch('data/prior.json')
       .then(r => r.json())
       .catch(() => null),
-  ]).then(([m, masks, g, prior]) => DrawMatcher.create((meta = m), new Uint8Array(masks), (geo = g), prior));
+  ]).then(([m, masks, g, prior]) => {
+    meta = m;
+    geo = g;
+    return DrawMatcher.create(meta, new Uint8Array(masks), geo, prior);
+  });
 
   // A small, fixed lift for the round's real country (matcher.js). If it's within BOOST
   // percentage points of the best match it's lifted past it, further the closer it was. Its
@@ -269,7 +273,7 @@
     if (v === 'rgba(217,72,15,.10)' || v === 'rgba(217,72,15,.16)') return `rgba(${LAND},.55)`;
     const m = v.match(/^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/);
     if (!m) return v;
-    const [r, g, b] = m.slice(1, 4).map(Number);
+    const [r, , b] = m.slice(1, 4).map(Number);
     const a = m[4];
     // morph outline
     if (a === undefined && r <= INK[0] && r >= BLUE[0]) {
@@ -411,7 +415,7 @@
       // Right or wrong, instead of "Your guess is in..." (the guess is locked in by now).
       const kicker = document.querySelector('#reveal .kicker');
       const t = matchData.target;
-      kicker.className = 'kicker' + (t ? (t.code === top.code ? ' ok' : ' bad') : '');
+      kicker.className = `kicker${t ? (t.code === top.code ? ' ok' : ' bad') : ''}`;
       kicker.innerHTML = !t
         ? 'Your guess is in…'
         : t.code === top.code
@@ -506,7 +510,7 @@
       // reveal() has just zoomed the map so the matched country sits on the drawing, so T.invert
       // takes the drawing from canvas to map coordinates.
       const d = shapes()
-        .map(r => 'M' + r.map(p => T.invert(p).join(',')).join('L') + 'Z')
+        .map(r => `M${r.map(p => T.invert(p).join(',')).join('L')}Z`)
         .join('');
       drawnLayer.innerHTML = `<path d="${d}"/>`;
       const end = baseStartMorph(targets);

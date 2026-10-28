@@ -320,7 +320,8 @@
         queue(next);
       }
       for (const [key, e] of active) {
-        const expired = e.round ? over || e.round !== round : inRound && (e.left -= dt) <= 0;
+        if (inRound && !e.round) e.left -= dt;
+        const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
         if (expired) {
           active.delete(key);
           gone = true;
@@ -335,7 +336,8 @@
         }
       }
       if (gone) changed();
-      if (inRound && (next -= dt) <= 0) {
+      if (inRound) next -= dt;
+      if (inRound && next <= 0) {
         next = span = EVERY[cfg.every] * 1000;
         slot();
       }

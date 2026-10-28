@@ -43,7 +43,9 @@
         const [r, g, b] = [1, 3, 5].map(i => parseInt(p.hex.slice(i, i + 2), 16));
         return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
       });
-      pots.forEach((c, i) => potIndex.set(c, i));
+      pots.forEach((c, i) => {
+        potIndex.set(c, i);
+      });
       const at = name => d.palette.findIndex(p => p.name === name);
       // Colours people mix up count for part of a match.
       SIM = pots.map((_, i) => pots.map((_, j) => +(i === j)));
@@ -194,7 +196,9 @@
   }
   function setColor(i) {
     color = i;
-    document.querySelectorAll('.swatch').forEach((s, j) => s.classList.toggle('on', j === i));
+    document.querySelectorAll('.swatch').forEach((s, j) => {
+      s.classList.toggle('on', j === i);
+    });
   }
   function buildPalette() {
     const swatch = (p, i) =>
@@ -495,7 +499,10 @@
         const fine = new Path2D();
         const coarse = new Path2D();
         for (const r of rings) {
-          r.forEach(([x, y], i) => (i ? fine.lineTo(x, y) : fine.moveTo(x, y)));
+          r.forEach(([x, y], i) => {
+            if (i) fine.lineTo(x, y);
+            else fine.moveTo(x, y);
+          });
           let last = r[0];
           coarse.moveTo(...last);
           for (const p of r) {

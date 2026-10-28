@@ -1,7 +1,8 @@
 // Shared namespace (globalThis.__ggs): settings, status lines, hotkeys and small helpers.
 // Runs in the page's own JS world, like every file after it.
 (() => {
-  const ggs = (globalThis.__ggs ??= {});
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
   ggs.scripts ??= {};
   ggs.log = (...args) => console.log('%c[OGGS]', 'color:#40c057;font-weight:bold', ...args);
   ggs.debug = () => {};
@@ -48,7 +49,7 @@
     if (e.source !== window || e.data?.ggs !== 'settings') return;
     ggs.extBase = e.data.base;
     ggs.settings = e.data.settings ?? {};
-    listeners.forEach(fn => fn(ggs.settings));
+    for (const fn of listeners) fn(ggs.settings);
   });
   window.postMessage({ ggs: 'hello' }, location.origin);
 
@@ -57,7 +58,7 @@
   const statusFns = [];
   ggs.status = (id, text) => {
     status[id] = text;
-    statusFns.forEach(fn => fn(id, text));
+    for (const fn of statusFns) fn(id, text);
     window.postMessage({ ggs: 'status', id, text }, location.origin);
   };
   ggs.onStatus = fn => {
@@ -92,7 +93,7 @@
   ggs.mic.ask = () =>
     navigator.mediaDevices.getUserMedia({ audio: true }).then(
       s => {
-        s.getTracks().forEach(t => t.stop());
+        for (const t of s.getTracks()) t.stop();
         setMic('granted');
         return true;
       },

@@ -282,7 +282,8 @@
     scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
       scheduled = null;
       if (current) current.stopped = true;
-      const run = (current = { stopped: false });
+      const run = { stopped: false };
+      current = run;
       const old = records.filter(live).reverse();
       const ready = new Set(loaded.keys());
       const first = old.filter(r => ready.has(r.url));

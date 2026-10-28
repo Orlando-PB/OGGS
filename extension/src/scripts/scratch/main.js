@@ -50,7 +50,7 @@
       ['#e2e5ea', 0.72],
       ['#b0b5bf', 1],
     ];
-    stops.forEach(([c, at]) => grad.addColorStop(at, c));
+    for (const [c, at] of stops) grad.addColorStop(at, c);
     g.fillStyle = grad;
     g.fillRect(0, 0, w, h);
     g.strokeStyle = 'rgba(255,255,255,.16)';
@@ -131,7 +131,8 @@
     };
 
     function newRound(key) {
-      const r = (round = { key, id: null, strokes: [], used: 0 });
+      const r = { key, id: null, strokes: [], used: 0 };
+      round = r;
       drag = null;
       redraw();
       roundId().then(id => {

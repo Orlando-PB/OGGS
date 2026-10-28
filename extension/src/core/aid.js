@@ -168,7 +168,7 @@
   // [lng, lat]). Fetched once, the first time a script asks.
   let geo = null;
   const loadGeo = () =>
-    (geo ??= fetch(ggs.extBase + 'src/scripts/draw-guess/app/data/geo.json')
+    (geo ??= fetch(`${ggs.extBase}src/scripts/draw-guess/app/data/geo.json`)
       .then(r => r.json())
       .catch(err => {
         geo = null;
@@ -280,7 +280,7 @@
   // Each running aid's own-up, called on a guess.
   const owners = new Set();
   const guessed = () => {
-    if (ggs.maps.lastGuess()) owners.forEach(fn => fn());
+    if (ggs.maps.lastGuess()) for (const fn of owners) fn();
   };
   window.addEventListener(
     'click',
@@ -334,7 +334,7 @@
       };
       const make = ({ type, ...o }) => new (gm()[type])({ ...look(), ...o, map });
       const clear = list => {
-        list.forEach(o => o.setMap(null));
+        for (const o of list) o.setMap(null);
         list.length = 0;
       };
       const seed = (what, p) => seeded(`${id}|${what}|${ggs.game.context()?.token}|${p?.lat}|${p?.lng}`);
@@ -436,7 +436,7 @@
           listener = gm().event.addListener(map, 'click', e => {
             if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
           });
-          extras.forEach(o => o.setMap(map));
+          for (const o of extras) o.setMap(map);
           shapesKey = '';
           if (note?.textContent) ctx.note(note.textContent);
           detach?.();

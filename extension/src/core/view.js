@@ -68,7 +68,7 @@
 
   // A filter that changes nothing, last in line: it only notes when tiles arrive.
   let tileAt = 0;
-  ggs.tiles.filter((rec, source) => {
+  ggs.tiles.filter((_rec, source) => {
     tileAt = performance.now();
     return source;
   }, 99);

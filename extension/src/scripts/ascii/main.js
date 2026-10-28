@@ -28,7 +28,9 @@
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.font = `bold ${Math.round(ch * 0.92)}px ui-monospace, Menlo, Consolas, monospace`;
-    [...RAMP].forEach((c, i) => g.fillText(c, (i + 0.5) * Math.ceil(cw), ch / 2));
+    [...RAMP].forEach((c, i) => {
+      g.fillText(c, (i + 0.5) * Math.ceil(cw), ch / 2);
+    });
     if (atlases.size > 12) atlases.clear();
     atlases.set(key, a);
     return a;
@@ -99,7 +101,8 @@
     prepare(cfg) {
       drop(pre);
       const tiles = ggs.tiles.prerender((img, k) => draw(img, k.z, cfg.look));
-      const p = (pre = { look: cfg.look, tiles });
+      const p = { look: cfg.look, tiles };
+      pre = p;
       return { ready: p.tiles.ready, cancel: () => drop(p) };
     },
     start(cfg) {

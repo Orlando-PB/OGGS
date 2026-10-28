@@ -117,7 +117,7 @@
         return;
       }
       if (stopped) {
-        stream.getTracks().forEach(t => t.stop());
+        for (const t of stream.getTracks()) t.stop();
         return;
       }
       audio = new AudioContext({ latencyHint: 'interactive' });
@@ -130,7 +130,7 @@
       stop() {
         stopped = true;
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
-        stream?.getTracks().forEach(t => t.stop());
+        if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
         status('');
       },

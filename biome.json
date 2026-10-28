@@ -34,8 +34,9 @@
   },
   "linter": {
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "complexity": {
+        "noImportantStyles": "off",
         "noExcessiveCognitiveComplexity": {
           "level": "warn",
           "options": {
@@ -44,6 +45,7 @@
         }
       },
       "style": {
+        "noDescendingSpecificity": "off",
         "useSingleVarDeclarator": "error"
       }
     }

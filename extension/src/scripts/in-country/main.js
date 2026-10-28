@@ -152,7 +152,7 @@
   }
 
   // GeoJSON for the map: grey over everything but the country, its outline, and the squashed world.
-  function features(geo, code, shape, world) {
+  function features(geo, shape, world) {
     const own = shape.polys;
     const ring = r => [...r, r[0]];
     // The grey goes right round the world from the country's far side, in steps under 180
@@ -273,7 +273,7 @@
           const gm = ctx.gm;
           ctx.layer?.setMap(null);
           ctx.layer = new gm.Data({ map: ctx.map });
-          ctx.layer.addGeoJson(features(geo, code, s, ctx.cfg.world));
+          ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
           ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
           const b = s.bounds;
           const padLat = (b.north - b.south) * 0.6;

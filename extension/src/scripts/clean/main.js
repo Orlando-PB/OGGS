@@ -32,7 +32,7 @@
   const SCORES = ['[class*="rounds-status_panel"]', '[class*="live-players-count_"]', '[data-ggs-clean]'];
   const HIDDEN = 'data-ggs-clean';
 
-  const rule = sels => sels.join(',\n') + ' { display: none !important; }\n';
+  const rule = sels => `${sels.join(',\n')} { display: none !important; }\n`;
   const css = cfg =>
     (cfg.google ? rule(GOOGLE) : '') + (cfg.logo ? rule(LOGO) : '') + (cfg.progress ? rule(SCORES) : '');
 

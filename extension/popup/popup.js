@@ -47,6 +47,9 @@ Promise.all(
     show(status);
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes.status) show(changes.status.newValue);
-      if (area === 'sync' && changes.settings) form.update((current = changes.settings.newValue ?? {}));
+      if (area === 'sync' && changes.settings) {
+        current = changes.settings.newValue ?? {};
+        form.update(current);
+      }
     });
   });
