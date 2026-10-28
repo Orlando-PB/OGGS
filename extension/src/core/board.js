@@ -122,23 +122,29 @@
       });
     }
 
+    // Messages up from the app, by their ggs name. Anything else goes to onMessage.
+    const handlers = {
+      ready() {
+        ready = true;
+        queued.splice(0).forEach(post);
+      },
+      height(d) {
+        boardH = d.h;
+        if (host.style.width) layout();
+      },
+      guess(d) {
+        lastGuess = place(d.guess) ? d.guess : null;
+      },
+      done() {
+        if (lastGuess) press(lastGuess, guessDelay);
+        lastGuess = null;
+      },
+    };
     const onFrameMessage = e => {
       if (!frame || e.origin !== origin || e.source !== frame.contentWindow) return;
       const d = e.data ?? {};
-      if (d.ggs === 'ready') {
-        ready = true;
-        queued.splice(0).forEach(post);
-      } else if (d.ggs === 'height') {
-        boardH = d.h;
-        if (host.style.width) layout();
-      } else if (d.ggs === 'guess') {
-        lastGuess = place(d.guess) ? d.guess : null;
-      } else if (d.ggs === 'done') {
-        if (lastGuess) press(lastGuess, guessDelay);
-        lastGuess = null;
-      } else {
-        onMessage?.(d);
-      }
+      if (Object.hasOwn(handlers, d.ggs)) handlers[d.ggs](d);
+      else onMessage?.(d);
     };
     window.addEventListener('message', onFrameMessage);
 
@@ -163,20 +169,25 @@
     function press(guess, wait, n = 1) {
       clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
-        // Already guessed or moved on.
-        if (!ggs.maps.guessMapElement()) return;
-        if (ggs.maps.submitGuess()) return;
-        if (n === 2) {
-          try {
-            ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
-          } catch {}
-        }
-        if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
+        if (tryPress(guess, n)) return;
         if (n < TRIES) return press(guess, RETRY_MS, n + 1);
         const why = ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found';
         status(`Guess placed, but couldn't press Guess (${why})`);
         ggs.maps.debug();
       }, wait);
+    }
+
+    // Try n at pressing Guess. True once there's nothing left to do: pressed, or already
+    // guessed or moved on.
+    function tryPress(guess, n) {
+      if (!ggs.maps.guessMapElement() || ggs.maps.submitGuess()) return true;
+      if (n === 2) {
+        try {
+          ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
+        } catch {}
+      }
+      if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
+      return false;
     }
 
     // The round's real location, for boards that show it once the guess is in.
@@ -192,24 +203,33 @@
         .catch(() => {});
     }
 
+    function clearBoard() {
+      post({ ggs: 'reset' });
+      clearTimeout(pressTimer);
+      placed = false;
+      status('');
+    }
+
     // A new round gets a blank board. The guess map can blink out for a moment mid-round,
     // so the board only clears after a guess or once the map was gone for a while.
+    function noteRound(inRound) {
+      if (!inRound && wasInRound) awaySince = Date.now();
+      if (inRound && !wasInRound && (placed || Date.now() - awaySince > AWAY_MS)) clearBoard();
+      wasInRound = inRound;
+    }
+
+    function follow(inRound) {
+      noteRound(inRound);
+      host.hidden = !inRound;
+      if (!inRound) return;
+      layout();
+      if (answer) sendAnswer(ggs.game.roundKey());
+    }
+
     const tick = setInterval(() => {
       const inRound = !!ggs.maps.guessMapElement();
       if (inRound && !host) create();
-      if (host) {
-        if (!inRound && wasInRound) awaySince = Date.now();
-        if (inRound && !wasInRound && (placed || Date.now() - awaySince > AWAY_MS)) {
-          post({ ggs: 'reset' });
-          clearTimeout(pressTimer);
-          placed = false;
-          status('');
-        }
-        wasInRound = inRound;
-        host.hidden = !inRound;
-        if (inRound) layout();
-        if (inRound && answer) sendAnswer(ggs.game.roundKey());
-      }
+      if (host) follow(inRound);
       onTick?.(inRound);
     }, 500);
 

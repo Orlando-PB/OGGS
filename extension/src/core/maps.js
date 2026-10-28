@@ -83,25 +83,29 @@
 
   // Walk up from the guess-map node through GeoGuessr's React fibers to a prop or hook
   // state holding the map.
-  function mapFromFiber(el) {
-    let node = el;
-    let key;
-    while (node) {
-      key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
-      if (key) break;
-      node = node.parentElement;
+  function fiberOf(el) {
+    for (let node = el; node; node = node.parentElement) {
+      const key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
+      if (key) return node[key];
     }
-    if (!node) return null;
-    for (let f = node[key], depth = 0; f && depth < 40; f = f.return, depth++) {
-      const props = f.memoizedProps;
-      if (props && typeof props === 'object') {
-        for (const v of Object.values(props)) if (isGoogleMap(v)) return v;
-      }
-      for (let h = f.memoizedState, i = 0; h && typeof h === 'object' && i < 40; h = h.next, i++) {
-        const s = h.memoizedState;
-        if (isGoogleMap(s)) return s;
-        if (isGoogleMap(s?.current)) return s.current;
-      }
+    return null;
+  }
+  function mapInProps(props) {
+    if (!props || typeof props !== 'object') return null;
+    return Object.values(props).find(v => isGoogleMap(v)) ?? null;
+  }
+  function mapInHooks(fiber) {
+    for (let h = fiber.memoizedState, i = 0; h && typeof h === 'object' && i < 40; h = h.next, i++) {
+      const s = h.memoizedState;
+      if (isGoogleMap(s)) return s;
+      if (isGoogleMap(s?.current)) return s.current;
+    }
+    return null;
+  }
+  function mapFromFiber(el) {
+    for (let f = fiberOf(el), depth = 0; f && depth < 40; f = f.return, depth++) {
+      const map = mapInProps(f.memoizedProps) ?? mapInHooks(f);
+      if (map) return map;
     }
     return null;
   }

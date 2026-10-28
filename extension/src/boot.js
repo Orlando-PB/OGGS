@@ -10,45 +10,52 @@
   let path = null;
   let check = 0;
 
+  function chaosOn() {
+    if (blocked || !ggs.chaos) return false;
+    const meta = ggs.registry.find(m => m.id === 'chaos');
+    return ggs.config(meta, settings).enabled;
+  }
+
+  // Brings one script in line with whether it's wanted: start, stop or pass on new settings.
+  function sync(meta, impl, cfg, wanted) {
+    const inst = running.get(meta.id);
+    try {
+      if (wanted && !inst) {
+        running.set(meta.id, impl.start(cfg));
+        ggs.debug(`started ${meta.id}`);
+      } else if (!wanted && inst) {
+        inst.stop();
+        running.delete(meta.id);
+        ggs.debug(`stopped ${meta.id}`);
+      } else if (inst) {
+        inst.update?.(cfg);
+      }
+    } catch (err) {
+      ggs.log(`${meta.id} failed`, err);
+    }
+  }
+
+  function implFor(meta) {
+    if (meta.ui) return null; // a settings-only entry, no script behind it
+    const impl = ggs.scripts[meta.id];
+    if (!impl) ggs.log(`no implementation loaded for "${meta.id}"`);
+    return impl;
+  }
+
+  const clashes = (meta, others) =>
+    [...others].some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+
   function apply() {
     if (!settings) return;
-    const chaos =
-      !blocked &&
-      ggs.chaos &&
-      ggs.config(
-        ggs.registry.find(m => m.id === 'chaos'),
-        settings,
-      ).enabled;
-    const live = chaos ? ggs.chaos.mix(settings) : settings;
+    const live = chaosOn() ? ggs.chaos.mix(settings) : settings;
     const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
-      if (meta.ui) continue; // a settings-only entry, no script behind it
-      const impl = ggs.scripts[meta.id];
-      if (!impl) {
-        ggs.log(`no implementation loaded for "${meta.id}"`);
-        continue;
-      }
+      const impl = implFor(meta);
+      if (!impl) continue;
       const cfg = ggs.config(meta, live);
-      const clash = [...on.values()].some(
-        m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id),
-      );
-      const wanted = cfg.enabled && !blocked && !clash;
+      const wanted = cfg.enabled && !blocked && !clashes(meta, on.values());
       if (wanted) on.set(meta.id, meta);
-      const inst = running.get(meta.id);
-      try {
-        if (wanted && !inst) {
-          running.set(meta.id, impl.start(cfg));
-          ggs.debug(`started ${meta.id}`);
-        } else if (!wanted && inst) {
-          inst.stop();
-          running.delete(meta.id);
-          ggs.debug(`stopped ${meta.id}`);
-        } else if (inst) {
-          inst.update?.(cfg);
-        }
-      } catch (err) {
-        ggs.log(`${meta.id} failed`, err);
-      }
+      sync(meta, impl, cfg, wanted);
     }
   }
 

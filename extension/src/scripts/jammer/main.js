@@ -99,6 +99,16 @@
       status(running ? '' : 'Click the page to start');
     };
 
+    // refused: it switches itself off rather than stay on doing nothing
+    function micFailed(err) {
+      if (err?.name === 'NotAllowedError') {
+        ggs.saveSetting('jammer', { enabled: false });
+        status('Microphone blocked, so it was switched off');
+      } else {
+        status('No microphone');
+      }
+    }
+
     (async () => {
       try {
         // the browser's voice clean-up would cut the delayed copy out, so it's off
@@ -106,14 +116,7 @@
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
       } catch (err) {
-        if (stopped) return;
-        // refused: it switches itself off rather than stay on doing nothing
-        if (err?.name === 'NotAllowedError') {
-          ggs.saveSetting('jammer', { enabled: false });
-          status('Microphone blocked, so it was switched off');
-        } else {
-          status('No microphone');
-        }
+        if (!stopped) micFailed(err);
         return;
       }
       if (stopped) {

@@ -36,6 +36,13 @@
     return a;
   }
 
+  // RAMP index for the pixel at i, by its brightness
+  function charIndex(px, i, paper) {
+    let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+    if (paper) light = 1 - light; // black on white: dark cells get the dense characters
+    return Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+  }
+
   const small = new OffscreenCanvas(1, 1);
   function draw(source, z, look = active.look) {
     const w = source.width || source.naturalWidth || 512;
@@ -59,10 +66,7 @@
     const sw = Math.ceil(cw);
     for (let y = 0; y < ny; y++)
       for (let x = 0; x < nx; x++) {
-        const i = (y * nx + x) * 4;
-        let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
-        if (paper) light = 1 - light; // black on white: dark cells get the dense characters
-        const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+        const c = charIndex(px, (y * nx + x) * 4, paper);
         if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
       }
     g.globalCompositeOperation = 'source-in';

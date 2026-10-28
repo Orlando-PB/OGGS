@@ -91,18 +91,20 @@
   // The nearest row with some land, a little inside the country's top and bottom.
   function rowAt(shape, t) {
     const i = Math.round(Math.min(1, Math.max(0, t)) * (ROWS - 1));
-    if (!shape.rowCache.has(i)) {
-      let r = null;
-      for (let d = 0; d < ROWS && !r?.length; d++) {
-        for (const k of [i - d, i + d]) {
-          if (k < 0 || k >= ROWS || r?.length) continue;
-          r = row(shape, shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0));
-          r.y = shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0);
-        }
-      }
-      shape.rowCache.set(i, r);
-    }
+    if (!shape.rowCache.has(i)) shape.rowCache.set(i, nearestRow(shape, i));
     return shape.rowCache.get(i);
+  }
+  function nearestRow(shape, i) {
+    let r = null;
+    for (let d = 0; d < ROWS && !r?.length; d++) {
+      for (const k of [i - d, i + d]) {
+        if (k < 0 || k >= ROWS || r?.length) continue;
+        const y = shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0);
+        r = row(shape, y);
+        r.y = y;
+      }
+    }
+    return r;
   }
 
   const wrap = lng => ((lng + 540) % 360) - 180;

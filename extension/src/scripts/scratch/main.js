@@ -200,6 +200,22 @@
       if (pano) Object.assign(pano.style, saved);
       pano = null;
     }
+    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
+    function pin(el) {
+      unpin();
+      el.append(host);
+      pano = el;
+      saved = { isolation: el.style.isolation, position: el.style.position };
+      el.style.isolation = 'isolate';
+      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+    }
+    const resized = () => {
+      const dpr = devicePixelRatio || 1;
+      return (
+        canvas.width !== Math.round(host.clientWidth * dpr) ||
+        canvas.height !== Math.round(host.clientHeight * dpr)
+      );
+    };
     function tick() {
       const el = ggs.maps.guessMapElement() ? ggs.view.panoElement() : null;
       if (!el) {
@@ -209,20 +225,8 @@
       }
       const key = ggs.game.roundKey();
       if (round?.key !== key) newRound(key);
-      if (host.parentElement !== el) {
-        unpin();
-        el.append(host);
-        // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
-        pano = el;
-        saved = { isolation: el.style.isolation, position: el.style.position };
-        el.style.isolation = 'isolate';
-        if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
-      }
-      if (
-        canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
-        canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))
-      )
-        redraw();
+      if (host.parentElement !== el) pin(el);
+      if (resized()) redraw();
     }
     const timer = setInterval(tick, 150);
     tick();

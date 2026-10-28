@@ -488,25 +488,29 @@ section.flat .status:empty { display: none; }
 
   // Walk up from the guess-map node through GeoGuessr's React fibers to a prop or hook
   // state holding the map.
-  function mapFromFiber(el) {
-    let node = el;
-    let key;
-    while (node) {
-      key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
-      if (key) break;
-      node = node.parentElement;
+  function fiberOf(el) {
+    for (let node = el; node; node = node.parentElement) {
+      const key = Object.keys(node).find(k => k.startsWith('__reactFiber$'));
+      if (key) return node[key];
     }
-    if (!node) return null;
-    for (let f = node[key], depth = 0; f && depth < 40; f = f.return, depth++) {
-      const props = f.memoizedProps;
-      if (props && typeof props === 'object') {
-        for (const v of Object.values(props)) if (isGoogleMap(v)) return v;
-      }
-      for (let h = f.memoizedState, i = 0; h && typeof h === 'object' && i < 40; h = h.next, i++) {
-        const s = h.memoizedState;
-        if (isGoogleMap(s)) return s;
-        if (isGoogleMap(s?.current)) return s.current;
-      }
+    return null;
+  }
+  function mapInProps(props) {
+    if (!props || typeof props !== 'object') return null;
+    return Object.values(props).find(v => isGoogleMap(v)) ?? null;
+  }
+  function mapInHooks(fiber) {
+    for (let h = fiber.memoizedState, i = 0; h && typeof h === 'object' && i < 40; h = h.next, i++) {
+      const s = h.memoizedState;
+      if (isGoogleMap(s)) return s;
+      if (isGoogleMap(s?.current)) return s.current;
+    }
+    return null;
+  }
+  function mapFromFiber(el) {
+    for (let f = fiberOf(el), depth = 0; f && depth < 40; f = f.return, depth++) {
+      const map = mapInProps(f.memoizedProps) ?? mapInHooks(f);
+      if (map) return map;
     }
     return null;
   }
@@ -709,21 +713,24 @@ section.flat .status:empty { display: none; }
     }
     st.raw(back);
   }
+  function hold(p, st, kind) {
+    try {
+      st.held[kind] = locks[kind](p, st);
+    } catch (err) {
+      ggs.log(`lock ${kind} failed`, err);
+    }
+  }
+  function release(st, kind) {
+    try {
+      st.held[kind]();
+    } catch {}
+    delete st.held[kind];
+  }
   function apply(p) {
     const st = panos.get(p);
     for (const kind of Object.keys(locks)) {
-      if (on(kind) && !st.held[kind]) {
-        try {
-          st.held[kind] = locks[kind](p, st);
-        } catch (err) {
-          ggs.log(`lock ${kind} failed`, err);
-        }
-      } else if (!on(kind) && st.held[kind]) {
-        try {
-          st.held[kind]();
-        } catch {}
-        delete st.held[kind];
-      }
+      if (on(kind) && !st.held[kind]) hold(p, st, kind);
+      else if (!on(kind) && st.held[kind]) release(st, kind);
     }
   }
 
@@ -960,44 +967,55 @@ section.flat .status:empty { display: none; }
   async function lookupRound(key) {
     const ctx = context();
     if (!ctx) return noRound('not in a game');
-    if (ctx.mode === 'standard') {
-      const j = await fetchGame(ctx);
-      const n = j?.round ?? j?.rounds?.length;
-      const cur = j?.rounds?.[n - 1];
-      if (!(n > 0)) return noRound('standard game data has no current round');
-      return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
-    }
+    if (ctx.mode === 'standard') return standardRound(ctx);
     if (ctx.mode !== 'duels') return noRound(`${ctx.mode} games aren't supported`);
     if ((await competitive()).competitive) return noRound('competitive game');
-    // The new round can reach the game data a few seconds after the guess map appears.
-    // Until then currentRoundNumber still names the round just played. So a round that has
-    // ended, or was already handed out for an earlier round, is waited on. After DUEL_TRIES
-    // it's taken anyway, since the roundKey can move on without a new round (e.g. a reload).
-    let last = null;
+    return duelRound(ctx, key);
+  }
+
+  async function standardRound(ctx) {
+    const j = await fetchGame(ctx);
+    const n = j?.round ?? j?.rounds?.length;
+    const cur = j?.rounds?.[n - 1];
+    if (!(n > 0)) return noRound('standard game data has no current round');
+    return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+  }
+
+  // The new round can reach the game data a few seconds after the guess map appears.
+  // Until then currentRoundNumber still names the round just played. So a round that has
+  // ended, or was already handed out for an earlier round, is waited on. After DUEL_TRIES
+  // it's taken anyway, since the roundKey can move on without a new round (e.g. a reload).
+  async function duelRound(ctx, key) {
+    let found = { why: 'no duel data' };
     for (let tries = 0; tries < DUEL_TRIES; tries++) {
       if (tries) await new Promise(r => setTimeout(r, 1000));
       if (roundKey() !== key) return noRound('moved on while waiting');
-      const j = await fetchGame(ctx);
-      const n = j?.currentRoundNumber;
-      const cur = j?.rounds?.find(r => r.roundNumber === n);
-      const p = cur?.panorama ?? cur;
-      if (!(n > 0) || typeof p?.lat !== 'number') {
-        last = `duel data has no location for round ${n}`;
-        continue;
-      }
-      const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
-      const seen = duelRounds.get(ctx.token);
-      last = { n, total: null, lat: p.lat, lng: p.lng };
-      if (ended || (seen && seen.n >= n && seen.key !== key)) {
-        if (tries === DUEL_TRIES - 1) ggs.log(`duel round ${n} still looks old, using it anyway`);
-        continue;
-      }
-      break;
+      found = duelRoundIn(await fetchGame(ctx), ctx.token, key);
+      if (found.round && !found.stale) break;
     }
-    if (typeof last === 'string' || !last) return noRound(last ?? 'no duel data');
-    duelRounds.set(ctx.token, { n: last.n, key });
-    return last;
+    return handOut(found, ctx.token, key);
   }
+
+  function handOut({ round, why, stale }, token, key) {
+    if (!round) return noRound(why);
+    if (stale) ggs.log(`duel round ${round.n} still looks old, using it anyway`);
+    duelRounds.set(token, { n: round.n, key });
+    return round;
+  }
+
+  // The duel's current round in its game data: { round, stale } or { why } when it has no
+  // location. stale means it has ended or was handed out for an earlier roundKey.
+  function duelRoundIn(j, token, key) {
+    const n = j?.currentRoundNumber;
+    const cur = j?.rounds?.find(r => r.roundNumber === n);
+    const p = cur?.panorama ?? cur;
+    if (!(n > 0) || typeof p?.lat !== 'number') return { why: `duel data has no location for round ${n}` };
+    const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
+    const seen = duelRounds.get(token);
+    const stale = ended || (seen && seen.n >= n && seen.key !== key);
+    return { round: { n, total: null, lat: p.lat, lng: p.lng }, stale };
+  }
+
   const roundLocation = () =>
     round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
 
@@ -1017,6 +1035,37 @@ section.flat .status:empty { display: none; }
     } catch {}
   }
 
+  function readLobby() {
+    try {
+      return sessionStorage.getItem(LOBBY_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  // The rated and party signs in the game data, wherever GeoGuessr has put them.
+  function gameSigns(j) {
+    const o = j?.options ?? {};
+    const types = [j?.gameContext?.type, o.gameContext?.type];
+    const flags = [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked];
+    const ids = [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId];
+    return {
+      rated: flags.some(v => v === true) || types.some(t => /rank|competitive|matchmak/i.test(t ?? '')),
+      party: ids.some(Boolean) || types.some(t => /party|private|friend/i.test(t ?? '')),
+    };
+  }
+
+  async function checkGame(ctx) {
+    const lobby = readLobby();
+    const j = await fetchGame(ctx).catch(() => null);
+    const { rated, party } = gameSigns(j);
+    const why =
+      `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
+      (j ? '' : ' (no game data)');
+    if (rated) return { competitive: true, why };
+    return { competitive: !(party || lobby === 'party'), why };
+  }
+
   // token -> Promise<{ competitive, why }>
   const guardCache = new Map();
   function competitive() {
@@ -1028,31 +1077,7 @@ section.flat .status:empty { display: none; }
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token))
-      guardCache.set(
-        ctx.token,
-        (async () => {
-          let lobby = null;
-          try {
-            lobby = sessionStorage.getItem(LOBBY_KEY);
-          } catch {}
-          const j = await fetchGame(ctx).catch(() => null);
-          const o = j?.options ?? {};
-          const types = [j?.gameContext?.type, o.gameContext?.type];
-          const rated =
-            [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked].some(
-              v => v === true,
-            ) || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
-          const party =
-            [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId].some(Boolean) ||
-            types.some(t => /party|private|friend/i.test(t ?? ''));
-          const why =
-            `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
-            (j ? '' : ' (no game data)');
-          if (rated) return { competitive: true, why };
-          return { competitive: !(party || lobby === 'party'), why };
-        })(),
-      );
+    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, checkGame(ctx));
     return guardCache.get(ctx.token);
   }
 
@@ -1261,25 +1286,26 @@ section.flat .status:empty { display: none; }
     return true;
   }
 
+  function wrapUpload(P, name) {
+    const fn = P[name];
+    if (!orig.has(P)) orig.set(P, {});
+    orig.get(P)[name] ??= fn;
+    P[name] = function (...a) {
+      const i = a.length - 1;
+      if (a[i] instanceof HTMLImageElement) {
+        try {
+          const rec = makeRecord(this, name, a.slice(0, i), a[i]);
+          if (rec) a[i] = handle(rec);
+        } catch (err) {
+          ggs.log('tiles: hook failed', err);
+        }
+      }
+      return fn.apply(this, a);
+    };
+  }
   function install() {
     for (const P of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
-      for (const name of ['texImage2D', 'texSubImage2D']) {
-        const fn = P[name];
-        if (!orig.has(P)) orig.set(P, {});
-        orig.get(P)[name] ??= fn;
-        P[name] = function (...a) {
-          const i = a.length - 1;
-          if (a[i] instanceof HTMLImageElement) {
-            try {
-              const rec = makeRecord(this, name, a.slice(0, i), a[i]);
-              if (rec) a[i] = handle(rec);
-            } catch (err) {
-              ggs.log('tiles: hook failed', err);
-            }
-          }
-          return fn.apply(this, a);
-        };
-      }
+      for (const name of ['texImage2D', 'texSubImage2D']) wrapUpload(P, name);
       const del = P.deleteTexture;
       P.deleteTexture = function (tex) {
         if (tex) deleted.add(tex);
@@ -1306,6 +1332,17 @@ section.flat .status:empty { display: none; }
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
 
   async function repaint(panoId) {
+    const nudged = nudge(panoId);
+    await new Promise(r => requestAnimationFrame(r));
+    for (const [p, pov] of nudged) {
+      try {
+        p.setPov(pov);
+      } catch {}
+    }
+    moveMouse();
+  }
+  // Turns each panorama (or only panoId) a touch. Returns [panorama, its pov before].
+  function nudge(panoId) {
     const nudged = [];
     for (const p of panos) {
       try {
@@ -1315,12 +1352,9 @@ section.flat .status:empty { display: none; }
         nudged.push([p, pov]);
       } catch {}
     }
-    await new Promise(r => requestAnimationFrame(r));
-    for (const [p, pov] of nudged) {
-      try {
-        p.setPov(pov);
-      } catch {}
-    }
+    return nudged;
+  }
+  function moveMouse() {
     for (const c of document.querySelectorAll('canvas')) {
       const r = c.getBoundingClientRect();
       // The guess map and our own canvases are small or hidden.
@@ -1375,36 +1409,37 @@ section.flat .status:empty { display: none; }
   // prerender(fn(img, key) -> source) -> { ready(), get(url), cancel() }
   function prerender(fn) {
     const out = new Map();
-    let stopped = false;
-    let done = false;
-    (async () => {
-      const list = onScreen();
-      // Fetched together, drawn one by one.
-      const imgs = list.map(load);
-      let slice = await idle();
-      for (let i = 0; i < list.length; i++) {
-        const img = await imgs[i];
-        if (stopped) return;
-        if (img) {
-          try {
-            out.set(list[i].url, fn(img, list[i].key));
-          } catch (err) {
-            ggs.log('tiles: prerender failed', err);
-          }
-        }
-        // Keeps the game smooth.
-        if (slice.timeRemaining() < 3) slice = await idle();
-      }
-      done = true;
-    })();
+    const run = { stopped: false, done: false };
+    renderAll(fn, out, run);
     return {
-      ready: () => done,
+      ready: () => run.done,
       get: url => out.get(url),
       cancel() {
-        stopped = true;
+        run.stopped = true;
         out.clear();
       },
     };
+  }
+  async function renderAll(fn, out, run) {
+    const list = onScreen();
+    // Fetched together, drawn one by one.
+    const imgs = list.map(load);
+    let slice = await idle();
+    for (let i = 0; i < list.length; i++) {
+      const img = await imgs[i];
+      if (run.stopped) return;
+      if (img) renderOne(fn, out, list[i], img);
+      // Keeps the game smooth.
+      if (slice.timeRemaining() < 3) slice = await idle();
+    }
+    run.done = true;
+  }
+  function renderOne(fn, out, r, img) {
+    try {
+      out.set(r.url, fn(img, r.key));
+    } catch (err) {
+      ggs.log('tiles: prerender failed', err);
+    }
   }
 
   // Calls made in the same tick are merged into one replay. Tiles already loaded go up first,
@@ -1427,63 +1462,190 @@ section.flat .status:empty { display: none; }
     });
   };
   function replay() {
-    if (scheduled) return scheduled;
-    scheduled = new Promise(r => setTimeout(r, 0)).then(async () => {
-      scheduled = null;
-      if (current) current.stopped = true;
-      const run = { stopped: false };
-      current = run;
-      const old = records.filter(live).reverse();
-      const ready = new Set(loaded.keys());
-      const first = old.filter(r => ready.has(r.url));
-      const rest = old.filter(r => !ready.has(r.url));
-      // Fetched together, put up one by one.
-      rest.forEach(load);
-      let n = 0;
-      let spent = 0;
-      let pixels = 0;
-      let shown = performance.now();
-      for (const [i, r] of [...first, ...rest].entries()) {
-        // The loaded ones are up. The rest may take a while.
-        if (i === first.length && n) showSoFar();
-        const img = await load(r);
-        if (run.stopped) return n;
-        // Gone, or the game put something newer there.
-        if (!img || !live(r)) continue;
-        const t = performance.now();
-        try {
-          // handle() calls remember(), which marks r stale.
-          const rec = { ...r, img, stale: false };
-          const source = handle(rec);
-          if (upload(rec, source)) {
-            n++;
-            // Tiny tiles cost something too.
-            pixels += Math.max(PIXELS / 64, (source.width || 512) * (source.height || 512));
-          }
-        } catch (err) {
-          ggs.log('tiles: replay failed', err);
-        }
-        spent += performance.now() - t;
-        if (spent < SLICE && pixels < PIXELS) continue;
-        if (performance.now() - shown > 150) {
-          shown = performance.now();
-          showSoFar();
-        }
-        await nextFrame();
-        spent = pixels = 0;
-        if (run.stopped) return n;
-      }
-      current = null;
-      loaded.clear();
-      if (n) ggs.debug(`tiles: replayed ${n} of ${old.length}`);
-      await painting;
-      await repaint();
-      return n;
-    });
+    scheduled ??= new Promise(r => setTimeout(r, 0)).then(runReplay);
     return scheduled;
+  }
+  async function runReplay() {
+    scheduled = null;
+    if (current) current.stopped = true;
+    const run = { stopped: false };
+    current = run;
+    const old = records.filter(live).reverse();
+    const pace = { n: 0, spent: 0, pixels: 0, shown: performance.now() };
+    if (!(await putAllBack(old, run, pace))) return pace.n;
+    current = null;
+    loaded.clear();
+    if (pace.n) ggs.debug(`tiles: replayed ${pace.n} of ${old.length}`);
+    await painting;
+    await repaint();
+    return pace.n;
+  }
+  // Tiles already loaded first. The rest are fetched together, and put up one by one.
+  function replayOrder(old) {
+    const ready = new Set(loaded.keys());
+    const first = old.filter(r => ready.has(r.url));
+    const rest = old.filter(r => !ready.has(r.url));
+    rest.forEach(load);
+    return { list: [...first, ...rest], loadedCount: first.length };
+  }
+  // False when a newer replay stopped it partway.
+  async function putAllBack(old, run, pace) {
+    const { list, loadedCount } = replayOrder(old);
+    for (const [i, r] of list.entries()) {
+      // The loaded ones are up. The rest may take a while.
+      if (i === loadedCount && pace.n) showSoFar();
+      const img = await load(r);
+      if (run.stopped) return false;
+      putBack(r, img, pace);
+      await breathe(pace);
+      if (run.stopped) return false;
+    }
+    return true;
+  }
+  // One remembered tile through the filters and up again, counted in pace.
+  function putBack(r, img, pace) {
+    // Gone, or the game put something newer there.
+    if (!img || !live(r)) return;
+    const t = performance.now();
+    try {
+      // handle() calls remember(), which marks r stale.
+      const rec = { ...r, img, stale: false };
+      const source = handle(rec);
+      if (upload(rec, source)) {
+        pace.n++;
+        // Tiny tiles cost something too.
+        pace.pixels += Math.max(PIXELS / 64, (source.width || 512) * (source.height || 512));
+      }
+    } catch (err) {
+      ggs.log('tiles: replay failed', err);
+    }
+    pace.spent += performance.now() - t;
+  }
+  // Once this frame's budget is spent, waits for the next frame, showing what's done every
+  // 150 ms or so.
+  async function breathe(pace) {
+    if (pace.spent < SLICE && pace.pixels < PIXELS) return;
+    if (performance.now() - pace.shown > 150) {
+      pace.shown = performance.now();
+      showSoFar();
+    }
+    await nextFrame();
+    pace.spent = pace.pixels = 0;
   }
 
   ggs.tiles = { filter, upload, live, replay, repaint, preload, prerender, count: () => records.length };
+})();
+
+// ==================== src/core/redraw-bar.js ======================================
+// The loading bar for the redrawn world (core/redraw.js), in the middle of the screen. It eases
+// towards 90% over the last rounds' time and fills when the tiles are swapped.
+//   ggs.redrawBar.show() puts it on the page (hidden until a start or notice), remove() takes it off.
+//   start(seconds, key, t0): a generation started. Already showing this key does nothing.
+//   done(failed, key): that generation finished. Another key's bar is left alone.
+//   hide(), notice(message) (a message with no bar for a few seconds), owner() -> key | null.
+(() => {
+  const ggs = globalThis.__ggs;
+  const CSS = `
+    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+            z-index: 2147483000; pointer-events: none; opacity: 0; transition: opacity .25s; }
+    :host([data-on]) { opacity: 1; }
+    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85);
+           backdrop-filter: blur(8px); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6);
+           font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
+           text-align: center; letter-spacing: .02em; }
+    .bar[hidden] { display: none; }
+    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12);
+           overflow: hidden; }
+    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19;
+            transition: width .1s linear, background .3s; }
+  `;
+  let overlay = null;
+  // The bar belongs to the latest generation started (`owner`). An older one finishing or
+  // failing later leaves it alone. hideTimer is the fade-out after one finished, cancelled
+  // when the next one starts.
+  let progressTimer = null;
+  let owner = null;
+  let hideTimer = null;
+
+  function show() {
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML =
+      `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
+      '<div class="bar"><div class="fill"></div></div></div>';
+    document.body.append(host);
+    overlay = {
+      host,
+      text: root.querySelector('.text'),
+      bar: root.querySelector('.bar'),
+      fill: root.querySelector('.fill'),
+    };
+  }
+  function remove() {
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    owner = null;
+    overlay?.host.remove();
+    overlay = null;
+  }
+  function start(seconds, key, t0 = Date.now()) {
+    // Already showing this one.
+    if (!overlay || key === owner) return;
+    owner = key;
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    const fill = overlay.fill;
+    overlay.text.textContent = 'Loading round…';
+    overlay.bar.hidden = false;
+    fill.style.width = '0%';
+    fill.style.background = '';
+    overlay.host.dataset.on = '';
+    progressTimer = setInterval(() => {
+      const x = (Date.now() - t0) / 1000 / seconds;
+      fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
+    }, 100);
+  }
+  function done(failed, key) {
+    if (!overlay || (key && key !== owner)) return;
+    owner = null;
+    clearInterval(progressTimer);
+    overlay.fill.style.width = '100%';
+    if (failed) {
+      overlay.fill.style.background = '#e03131';
+      overlay.text.textContent = 'Could not redraw this round';
+    }
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(
+      () => {
+        if (overlay) delete overlay.host.dataset.on;
+      },
+      failed ? 4000 : 400,
+    );
+  }
+  function hide() {
+    owner = null;
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    if (overlay) delete overlay.host.dataset.on;
+  }
+  function notice(message) {
+    if (!overlay) return;
+    owner = null;
+    clearInterval(progressTimer);
+    clearTimeout(hideTimer);
+    overlay.text.textContent = message;
+    overlay.bar.hidden = true;
+    overlay.host.dataset.on = '';
+    hideTimer = setTimeout(() => {
+      if (!overlay) return;
+      delete overlay.host.dataset.on;
+      hideTimer = setTimeout(() => {
+        if (overlay) overlay.bar.hidden = false;
+      }, 300);
+    }, 4000);
+  }
+
+  ggs.redrawBar = { show, remove, start, done, hide, notice, owner: () => owner };
 })();
 
 // ==================== src/core/redraw.js ==========================================
@@ -1501,6 +1663,7 @@ section.flat .status:empty { display: none; }
 // positions only redraws the one you stop at, and the others get their real tiles back.
 // prepare(cfg) (Chaos mode) quietly generates the panorama on screen before the script is
 // switched on, so its tiles can go straight up when it is.
+// The loading bar is core/redraw-bar.js.
 (() => {
   const ggs = globalThis.__ggs;
   // Holds the prompts, models and daily limits.
@@ -1556,7 +1719,7 @@ section.flat .status:empty { display: none; }
   const gens = new Map();
   // active is { id, style, label, cfg } while a script is on.
   let active = null;
-  let overlay = null;
+  const bar = ggs.redrawBar;
   const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
   function shownPano() {
@@ -1580,7 +1743,7 @@ section.flat .status:empty { display: none; }
   function waitFor(id, entry) {
     if (!waitingPanos.has(id)) waitingPanos.set(id, []);
     // The bar shows from the first blue tile.
-    progressStart(etaOf(active.style, modeOf(active.cfg)), keyOf(id));
+    bar.start(etaOf(active.style, modeOf(active.cfg)), keyOf(id));
     waitingPanos.get(id).push(entry);
     if (id !== latestPano || !settleTimer) {
       latestPano = id;
@@ -1591,26 +1754,32 @@ section.flat .status:empty { display: none; }
   function settled() {
     settleTimer = null;
     const id = shownPano() ?? latestPano;
-    // Cancel generations still in flight for panoramas you've moved away from.
+    cancelAwayFrom(id);
+    for (const [pid, entries] of [...waitingPanos]) {
+      waitingPanos.delete(pid);
+      if (pid === id && active) queueFor(pid, entries);
+      else passThrough(pid, entries);
+    }
+  }
+  // Cancel generations still in flight for panoramas you've moved away from.
+  function cancelAwayFrom(id) {
     for (const [key, g] of gens) {
       if (g.ctrl && !g.image && !g.error && !key.startsWith(`${id}/`)) cancel(key, g);
     }
-    for (const [pid, entries] of [...waitingPanos]) {
-      waitingPanos.delete(pid);
-      if (pid === id && active) {
-        const g = generation(pid);
-        g.pending.push(...entries);
-        if (g.image || g.error) flush(g);
-      } else {
-        for (const { rec, img } of entries) {
-          try {
-            ggs.tiles.upload(rec, img);
-          } catch {}
-        }
-        // Passed through, so never generated.
-        if (active && owner === keyOf(pid)) progressHide();
-      }
+  }
+  function queueFor(id, entries) {
+    const g = generation(id);
+    g.pending.push(...entries);
+    if (g.image || g.error) flush(g);
+  }
+  // Passed through, so never generated.
+  function passThrough(id, entries) {
+    for (const { rec, img } of entries) {
+      try {
+        ggs.tiles.upload(rec, img);
+      } catch {}
     }
+    if (active && bar.owner() === keyOf(id)) bar.hide();
   }
 
   // ---- daily limits ----
@@ -1693,7 +1862,7 @@ section.flat .status:empty { display: none; }
     g.error = new Error('cancelled');
     inFlight[g.mode] = inFlight[g.mode].filter(t => t !== g.t0);
     saveLog();
-    progressDone(false, key);
+    bar.done(false, key);
     flush(g).then(() => ggs.tiles.repaint(key.split('/')[0]));
     ggs.debug(`${active?.style}: cancelled ${key}`);
   }
@@ -1713,7 +1882,7 @@ section.flat .status:empty { display: none; }
     saveLog();
     (async () => {
       const ek = etaKey(style, mode);
-      progressStart(etaOf(style, mode), key, t0);
+      bar.start(etaOf(style, mode), key, t0);
       const m = await panoMeta(id);
       const fields = { pano: id, worldWidth: m.worldWidth, tileWidth: m.tileWidth, mode, style };
       const r = await server(fields, true, g.ctrl.signal);
@@ -1732,7 +1901,7 @@ section.flat .status:empty { display: none; }
       const took = (Date.now() - t0) / 1000;
       eta[ek] = Math.round(took * 0.7 + (eta[ek] ?? took) * 0.3);
       ggs.store.set('ggs-minecraft-eta', eta);
-      progressDone(false, key);
+      bar.done(false, key);
     })().catch(err => {
       // Cancelled, and already tidied up.
       if (g.error) return;
@@ -1740,7 +1909,7 @@ section.flat .status:empty { display: none; }
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog();
       ggs.log(`${style}: generation failed`, err);
-      progressDone(true, key);
+      bar.done(true, key);
       // Puts the real tiles back.
       flush(g).then(() => ggs.tiles.repaint(id));
     });
@@ -1773,34 +1942,41 @@ section.flat .status:empty { display: none; }
   ggs.tiles.filter((rec, source) => {
     stats.uploads++;
     if (!active || !rec.key || !(source instanceof HTMLImageElement)) return source;
-    const k = rec.key;
-    const img = source;
     stats.tiles++;
-    const id = k.pano;
+    const id = rec.key.pano;
     const mode = modeOf(active.cfg);
-    const gkey = `${id}/${active.style}/${mode}`;
-    if (!gens.has(gkey) && !allowed(mode)) {
-      if (limitShownFor !== id) {
-        limitShownFor = id;
-        const { resetAt } = Q.left(log, mode, caps[mode]);
-        const what = active.cfg.hq ? 'High quality' : active.label;
-        notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
-      }
-      return img;
+    const g = gens.get(`${id}/${active.style}/${mode}`);
+    if (!g && !allowed(mode)) {
+      showLimit(id, mode);
+      return source;
     }
-    const tw = img.naturalWidth || 512;
-    const th = img.naturalHeight || 512;
-    const g = gens.get(gkey);
+    const entry = { rec, img: source, tw: source.naturalWidth || 512, th: source.naturalHeight || 512 };
     if (!g) {
-      waitFor(id, { rec, img, tw, th });
-      return blank(tw, th);
+      waitFor(id, entry);
+      return blank(entry.tw, entry.th);
     }
-    const m = metaSync.get(id);
-    if (g.image && m) return crop(g, m, k.x, k.y, k.z, tw, th);
-    if (g.error) return img;
-    g.pending.push({ rec, img, tw, th });
-    return blank(tw, th);
+    return tileFrom(g, entry);
   }, 0);
+
+  // Today's limit is used up: says so once per panorama, and the real tiles go up.
+  function showLimit(id, mode) {
+    if (limitShownFor === id) return;
+    limitShownFor = id;
+    const { resetAt } = Q.left(log, mode, caps[mode]);
+    const what = active.cfg.hq ? 'High quality' : active.label;
+    bar.notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
+  }
+
+  // A tile of a panorama with a generation: its crop, the real tile if it failed, or blue
+  // while it's on its way.
+  function tileFrom(g, entry) {
+    const { rec, img, tw, th } = entry;
+    const m = metaSync.get(rec.key.pano);
+    if (g.image && m) return crop(g, m, rec.key.x, rec.key.y, rec.key.z, tw, th);
+    if (g.error) return img;
+    g.pending.push(entry);
+    return blank(tw, th);
+  }
 
   // The picture is in, or failed. Pushes the crops, or the real tiles, into the textures.
   async function flush(g) {
@@ -1808,13 +1984,14 @@ section.flat .status:empty { display: none; }
     if (!recs.length) return;
     const id = recs[0].rec.key.pano;
     const m = g.image ? await panoMeta(id).catch(() => null) : null;
-    for (const { rec, img, tw, th } of recs) {
-      try {
-        const k = rec.key;
-        if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
-      } catch (err) {
-        ggs.log('redraw: re-upload failed', err);
-      }
+    for (const entry of recs) reupload(g, m, entry);
+  }
+  function reupload(g, m, { rec, img, tw, th }) {
+    try {
+      const k = rec.key;
+      if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
+    } catch (err) {
+      ggs.log('redraw: re-upload failed', err);
     }
   }
 
@@ -1830,94 +2007,12 @@ section.flat .status:empty { display: none; }
     return blankTile;
   }
 
-  // ---- loading bar: eases towards 90% over the last rounds' time, fills when tiles are swapped ----
-  const CSS = `
-    :host { all: initial; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-            z-index: 2147483000; pointer-events: none; opacity: 0; transition: opacity .25s; }
-    :host([data-on]) { opacity: 1; }
-    .box { width: 300px; padding: 16px 20px; border-radius: 16px; background: rgba(20, 16, 48, .85);
-           backdrop-filter: blur(8px); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .6);
-           font: 700 15px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
-           text-align: center; letter-spacing: .02em; }
-    .bar[hidden] { display: none; }
-    .bar { height: 10px; margin-top: 12px; border-radius: 5px; background: rgba(255, 255, 255, .12);
-           overflow: hidden; }
-    .fill { height: 100%; width: 0; border-radius: 5px; background: #fecd19;
-            transition: width .1s linear, background .3s; }
-  `;
-  // The bar belongs to the latest generation started (`owner`). An older one finishing or
-  // failing later leaves it alone. hideTimer is the fade-out after one finished, cancelled
-  // when the next one starts.
-  let progressTimer = null;
-  let owner = null;
-  let hideTimer = null;
-  function progressStart(seconds, key, t0 = Date.now()) {
-    // Already showing this one.
-    if (!overlay || key === owner) return;
-    owner = key;
-    clearInterval(progressTimer);
-    clearTimeout(hideTimer);
-    const fill = overlay.fill;
-    overlay.text.textContent = 'Loading round…';
-    overlay.bar.hidden = false;
-    fill.style.width = '0%';
-    fill.style.background = '';
-    overlay.host.dataset.on = '';
-    progressTimer = setInterval(() => {
-      const x = (Date.now() - t0) / 1000 / seconds;
-      fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
-    }, 100);
-  }
-  function progressDone(failed, key) {
-    if (!overlay || (key && key !== owner)) return;
-    owner = null;
-    clearInterval(progressTimer);
-    overlay.fill.style.width = '100%';
-    if (failed) {
-      overlay.fill.style.background = '#e03131';
-      overlay.text.textContent = 'Could not redraw this round';
-    }
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(
-      () => {
-        if (overlay) delete overlay.host.dataset.on;
-      },
-      failed ? 4000 : 400,
-    );
-  }
-  function progressHide() {
-    owner = null;
-    clearInterval(progressTimer);
-    clearTimeout(hideTimer);
-    if (overlay) delete overlay.host.dataset.on;
-  }
-  function notice(message) {
-    if (!overlay) return;
-    owner = null;
-    clearInterval(progressTimer);
-    clearTimeout(hideTimer);
-    overlay.text.textContent = message;
-    overlay.bar.hidden = true;
-    overlay.host.dataset.on = '';
-    hideTimer = setTimeout(() => {
-      if (!overlay) return;
-      delete overlay.host.dataset.on;
-      hideTimer = setTimeout(() => {
-        if (overlay) overlay.bar.hidden = false;
-      }, 300);
-    }, 4000);
-  }
-
   function teardown() {
     active = null;
     clearTimeout(settleTimer);
     settleTimer = null;
     waitingPanos.clear();
-    clearInterval(progressTimer);
-    clearTimeout(hideTimer);
-    owner = null;
-    overlay?.host.remove();
-    overlay = null;
+    bar.remove();
     ggs.tiles.replay();
   }
   // Starts a generation ahead for the panorama on screen. Returns { ready(), failed(), cancel() },
@@ -1942,25 +2037,14 @@ section.flat .status:empty { display: none; }
     // Only one redraw script at a time.
     if (active) teardown();
     active = { id, style, label, cfg };
-    const host = document.createElement('div');
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML =
-      `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
-      '<div class="bar"><div class="fill"></div></div></div>';
-    document.body.append(host);
-    overlay = {
-      host,
-      text: root.querySelector('.text'),
-      bar: root.querySelector('.bar'),
-      fill: root.querySelector('.fill'),
-    };
+    bar.show();
     // A picture made ahead (prepare) goes up at once. One still on its way (made ahead, or
     // left running by switching off and on) gets the bar from when it started. The tiles go
     // through at once on the local copy of today's limits. The server checks them anyway,
     // and its answer comes in behind.
     const key = keyOf(shownPano());
     const g = gens.get(key);
-    if (g && !g.image && !g.error) progressStart(etaOf(style, g.mode), key, g.t0);
+    if (g && !g.image && !g.error) bar.start(etaOf(style, g.mode), key, g.t0);
     loadQuota();
     ggs.tiles.replay();
     return {
@@ -2110,23 +2194,29 @@ section.flat .status:empty { display: none; }
       });
     }
 
+    // Messages up from the app, by their ggs name. Anything else goes to onMessage.
+    const handlers = {
+      ready() {
+        ready = true;
+        queued.splice(0).forEach(post);
+      },
+      height(d) {
+        boardH = d.h;
+        if (host.style.width) layout();
+      },
+      guess(d) {
+        lastGuess = place(d.guess) ? d.guess : null;
+      },
+      done() {
+        if (lastGuess) press(lastGuess, guessDelay);
+        lastGuess = null;
+      },
+    };
     const onFrameMessage = e => {
       if (!frame || e.origin !== origin || e.source !== frame.contentWindow) return;
       const d = e.data ?? {};
-      if (d.ggs === 'ready') {
-        ready = true;
-        queued.splice(0).forEach(post);
-      } else if (d.ggs === 'height') {
-        boardH = d.h;
-        if (host.style.width) layout();
-      } else if (d.ggs === 'guess') {
-        lastGuess = place(d.guess) ? d.guess : null;
-      } else if (d.ggs === 'done') {
-        if (lastGuess) press(lastGuess, guessDelay);
-        lastGuess = null;
-      } else {
-        onMessage?.(d);
-      }
+      if (Object.hasOwn(handlers, d.ggs)) handlers[d.ggs](d);
+      else onMessage?.(d);
     };
     window.addEventListener('message', onFrameMessage);
 
@@ -2151,20 +2241,25 @@ section.flat .status:empty { display: none; }
     function press(guess, wait, n = 1) {
       clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
-        // Already guessed or moved on.
-        if (!ggs.maps.guessMapElement()) return;
-        if (ggs.maps.submitGuess()) return;
-        if (n === 2) {
-          try {
-            ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
-          } catch {}
-        }
-        if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
+        if (tryPress(guess, n)) return;
         if (n < TRIES) return press(guess, RETRY_MS, n + 1);
         const why = ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found';
         status(`Guess placed, but couldn't press Guess (${why})`);
         ggs.maps.debug();
       }, wait);
+    }
+
+    // Try n at pressing Guess. True once there's nothing left to do: pressed, or already
+    // guessed or moved on.
+    function tryPress(guess, n) {
+      if (!ggs.maps.guessMapElement() || ggs.maps.submitGuess()) return true;
+      if (n === 2) {
+        try {
+          ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
+        } catch {}
+      }
+      if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
+      return false;
     }
 
     // The round's real location, for boards that show it once the guess is in.
@@ -2180,24 +2275,33 @@ section.flat .status:empty { display: none; }
         .catch(() => {});
     }
 
+    function clearBoard() {
+      post({ ggs: 'reset' });
+      clearTimeout(pressTimer);
+      placed = false;
+      status('');
+    }
+
     // A new round gets a blank board. The guess map can blink out for a moment mid-round,
     // so the board only clears after a guess or once the map was gone for a while.
+    function noteRound(inRound) {
+      if (!inRound && wasInRound) awaySince = Date.now();
+      if (inRound && !wasInRound && (placed || Date.now() - awaySince > AWAY_MS)) clearBoard();
+      wasInRound = inRound;
+    }
+
+    function follow(inRound) {
+      noteRound(inRound);
+      host.hidden = !inRound;
+      if (!inRound) return;
+      layout();
+      if (answer) sendAnswer(ggs.game.roundKey());
+    }
+
     const tick = setInterval(() => {
       const inRound = !!ggs.maps.guessMapElement();
       if (inRound && !host) create();
-      if (host) {
-        if (!inRound && wasInRound) awaySince = Date.now();
-        if (inRound && !wasInRound && (placed || Date.now() - awaySince > AWAY_MS)) {
-          post({ ggs: 'reset' });
-          clearTimeout(pressTimer);
-          placed = false;
-          status('');
-        }
-        wasInRound = inRound;
-        host.hidden = !inRound;
-        if (inRound) layout();
-        if (inRound && answer) sendAnswer(ggs.game.roundKey());
-      }
+      if (host) follow(inRound);
       onTick?.(inRound);
     }, 500);
 
@@ -2221,33 +2325,17 @@ section.flat .status:empty { display: none; }
   };
 })();
 
-// ==================== src/core/aid.js =============================================
-// Map aids: scripts that work on the guess map during a round. One loop per script tracks
-// the guess map, the round and its real location, and calls the script's hooks.
-//   ggs.aid(id, hooks) -> { start(cfg) } for ggs.scripts. All hooks are optional.
-//     shapes(ctx) -> [{ type: 'Polygon' | 'Polyline' | 'Circle' | 'Marker', ...options }], or a
-//       Promise of that. Drawn once the location is known, redrawn when the round or settings change.
-//     round(ctx): a new round started. Shapes and ctx.add() overlays are already cleared.
-//     attach(ctx) -> cleanup?: a guess map was found. GeoGuessr can make a new one mid-game.
-//     tick(ctx): every 300 ms while there's a guess map.
-//     click(latLng, ctx): the player clicked the guess map (not our own placeGuess).
-//     beforeGuess(ctx) -> { lat, lng } | false | null: Guess was pressed. A point moves the guess
-//       there first, false stops it. ctx.loc may still be null.
-//     usesLocation: false when the script doesn't need the round's location, so it isn't fetched.
-//     css: a stylesheet added while the script runs.
-//     colour: the shapes' colour, or (ctx) -> colour. The note then shows the script's name on
-//       it, so hints drawn together can be told apart. A lie looks just like the truth.
-//     name(ctx): the name on that note, when it isn't the script's own.
-//     lies: true for a 50% chance each round that ctx.loc is a made-up spot (Lying hints).
-//       Settings with `lies` (as Chaos mode's have) do the same.
-//     stop(ctx): the script is about to stop. Its overlays are still on the map.
-// ctx: { cfg, map, loc (null until known), gm, rand(), pick(), add(spec), remove(overlay),
-//   note(text), status(text) }. rand() is a stream seeded by loc. pick() is seeded by the real
-//   round, so it's the same whether lying or not. note() puts a badge on the map ('' hides it).
-// ggs.aid.hints[id] = { shapes(ctx), random(rand) -> cfg } lists the hint scripts for Lying
-// hints to pick from.
-// The location is only used to draw an area it's inside, a distance, or to pick between the
-// player's own pins. It's never drawn itself.
+// ==================== src/core/geo.js =============================================
+// Geometry for map aids: seeded random streams, nested bands and circles, lat/lng boxes and
+// lines, distances, country outlines and lookups. aid.js puts all of these on ggs.aid, which is
+// where scripts use them (ggs.aid.distance and so on):
+//   seeded(str) -> rand(): a random stream seeded by a string.
+//   band(x, rand, index, half) -> [lo, hi]: a band holding x, nested in the bigger ones.
+//   circle(loc, rand, index) -> { center, km }: a circle holding loc, nested the same way.
+//   box(s, n, w, e), latLine(lat), lngLine(lng) -> shape specs.
+//   destination(spot, km, bearing), distance(a, b) km, on a sphere.
+//   loadGeo() -> Promise of country outlines. countryAt(geo, spot, { near }) -> code | null.
+//   covers(specs, spot): whether any drawn shape holds the spot.
 (() => {
   const ggs = globalThis.__ggs;
   const KM_PER_DEG = 111.32;
@@ -2256,34 +2344,6 @@ section.flat .status:empty { display: none; }
   const BANDS = [0, 5, 25, 50, 100, 500, 1000, 2500];
   // km. The radius slider's first marks.
   const RADII = [5, 25, 50, 100, 500, 1000, 2500];
-  const RING_PX = 9;
-  // Not clickable, so clicks still reach the map to place the guess.
-  const STYLE = {
-    strokeColor: '#2b8a3e',
-    strokeOpacity: 0.9,
-    strokeWeight: 2,
-    fillColor: '#40c057',
-    fillOpacity: 0.3,
-    clickable: false,
-    zIndex: 1,
-  };
-  // Notes from every script stack in one corner of the map.
-  const NOTES_CSS =
-    'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;' +
-    'align-items:flex-start;gap:6px;pointer-events:none;';
-  const NOTE_CSS =
-    'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;' +
-    'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
-  function notesIn(div) {
-    let box = div.querySelector(':scope > [data-ggs-notes]');
-    if (!box) {
-      box = document.createElement('div');
-      box.dataset.ggsNotes = '';
-      box.style.cssText = NOTES_CSS;
-      div.append(box);
-    }
-    return box;
-  }
 
   // A seeded random stream (FNV-1a into mulberry32). Seeded by the game, the round's location
   // and the script, so a reload draws the same shapes and can't be used to average them out.
@@ -2408,27 +2468,36 @@ section.flat .status:empty { display: none; }
     }
     return hit;
   }
-  // Which country a spot is in: the smallest outline holding it, so the Vatican beats Italy.
-  // Failing that, with `near`, the nearest vertex within ~1.5 degrees. That catches coastal
-  // roads outside the simplified coastlines.
-  function countryAt(geo, { lat, lng }, { near: useNear = true } = {}) {
+  const holds = ([outer, ...holes], pt) => inside(pt, outer) && !holes.some(h => inside(pt, h));
+  function boxArea(ring) {
+    const xs = ring.map(p => p[0]);
+    const ys = ring.map(p => p[1]);
+    return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+  }
+
+  // The country with the smallest outline (by its bounding box) holding the spot.
+  function smallestHolding(geo, { lat, lng }) {
     let best = null;
     let bestArea = Infinity;
+    for (const [code, polys] of Object.entries(geo)) {
+      for (const poly of polys) {
+        const area = holds(poly, [lng, lat]) ? boxArea(poly[0]) : Infinity;
+        if (area < bestArea) {
+          bestArea = area;
+          best = code;
+        }
+      }
+    }
+    return best;
+  }
+
+  // The country with an outline vertex nearest the spot, within ~1.5 degrees.
+  function nearest(geo, { lat, lng }) {
     let near = null;
     let nearD = 1.5 ** 2;
     const k = Math.cos((lat * Math.PI) / 180);
     for (const [code, polys] of Object.entries(geo)) {
-      for (const [outer, ...holes] of polys) {
-        if (inside([lng, lat], outer) && !holes.some(h => inside([lng, lat], h))) {
-          const xs = outer.map(p => p[0]);
-          const ys = outer.map(p => p[1]);
-          const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-          if (area < bestArea) {
-            bestArea = area;
-            best = code;
-          }
-        }
-        if (!useNear) continue;
+      for (const [outer] of polys) {
         for (const [x, y] of outer) {
           const d = ((x - lng) * k) ** 2 + (y - lat) ** 2;
           if (d < nearD) {
@@ -2438,7 +2507,14 @@ section.flat .status:empty { display: none; }
         }
       }
     }
-    return best ?? near;
+    return near;
+  }
+
+  // Which country a spot is in: the smallest outline holding it. Failing that, with `near`,
+  // the nearest vertex within ~1.5 degrees. That catches coastal roads outside the simplified
+  // coastlines.
+  function countryAt(geo, spot, { near: useNear = true } = {}) {
+    return smallestHolding(geo, spot) ?? (useNear ? nearest(geo, spot) : null);
   }
 
   // Whether any drawn shape holds a spot. Polygons by even-odd, also one turn of the globe
@@ -2456,37 +2532,101 @@ section.flat .status:empty { display: none; }
     });
   }
 
+  ggs.geo = {
+    seeded,
+    band,
+    circle,
+    box,
+    latLine,
+    lngLine,
+    destination,
+    distance,
+    loadGeo,
+    countryAt,
+    covers,
+  };
+})();
+
+// ==================== src/core/aid.js =============================================
+// Map aids: scripts that work on the guess map during a round. One loop per script tracks
+// the guess map, the round and its real location, and calls the script's hooks.
+//   ggs.aid(id, hooks) -> { start(cfg) } for ggs.scripts. All hooks are optional.
+//     shapes(ctx) -> [{ type: 'Polygon' | 'Polyline' | 'Circle' | 'Marker', ...options }], or a
+//       Promise of that. Drawn once the location is known, redrawn when the round or settings change.
+//     round(ctx): a new round started. Shapes and ctx.add() overlays are already cleared.
+//     attach(ctx) -> cleanup?: a guess map was found. GeoGuessr can make a new one mid-game.
+//     tick(ctx): every 300 ms while there's a guess map.
+//     click(latLng, ctx): the player clicked the guess map (not our own placeGuess).
+//     beforeGuess(ctx) -> { lat, lng } | false | null: Guess was pressed. A point moves the guess
+//       there first, false stops it. ctx.loc may still be null.
+//     usesLocation: false when the script doesn't need the round's location, so it isn't fetched.
+//     css: a stylesheet added while the script runs.
+//     colour: the shapes' colour, or (ctx) -> colour. The note then shows the script's name on
+//       it, so hints drawn together can be told apart. A lie looks just like the truth.
+//     name(ctx): the name on that note, when it isn't the script's own.
+//     lies: true for a 50% chance each round that ctx.loc is a made-up spot (Lying hints).
+//       Settings with `lies` (as Chaos mode's have) do the same.
+//     stop(ctx): the script is about to stop. Its overlays are still on the map.
+// ctx: { cfg, map, loc (null until known), gm, rand(), pick(), add(spec), remove(overlay),
+//   note(text), status(text) }. rand() is a stream seeded by loc. pick() is seeded by the real
+//   round, so it's the same whether lying or not. note() puts a badge on the map ('' hides it).
+// ggs.aid.hints[id] = { shapes(ctx), random(rand) -> cfg } lists the hint scripts for Lying
+// hints to pick from. ggs.aid also carries geo.js's geometry helpers (ggs.aid.distance etc).
+// The location is only used to draw an area it's inside, a distance, or to pick between the
+// player's own pins. It's never drawn itself.
+(() => {
+  const ggs = globalThis.__ggs;
+  const { seeded, covers, loadGeo } = ggs.geo;
+  const RING_PX = 9;
+  // Not clickable, so clicks still reach the map to place the guess.
+  const STYLE = {
+    strokeColor: '#2b8a3e',
+    strokeOpacity: 0.9,
+    strokeWeight: 2,
+    fillColor: '#40c057',
+    fillOpacity: 0.3,
+    clickable: false,
+    zIndex: 1,
+  };
+  // Notes from every script stack in one corner of the map.
+  const NOTES_CSS =
+    'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-direction:column;' +
+    'align-items:flex-start;gap:6px;pointer-events:none;';
+  const NOTE_CSS =
+    'padding:4px 9px;border-radius:6px;background:#fecd19;color:#1c1a2e;' +
+    'font:800 13px/1.2 system-ui,sans-serif;box-shadow:3px 3px 0 #1c1a2e;';
+  function notesIn(div) {
+    let box = div.querySelector(':scope > [data-ggs-notes]');
+    if (!box) {
+      box = document.createElement('div');
+      box.dataset.ggsNotes = '';
+      box.style.cssText = NOTES_CSS;
+      div.append(box);
+    }
+    return box;
+  }
+
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
   const guessHooks = new Set();
   let passing = false;
   let swallowUp = false;
-  function onPress(e) {
-    if (passing || !guessHooks.size) return;
-    if (e.type === 'keyup') {
-      if (swallowUp && e.code === 'Space') {
-        swallowUp = false;
-        e.stopImmediatePropagation();
-      }
-      return;
-    }
-    const isPress =
-      e.type === 'keydown'
-        ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
-        : !!ggs.maps.guessButton()?.contains(e.target);
-    if (!isPress) return;
-    let p = null;
+  function isGuessPress(e) {
+    if (e.type === 'keydown') return e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement();
+    return !!ggs.maps.guessButton()?.contains(e.target);
+  }
+  // Any hook returning false blocks the guess. Otherwise the last point given wins.
+  function askGuessHooks() {
+    let point = null;
     let block = false;
     for (const fn of guessHooks) {
       const r = fn();
       if (r === false) block = true;
-      else p = r ?? p;
+      else point = r ?? point;
     }
-    if (!p && !block) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    if (e.type === 'keydown') swallowUp = true;
-    if (block) return;
+    return { point, block };
+  }
+  function guessAt(p) {
     ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
     passing = true;
     // Waits so GeoGuessr takes the new pin first.
@@ -2494,6 +2634,23 @@ section.flat .status:empty { display: none; }
       if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
       passing = false;
     }, 150);
+  }
+  // The keyup after a swallowed Space press goes too.
+  function onKeyUp(e) {
+    if (!swallowUp || e.code !== 'Space') return;
+    swallowUp = false;
+    e.stopImmediatePropagation();
+  }
+  function onPress(e) {
+    if (passing || !guessHooks.size) return;
+    if (e.type === 'keyup') return onKeyUp(e);
+    if (!isGuessPress(e)) return;
+    const { point, block } = askGuessHooks();
+    if (!point && !block) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === 'keydown') swallowUp = true;
+    if (!block) guessAt(point);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -2534,6 +2691,16 @@ section.flat .status:empty { display: none; }
       return { lat, lng };
     });
   }
+
+  // A circle's ring: a marker RING_PX across on its centre, so it can be found zoomed out.
+  const ringIcon = look => ({
+    path: 0,
+    scale: RING_PX,
+    strokeColor: look.strokeColor,
+    strokeWeight: 3,
+    fillColor: look.fillColor,
+    fillOpacity: 0.3,
+  });
 
   ggs.aid = (id, hooks) => ({
     start(cfg) {
@@ -2632,6 +2799,60 @@ section.flat .status:empty { display: none; }
         }
       }
 
+      // GeoGuessr made a new map, so move everything onto it.
+      function moveTo(now) {
+        map = now;
+        listener?.remove();
+        listener = gm().event.addListener(map, 'click', e => {
+          if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
+        });
+        for (const o of extras) o.setMap(map);
+        shapesKey = '';
+        if (note?.textContent) ctx.note(note.textContent);
+        detach?.();
+        detach = hooks.attach?.(ctx) ?? null;
+      }
+
+      function newRound(key) {
+        round = key;
+        real = loc = lying = lies = null;
+        clear(shapes);
+        clear(extras);
+        shapesKey = '';
+        ctx.note('');
+        hooks.round?.(ctx);
+        if (hooks.usesLocation === false) return;
+        ggs.game.roundLocation().then(l => {
+          // Moved on, or stopped.
+          if (round !== key) return;
+          real = l;
+          ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
+        });
+      }
+
+      // Tosses this round's coin, the first time the real location is known.
+      function tossCoin(key) {
+        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
+        if (lie === lying) return;
+        lying = lie;
+        lies = null;
+        loc = lie ? null : real;
+        shapesKey = '';
+        if (!lie) return;
+        const current = () => round === key && lying === lie;
+        fakes(seed('fake', real)).then(
+          list => {
+            if (!current()) return;
+            lies = list;
+            loc = list[0];
+          },
+          () => {
+            // No outlines to lie with, so tell the truth.
+            if (current()) loc = real;
+          },
+        );
+      }
+
       // The shapes for the current spot. When lying, made-up spots are tried until the shapes
       // miss the real one. loc stays on the one it settled on, for the other hooks too.
       async function draw(want) {
@@ -2644,104 +2865,61 @@ section.flat .status:empty { display: none; }
         return specs;
       }
 
-      const tick = setInterval(() => {
-        const now = ggs.maps.findGuessMap();
-        const key = ggs.game.roundKey();
-        if (!now) {
-          goneSince ||= Date.now();
-          if (Date.now() - goneSince > OVER_MS) ownUp();
-          return;
+      // rings() shows a circle's ring only while the circle itself is smaller than it.
+      function show(specs) {
+        clear(shapes);
+        shapes.push(...specs.map(make));
+        for (const o of [...shapes]) {
+          if (!(o instanceof gm().Circle)) continue;
+          o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon: ringIcon(look()) });
+          shapes.push(o.ring);
         }
-        goneSince = 0;
-        // GeoGuessr made a new map, so move everything onto it.
-        if (now !== map) {
-          map = now;
-          listener?.remove();
-          listener = gm().event.addListener(map, 'click', e => {
-            if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
-          });
-          for (const o of extras) o.setMap(map);
-          shapesKey = '';
-          if (note?.textContent) ctx.note(note.textContent);
-          detach?.();
-          detach = hooks.attach?.(ctx) ?? null;
-        }
-        if (key !== round) {
-          round = key;
-          real = loc = lying = lies = null;
-          clear(shapes);
-          clear(extras);
-          shapesKey = '';
-          ctx.note('');
-          hooks.round?.(ctx);
-          if (hooks.usesLocation !== false) {
-            ggs.game.roundLocation().then(l => {
-              // Moved on, or stopped.
-              if (round !== key) return;
-              real = l;
-              ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
-            });
-          }
-        }
-        hooks.tick?.(ctx);
         rings();
-        if (!real) return;
-        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
-        // First time this round.
-        if (lie !== lying) {
-          lying = lie;
-          lies = null;
-          loc = lie ? null : real;
-          shapesKey = '';
-          if (lie) {
-            fakes(seed('fake', real)).then(
-              list => {
-                if (round === key && lying === lie) {
-                  lies = list;
-                  loc = list[0];
-                }
-              },
-              () => {
-                // No outlines to lie with, so tell the truth.
-                if (round === key && lying === lie) loc = real;
-              },
-            );
-          }
-        }
-        // A redraw after the guess put the plain name back.
-        if (owned === key) ownUp();
-        const want = `${round}|${lying}|${JSON.stringify(cfg)}`;
-        if (!loc || !hooks.shapes || want === shapesKey) return;
+        if (hooks.colour) label();
+      }
+
+      function redraw(want) {
         shapesKey = want;
         if (lies) loc = lies[0];
         draw(want).then(
           specs => {
             // The settings or round moved on (or it stopped) while it loaded.
-            if (!specs || shapesKey !== want) return;
-            clear(shapes);
-            shapes.push(...specs.map(make));
-            // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
-            // rings() shows it only while the circle itself is smaller than that.
-            for (const o of [...shapes]) {
-              if (!(o instanceof gm().Circle)) continue;
-              const icon = {
-                path: 0,
-                scale: RING_PX,
-                strokeColor: look().strokeColor,
-                strokeWeight: 3,
-                fillColor: look().fillColor,
-                fillOpacity: 0.3,
-              };
-              o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
-              shapes.push(o.ring);
-            }
-            rings();
-            if (hooks.colour) label();
+            if (specs && shapesKey === want) show(specs);
           },
           err => {
             if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
           },
         );
+      }
+
+      // Follows GeoGuessr onto a new guess map or into a new round.
+      function catchUp(now, key) {
+        if (now !== map) moveTo(now);
+        if (key !== round) newRound(key);
+      }
+
+      function withLocation(key) {
+        tossCoin(key);
+        // A redraw after the guess put the plain name back.
+        if (owned === key) ownUp();
+        const want = `${round}|${lying}|${JSON.stringify(cfg)}`;
+        if (loc && hooks.shapes && want !== shapesKey) redraw(want);
+      }
+
+      function mapGone() {
+        goneSince ||= Date.now();
+        if (Date.now() - goneSince > OVER_MS) ownUp();
+      }
+
+      const tick = setInterval(() => {
+        const now = ggs.maps.findGuessMap();
+        const key = ggs.game.roundKey();
+        if (!now) return mapGone();
+        goneSince = 0;
+        catchUp(now, key);
+        hooks.tick?.(ctx);
+        rings();
+        if (real) withLocation(key);
       }, 300);
 
       return {
@@ -2774,305 +2952,27 @@ section.flat .status:empty { display: none; }
       };
     },
   });
-  Object.assign(ggs.aid, {
-    seeded,
-    band,
-    circle,
-    box,
-    latLine,
-    lngLine,
-    destination,
-    distance,
-    loadGeo,
-    countryAt,
-    covers,
-    hints: {},
-  });
+  // Scripts use the geometry helpers from here.
+  Object.assign(ggs.aid, ggs.geo, { hints: {} });
 })();
 
-// ==================== src/core/view.js ============================================
-// View modes, shared by the scripts that change how Street View looks. One animation-frame
-// loop, running only while something uses it, keeps effects and masks on the current panorama
-// (GeoGuessr swaps it) and the guess map (it grows on hover).
-//   ggs.view.effect(owner, { filter, transform } | null): CSS on the panorama's picture
-//     (Google's .gm-style layer), so the HUD and guess map are never touched. transform may be
-//     a function (time ms, w, h) -> string. Owners' effects are combined. null removes one.
-//   ggs.view.script(id, cfg => effect): a whole script that only sets one effect.
-//   ggs.view.mask({ over: 'pano' | 'screen', look: 'paper' | 'night', cut(w, h) }) -> { stop() }:
-//     a sheet over the panorama (inside its element, so the HUD stays on top) or the whole
-//     window. It has holes where cut() returns SVG path data, and null hides it. The painted
-//     part swallows clicks, wheel and drags. The holes let them through.
-//   ggs.view.mirror(owner, { move, turn, zoom, dragX, dragY, flipX, flipY } | null): Street View
-//     input sent the other way (see below). Owners cancel out, so two owners flipping the same
-//     thing leave it as normal.
-//   ggs.view.shape.rect / circle / poly build that path data.
-//   guessArea() is the guess map's rect with its Guess button (null outside a round).
-//   lastTile() is when the last Street View tile reached the screen (performance.now()).
+// ==================== src/core/mirror.js ==========================================
+// Mirrored Street View input for core/view.js, which puts these on ggs.view:
+//   mirror(owner, { move, turn, zoom, dragX, dragY, flipX, flipY } | null): Street View input
+//     sent the other way (see below). Owners cancel out, so two owners flipping the same thing
+//     leave it as normal.
+//   copyEvent(e, change) -> an untrusted copy of an input event. scripts/lag uses it too.
+// The panorama comes from ggs.view.panoElement(), only ever read once view.js has loaded.
 (() => {
   const ggs = globalThis.__ggs;
+  // view.js's sheets over the panorama carry this.
   const HOST = 'data-ggs-view';
-  // Fallbacks for a panorama made before the hook was in place. radio uses the same pair.
-  const PANO_SELECTORS = ['[data-qa="panorama"]', '[class*="game_panorama"]'];
-
-  // ---- finding the panorama ----
-  // Container elements of the last few StreetViewPanoramas, newest last.
-  let hooked = [];
+  const panoElement = () => ggs.view.panoElement();
   // container element -> its StreetViewPanorama
   const panoOf = new WeakMap();
   ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    if (!(args[0] instanceof Element)) return;
-    hooked = [...hooked.filter(e => e.isConnected), args[0]].slice(-5);
-    panoOf.set(args[0], p);
+    if (args[0] instanceof Element) panoOf.set(args[0], p);
   });
-
-  // The Street View element on screen. Never one holding the guess map, so nothing done to
-  // it can reach the map.
-  function panoElement() {
-    const map = ggs.maps.guessMapElement();
-    const ok = el => el?.isConnected && el.offsetWidth > 0 && !(map && el.contains(map));
-    return (
-      [...hooked].reverse().find(ok) ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok) ?? null
-    );
-  }
-  // The picture inside it: Google's .gm-style layer, or its first child that isn't ours.
-  const sceneOf = pano =>
-    [...pano.children].find(c => c.classList.contains('gm-style')) ??
-    [...pano.children].find(c => !c.hasAttribute(HOST)) ??
-    null;
-
-  // The guess map's area: the smallest element holding both the map and its Guess button,
-  // so the map's own size buttons are in it too. If that is most of the window, the two
-  // rects together instead.
-  function guessArea() {
-    const map = ggs.maps.guessMapElement();
-    if (!map) return null;
-    const btn = ggs.maps.guessButton();
-    let box = map.closest(ggs.maps.GUESS_AREA) ?? (btn ? map.parentElement : null);
-    while (box && btn && !box.contains(btn)) box = box.parentElement;
-    const r = box?.getBoundingClientRect();
-    if (r && r.width * r.height < innerWidth * innerHeight * 0.6) return r;
-    const rects = [map, btn].filter(Boolean).map(e => e.getBoundingClientRect());
-    const left = Math.min(...rects.map(q => q.left));
-    const top = Math.min(...rects.map(q => q.top));
-    const right = Math.max(...rects.map(q => q.right));
-    const bottom = Math.max(...rects.map(q => q.bottom));
-    return { left, top, right, bottom, width: right - left, height: bottom - top };
-  }
-
-  // A filter that changes nothing, last in line: it only notes when tiles arrive.
-  let tileAt = 0;
-  ggs.tiles.filter((_rec, source) => {
-    tileAt = performance.now();
-    return source;
-  }, 99);
-  const lastTile = () => tileAt;
-
-  // ---- path data ----
-  const n = v => Math.round(v * 10) / 10;
-  const shape = {
-    poly: pts => `M${pts.map(([x, y]) => `${n(x)} ${n(y)}`).join('L')}Z`,
-    circle: (cx, cy, r) =>
-      `M${n(cx - r)} ${n(cy)}` + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
-    rect(x, y, w, h, r = 0) {
-      r = Math.min(r, w / 2, h / 2);
-      if (!r)
-        return shape.poly([
-          [x, y],
-          [x + w, y],
-          [x + w, y + h],
-          [x, y + h],
-        ]);
-      const arc = (dx, dy) => `a${n(r)} ${n(r)} 0 0 1 ${n(dx)} ${n(dy)}`;
-      return (
-        `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}` +
-        `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`
-      );
-    },
-  };
-
-  // ---- effects on the picture ----
-  // owner -> { filter, transform }
-  const effects = new Map();
-  // { scene, pano, saved inline styles, last transform }
-  let applied = null;
-  const PROPS = { scene: ['filter', 'transform', 'willChange'], pano: ['overflow'] };
-
-  function release() {
-    if (!applied) return;
-    for (const k of PROPS.scene) applied.scene.style[k] = applied.saved.scene[k];
-    for (const k of PROPS.pano) applied.pano.style[k] = applied.saved.pano[k];
-    applied = null;
-  }
-
-  function paint(now) {
-    const pano = effects.size ? panoElement() : null;
-    const scene = pano && sceneOf(pano);
-    if (applied && applied.scene !== scene) release();
-    if (!scene) return;
-    if (!applied) {
-      const keep = (el, keys) => Object.fromEntries(keys.map(k => [k, el.style[k]]));
-      applied = { scene, pano, saved: { scene: keep(scene, PROPS.scene), pano: keep(pano, PROPS.pano) } };
-    }
-    const { width: w, height: h } = pano.getBoundingClientRect();
-    const all = [...effects.values()];
-    const filter = all
-      .map(e => e.filter)
-      .filter(Boolean)
-      .join(' ');
-    const transform = all
-      .map(e => (typeof e.transform === 'function' ? e.transform(now, w, h) : e.transform))
-      .filter(Boolean)
-      .join(' ');
-    if (scene.style.filter !== filter) scene.style.filter = filter || applied.saved.scene.filter;
-    if (applied.transform !== transform) {
-      applied.transform = transform;
-      scene.style.transform = transform || applied.saved.scene.transform;
-      scene.style.willChange = transform ? 'transform' : applied.saved.scene.willChange;
-      // A transformed picture is clipped to the panorama's box, so a scaled-up one can't spill out.
-      pano.style.overflow = transform ? 'hidden' : applied.saved.pano.overflow;
-    }
-  }
-
-  function effect(owner, e) {
-    if (e) effects.set(owner, e);
-    else effects.delete(owner);
-    run();
-  }
-  const script = (id, make) => ({
-    start(cfg) {
-      const update = c => effect(id, make(c));
-      update(cfg);
-      return { update, stop: () => effect(id, null) };
-    },
-  });
-
-  // ---- masks ----
-  const masks = new Set();
-  const LOOKS = {
-    // Cream paper with a faint dot grid and an ink edge with a hard shadow, like the popup.
-    paper: {
-      paper: '#f5f1e8',
-      dot: 'rgba(28,26,46,.09)',
-      edge: '#1c1a2e',
-      width: 3,
-      shadow: 'rgba(28,26,46,.3)',
-    },
-    // Near-black with a barely-there dot grid and a thin cream edge round the holes.
-    night: {
-      paper: '#0b0a12',
-      dot: 'rgba(245,241,232,.06)',
-      edge: 'rgba(245,241,232,.8)',
-      width: 2,
-      shadow: null,
-    },
-  };
-  const BLOCKED = [
-    'pointerdown',
-    'pointerup',
-    'mousedown',
-    'mouseup',
-    'click',
-    'dblclick',
-    'contextmenu',
-    'wheel',
-    'touchstart',
-    'touchmove',
-  ];
-
-  function mask({ over, look: lookName, cut }) {
-    const look = LOOKS[lookName] ?? LOOKS.paper;
-    const screen = over === 'screen';
-    const host = document.createElement('div');
-    host.setAttribute(HOST, '');
-    host.style.cssText =
-      `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;` +
-      ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
-    // Events on the painted sheet stop here, so neither Street View nor GeoGuessr see them.
-    for (const type of BLOCKED) host.addEventListener(type, e => e.stopPropagation());
-    const root = host.attachShadow({ mode: 'open' });
-    const shadow = look.shadow
-      ? `<path class="shadow" fill-rule="evenodd" fill="${look.shadow}" transform="translate(5 5)"/>`
-      : '';
-    root.innerHTML = `<style>
-        svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden;
-              pointer-events: none; }
-        .sheet { pointer-events: visiblePainted; cursor: default; }
-      </style>
-      <svg xmlns="http://www.w3.org/2000/svg">
-        <defs><pattern id="paper" width="22" height="22" patternUnits="userSpaceOnUse">
-          <rect width="22" height="22" fill="${look.paper}"/><circle cx="11" cy="11" r="1.4" fill="${look.dot}"/>
-        </pattern></defs>
-        ${shadow}
-        <path class="sheet" fill-rule="evenodd" fill="url(#paper)" stroke="${look.edge}"
-              stroke-width="${look.width}" stroke-linejoin="round"/>
-      </svg>`;
-    const m = { last: null, pano: null, saved: null };
-
-    // Puts back the panorama's own isolation and position.
-    function unpin() {
-      if (m.pano) Object.assign(m.pano.style, m.saved);
-      m.pano = null;
-    }
-
-    m.draw = () => {
-      const parent = screen ? document.body : panoElement();
-      if (!parent) {
-        host.remove();
-        unpin();
-        return;
-      }
-      if (host.parentElement !== parent) {
-        unpin();
-        parent.append(host);
-        m.last = null;
-        // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
-        // and GeoGuessr's HUD keeps drawing above it.
-        if (!screen) {
-          m.pano = parent;
-          m.saved = { isolation: parent.style.isolation, position: parent.style.position };
-          parent.style.isolation = 'isolate';
-          if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-        }
-      }
-      const w = host.clientWidth;
-      const h = host.clientHeight;
-      const holes = cut(w, h);
-      host.hidden = holes === null;
-      // The outer edge is 20px past the box so its stroke is off screen. Only the holes' edges show.
-      const d = holes === null ? '' : `M-20 -20H${w + 20}V${h + 20}H-20Z${holes}`;
-      if (d === m.last) return;
-      m.last = d;
-      for (const p of root.querySelectorAll('path')) p.setAttribute('d', d);
-    };
-
-    masks.add(m);
-    run();
-    return {
-      stop() {
-        masks.delete(m);
-        host.remove();
-        unpin();
-      },
-    };
-  }
-
-  // ---- the loop ----
-  let raf = 0;
-  function run() {
-    if (raf) return;
-    const frame = now => {
-      raf = 0;
-      try {
-        paint(now);
-        for (const m of masks) m.draw();
-      } catch (err) {
-        ggs.log('view update failed', err);
-      }
-      if (effects.size || masks.size) raf = requestAnimationFrame(frame);
-      else release();
-    };
-    raf = requestAnimationFrame(frame);
-  }
 
   // ---- mirrored input ----
   // Street View input is caught at the window in the capture phase and swallowed. A changed copy
@@ -3192,15 +3092,20 @@ section.flat .status:empty { display: none; }
   function onKey(e) {
     if (!mirrors.size || ours.has(e) || ggs.isTyping(e)) return;
     if (e.ctrlKey || e.metaKey || e.altKey || ggs.maps.guessMapElement()?.contains(e.target)) return;
-    const id = e.code || e.key;
-    let to = sent.get(id);
-    if (e.type === 'keydown') {
-      to = ['move', 'turn', 'zoom'].map(kind => want(kind) && SWAP[kind][e.key]).find(Boolean);
-      if (to) sent.set(id, to);
-    } else {
-      sent.delete(id);
-    }
+    const to = swapFor(e);
     if (to) resend(e, { ...to, which: to.keyCode });
+  }
+  // The key to send instead, if any. A keyup sends whatever its keydown did.
+  function swapFor(e) {
+    const id = e.code || e.key;
+    if (e.type !== 'keydown') {
+      const to = sent.get(id);
+      sent.delete(id);
+      return to;
+    }
+    const to = ['move', 'turn', 'zoom'].map(kind => want(kind) && SWAP[kind][e.key]).find(Boolean);
+    if (to) sent.set(id, to);
+    return to;
   }
   function onWheel(e) {
     if (mirrors.size && !ours.has(e) && want('zoom') && onPano(e.target)) {
@@ -3233,44 +3138,57 @@ section.flat .status:empty { display: none; }
     p.setPano(links.reduce((a, b) => (off(b) < off(a) ? b : a)).pano);
   }
 
-  // A mouse position is first mirrored round the centre (flip), then round the press (drag).
   let from = null;
+  const isPress = e => e.type === 'pointerdown' || e.type === 'mousedown';
+  const flip = (v, c, on) => (on ? 2 * c - v : v);
+
   function onPointer(e) {
     if (ours.has(e) || !mirrors.size) return;
-    if (e.type === 'pointerdown' || e.type === 'mousedown') pressAt = { x: e.clientX, y: e.clientY };
+    if (isPress(e)) pressAt = { x: e.clientX, y: e.clientY };
     if (e.type === 'click' && want('move') && onPano(e.target)) {
-      const still = pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5;
-      e.stopImmediatePropagation();
-      const r = panoElement()?.getBoundingClientRect();
-      if (still && r && !ggs.lock.held('move')) {
-        walkBack(want('flipX') ? 2 * (r.left + r.width / 2) - e.clientX : e.clientX);
-      }
+      clickBack(e);
       return;
     }
     const r = panoElement()?.getBoundingClientRect();
-    const down = e.type === 'pointerdown' || e.type === 'mousedown';
-    if (down) from = e.button === 0 && onPano(e.target) ? { x: e.clientX, y: e.clientY } : null;
-    // A move with no button held means the press ended out of sight.
-    if (e.type.endsWith('move') && e.buttons === 0) from = null;
-    const flip = (v, c, on) => (on ? 2 * c - v : v);
-    const inPano = onPano(e.target) || from;
-    if (!r || !inPano) return;
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    let x = flip(e.clientX, cx, want('flipX'));
-    let y = flip(e.clientY, cy, want('flipY'));
-    if (from && !down) {
-      const fx = flip(from.x, cx, want('flipX'));
-      const fy = flip(from.y, cy, want('flipY'));
-      x = flip(x, fx, want('dragX'));
-      y = flip(y, fy, want('dragY'));
-    }
+    trackDrag(e);
+    if (!r || !(onPano(e.target) || from)) return;
+    const { x, y } = mirrored(e, r);
     // Cleared a tick later, so the click after a release still mirrors.
     if (/up|cancel/.test(e.type)) {
       setTimeout(() => {
         from = null;
       });
     }
+    resendAt(e, x, y);
+  }
+  // A click that wasn't a drag walks back, from where it would land in the flipped picture.
+  function clickBack(e) {
+    const still = pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5;
+    e.stopImmediatePropagation();
+    const r = panoElement()?.getBoundingClientRect();
+    if (still && r && !ggs.lock.held('move')) {
+      walkBack(want('flipX') ? 2 * (r.left + r.width / 2) - e.clientX : e.clientX);
+    }
+  }
+  // from is where a left-button drag on the panorama started.
+  function trackDrag(e) {
+    if (isPress(e)) from = e.button === 0 && onPano(e.target) ? { x: e.clientX, y: e.clientY } : null;
+    // A move with no button held means the press ended out of sight.
+    if (e.type.endsWith('move') && e.buttons === 0) from = null;
+  }
+  // A mouse position is first mirrored round the centre (flip), then round the press (drag).
+  function mirrored(e, r) {
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let x = flip(e.clientX, cx, want('flipX'));
+    let y = flip(e.clientY, cy, want('flipY'));
+    if (from && !isPress(e)) {
+      x = flip(x, flip(from.x, cx, want('flipX')), want('dragX'));
+      y = flip(y, flip(from.y, cy, want('flipY')), want('dragY'));
+    }
+    return { x, y };
+  }
+  function resendAt(e, x, y) {
     const dx = x - e.clientX;
     const dy = y - e.clientY;
     if (!dx && !dy) return;
@@ -3314,14 +3232,515 @@ section.flat .status:empty { display: none; }
     checking = mirrors.size ? setInterval(clickToGo, 500) : null;
   }
 
-  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, mirror, shape, copyEvent };
+  ggs.viewMirror = { mirror, copyEvent };
+})();
+
+// ==================== src/core/view.js ============================================
+// View modes, shared by the scripts that change how Street View looks. One animation-frame
+// loop, running only while something uses it, keeps effects and masks on the current panorama
+// (GeoGuessr swaps it) and the guess map (it grows on hover).
+//   ggs.view.effect(owner, { filter, transform } | null): CSS on the panorama's picture
+//     (Google's .gm-style layer), so the HUD and guess map are never touched. transform may be
+//     a function (time ms, w, h) -> string. Owners' effects are combined. null removes one.
+//   ggs.view.script(id, cfg => effect): a whole script that only sets one effect.
+//   ggs.view.mask({ over: 'pano' | 'screen', look: 'paper' | 'night', cut(w, h) }) -> { stop() }:
+//     a sheet over the panorama (inside its element, so the HUD stays on top) or the whole
+//     window. It has holes where cut() returns SVG path data, and null hides it. The painted
+//     part swallows clicks, wheel and drags. The holes let them through.
+//   ggs.view.mirror(owner, flips | null) and ggs.view.copyEvent(e, change): see core/mirror.js.
+//   ggs.view.shape.rect / circle / poly build that path data.
+//   guessArea() is the guess map's rect with its Guess button (null outside a round).
+//   lastTile() is when the last Street View tile reached the screen (performance.now()).
+(() => {
+  const ggs = globalThis.__ggs;
+  const HOST = 'data-ggs-view';
+  // Fallbacks for a panorama made before the hook was in place. radio uses the same pair.
+  const PANO_SELECTORS = ['[data-qa="panorama"]', '[class*="game_panorama"]'];
+
+  // ---- finding the panorama ----
+  // Container elements of the last few StreetViewPanoramas, newest last.
+  let hooked = [];
+  ggs.maps.hook('StreetViewPanorama', (_p, args) => {
+    if (!(args[0] instanceof Element)) return;
+    hooked = [...hooked.filter(e => e.isConnected), args[0]].slice(-5);
+  });
+
+  // The Street View element on screen. Never one holding the guess map, so nothing done to
+  // it can reach the map.
+  function panoElement() {
+    const map = ggs.maps.guessMapElement();
+    const ok = el => el?.isConnected && el.offsetWidth > 0 && !(map && el.contains(map));
+    return (
+      [...hooked].reverse().find(ok) ?? PANO_SELECTORS.map(s => document.querySelector(s)).find(ok) ?? null
+    );
+  }
+  // The picture inside it: Google's .gm-style layer, or its first child that isn't ours.
+  const sceneOf = pano =>
+    [...pano.children].find(c => c.classList.contains('gm-style')) ??
+    [...pano.children].find(c => !c.hasAttribute(HOST)) ??
+    null;
+
+  // The guess map's area: the smallest element holding both the map and its Guess button,
+  // so the map's own size buttons are in it too. If that is most of the window, the two
+  // rects together instead.
+  function guessArea() {
+    const map = ggs.maps.guessMapElement();
+    if (!map) return null;
+    const btn = ggs.maps.guessButton();
+    let box = map.closest(ggs.maps.GUESS_AREA) ?? (btn ? map.parentElement : null);
+    while (box && btn && !box.contains(btn)) box = box.parentElement;
+    const r = box?.getBoundingClientRect();
+    if (r && r.width * r.height < innerWidth * innerHeight * 0.6) return r;
+    const rects = [map, btn].filter(Boolean).map(e => e.getBoundingClientRect());
+    const left = Math.min(...rects.map(q => q.left));
+    const top = Math.min(...rects.map(q => q.top));
+    const right = Math.max(...rects.map(q => q.right));
+    const bottom = Math.max(...rects.map(q => q.bottom));
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+
+  // A filter that changes nothing, last in line: it only notes when tiles arrive.
+  let tileAt = 0;
+  ggs.tiles.filter((_rec, source) => {
+    tileAt = performance.now();
+    return source;
+  }, 99);
+  const lastTile = () => tileAt;
+
+  // ---- path data ----
+  const n = v => Math.round(v * 10) / 10;
+  const shape = {
+    poly: pts => `M${pts.map(([x, y]) => `${n(x)} ${n(y)}`).join('L')}Z`,
+    circle: (cx, cy, r) =>
+      `M${n(cx - r)} ${n(cy)}` + `a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`,
+    rect(x, y, w, h, r = 0) {
+      r = Math.min(r, w / 2, h / 2);
+      if (!r)
+        return shape.poly([
+          [x, y],
+          [x + w, y],
+          [x + w, y + h],
+          [x, y + h],
+        ]);
+      const arc = (dx, dy) => `a${n(r)} ${n(r)} 0 0 1 ${n(dx)} ${n(dy)}`;
+      return (
+        `M${n(x + r)} ${n(y)}H${n(x + w - r)}${arc(r, r)}V${n(y + h - r)}` +
+        `${arc(-r, r)}H${n(x + r)}${arc(-r, -r)}V${n(y + r)}${arc(r, -r)}Z`
+      );
+    },
+  };
+
+  // ---- effects on the picture ----
+  // owner -> { filter, transform }
+  const effects = new Map();
+  // { scene, pano, saved inline styles, last transform }
+  let applied = null;
+  const PROPS = { scene: ['filter', 'transform', 'willChange'], pano: ['overflow'] };
+
+  function release() {
+    if (!applied) return;
+    for (const k of PROPS.scene) applied.scene.style[k] = applied.saved.scene[k];
+    for (const k of PROPS.pano) applied.pano.style[k] = applied.saved.pano[k];
+    applied = null;
+  }
+
+  function paint(now) {
+    const pano = effects.size ? panoElement() : null;
+    const scene = pano && sceneOf(pano);
+    if (applied && applied.scene !== scene) release();
+    if (!scene) return;
+    applied ??= { scene, pano, saved: { scene: keep(scene, PROPS.scene), pano: keep(pano, PROPS.pano) } };
+    const { width: w, height: h } = pano.getBoundingClientRect();
+    const { filter, transform } = combined(now, w, h);
+    if (scene.style.filter !== filter) scene.style.filter = filter || applied.saved.scene.filter;
+    if (applied.transform !== transform) setTransform(transform);
+  }
+  const keep = (el, keys) => Object.fromEntries(keys.map(k => [k, el.style[k]]));
+
+  // Every owner's effect together, as one filter and one transform.
+  function combined(now, w, h) {
+    const all = [...effects.values()];
+    const filter = all
+      .map(e => e.filter)
+      .filter(Boolean)
+      .join(' ');
+    const transform = all
+      .map(e => (typeof e.transform === 'function' ? e.transform(now, w, h) : e.transform))
+      .filter(Boolean)
+      .join(' ');
+    return { filter, transform };
+  }
+
+  function setTransform(transform) {
+    const { scene, pano, saved } = applied;
+    applied.transform = transform;
+    scene.style.transform = transform || saved.scene.transform;
+    scene.style.willChange = transform ? 'transform' : saved.scene.willChange;
+    // A transformed picture is clipped to the panorama's box, so a scaled-up one can't spill out.
+    pano.style.overflow = transform ? 'hidden' : saved.pano.overflow;
+  }
+
+  function effect(owner, e) {
+    if (e) effects.set(owner, e);
+    else effects.delete(owner);
+    run();
+  }
+  const script = (id, make) => ({
+    start(cfg) {
+      const update = c => effect(id, make(c));
+      update(cfg);
+      return { update, stop: () => effect(id, null) };
+    },
+  });
+
+  // ---- masks ----
+  const masks = new Set();
+  const LOOKS = {
+    // Cream paper with a faint dot grid and an ink edge with a hard shadow, like the popup.
+    paper: {
+      paper: '#f5f1e8',
+      dot: 'rgba(28,26,46,.09)',
+      edge: '#1c1a2e',
+      width: 3,
+      shadow: 'rgba(28,26,46,.3)',
+    },
+    // Near-black with a barely-there dot grid and a thin cream edge round the holes.
+    night: {
+      paper: '#0b0a12',
+      dot: 'rgba(245,241,232,.06)',
+      edge: 'rgba(245,241,232,.8)',
+      width: 2,
+      shadow: null,
+    },
+  };
+  const BLOCKED = [
+    'pointerdown',
+    'pointerup',
+    'mousedown',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'touchstart',
+    'touchmove',
+  ];
+
+  function mask({ over, look: lookName, cut }) {
+    const look = LOOKS[lookName] ?? LOOKS.paper;
+    const screen = over === 'screen';
+    const host = document.createElement('div');
+    host.setAttribute(HOST, '');
+    host.style.cssText =
+      `all: initial; position: ${screen ? 'fixed' : 'absolute'}; inset: 0; display: block;` +
+      ` z-index: ${screen ? 2147482000 : 2147483000}; pointer-events: none;`;
+    // Events on the painted sheet stop here, so neither Street View nor GeoGuessr see them.
+    for (const type of BLOCKED) host.addEventListener(type, e => e.stopPropagation());
+    const root = host.attachShadow({ mode: 'open' });
+    const shadow = look.shadow
+      ? `<path class="shadow" fill-rule="evenodd" fill="${look.shadow}" transform="translate(5 5)"/>`
+      : '';
+    root.innerHTML = `<style>
+        svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden;
+              pointer-events: none; }
+        .sheet { pointer-events: visiblePainted; cursor: default; }
+      </style>
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <defs><pattern id="paper" width="22" height="22" patternUnits="userSpaceOnUse">
+          <rect width="22" height="22" fill="${look.paper}"/><circle cx="11" cy="11" r="1.4" fill="${look.dot}"/>
+        </pattern></defs>
+        ${shadow}
+        <path class="sheet" fill-rule="evenodd" fill="url(#paper)" stroke="${look.edge}"
+              stroke-width="${look.width}" stroke-linejoin="round"/>
+      </svg>`;
+    const m = { last: null, pano: null, saved: null };
+
+    // Puts back the panorama's own isolation and position.
+    function unpin() {
+      if (m.pano) Object.assign(m.pano.style, m.saved);
+      m.pano = null;
+    }
+
+    // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
+    // and GeoGuessr's HUD keeps drawing above it.
+    function pin(pano) {
+      m.pano = pano;
+      m.saved = { isolation: pano.style.isolation, position: pano.style.position };
+      pano.style.isolation = 'isolate';
+      if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
+    }
+
+    function moveInto(parent) {
+      unpin();
+      parent.append(host);
+      m.last = null;
+      if (!screen) pin(parent);
+    }
+
+    function drawHoles() {
+      const w = host.clientWidth;
+      const h = host.clientHeight;
+      const holes = cut(w, h);
+      host.hidden = holes === null;
+      // The outer edge is 20px past the box so its stroke is off screen. Only the holes' edges show.
+      const d = holes === null ? '' : `M-20 -20H${w + 20}V${h + 20}H-20Z${holes}`;
+      if (d === m.last) return;
+      m.last = d;
+      for (const p of root.querySelectorAll('path')) p.setAttribute('d', d);
+    }
+
+    m.draw = () => {
+      const parent = screen ? document.body : panoElement();
+      if (!parent) {
+        host.remove();
+        unpin();
+        return;
+      }
+      if (host.parentElement !== parent) moveInto(parent);
+      drawHoles();
+    };
+
+    masks.add(m);
+    run();
+    return {
+      stop() {
+        masks.delete(m);
+        host.remove();
+        unpin();
+      },
+    };
+  }
+
+  // ---- the loop ----
+  let raf = 0;
+  function run() {
+    if (raf) return;
+    const frame = now => {
+      raf = 0;
+      try {
+        paint(now);
+        for (const m of masks) m.draw();
+      } catch (err) {
+        ggs.log('view update failed', err);
+      }
+      if (effects.size || masks.size) raf = requestAnimationFrame(frame);
+      else release();
+    };
+    raf = requestAnimationFrame(frame);
+  }
+
+  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, shape, ...ggs.viewMirror };
+})();
+
+// ==================== src/form-parts.js ===========================================
+// Pieces of the settings form (src/form.js), loaded just before it wherever it is (popup,
+// in-page panel, userscript). Plain HTML and two widgets, with no settings of their own.
+//   ggs.formParts.flatHtml(meta): a flat script's card part, a button per option.
+//   ggs.formParts.scriptHtml(meta): a script's card part: switch, options, a "More" fold.
+//   ggs.formParts.stops(el, opt, value, pick(v)) -> { show(v) }: a slider with a label per
+//     stop. pick gets each value the user chooses, show() shows one set elsewhere.
+//   ggs.formParts.searchBox(container, registry, text(card)): the search box over the cards.
+(() => {
+  globalThis.__ggs ??= {};
+  const ggs = globalThis.__ggs;
+
+  const field = o => {
+    const type = o.secret ? 'password' : 'text';
+    return (
+      `<label class="row"><span class="text">${o.label}</span>
+         <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"` +
+      ' autocomplete="off"></label>'
+    );
+  };
+  const select = o => {
+    const choices = o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('');
+    return `<label class="row"><span class="text">${o.label}</span>
+         <select data-key="${o.key}">${choices}</select></label>`;
+  };
+  // A label per stop: the stops sit under their labels.
+  const stopsSlider = o => {
+    const marks = o.marks.map(m => `<span data-t="${m}">${m}</span>`).join('');
+    return (
+      `<div class="row slider"><span class="text">${o.label}</span>
+         <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">` +
+      `<span class="track"><i></i><b></b></span>
+         <span class="marks">${marks}</span></span></div>`
+    );
+  };
+  const rangeSlider = o =>
+    `<label class="row slider"><span class="text">${o.label}${o.steps ? ': <b class="val"></b>' : ''}</span>
+         <input type="range" data-key="${o.key}" min="${o.min}" max="${o.max}" step="1">
+         ${marksHtml(o)}</label>`;
+  // A plain slider's labels, spread out. With `steps` (a name per stop) only the ends are
+  // marked, and the label says the stop it's on.
+  function marksHtml(o) {
+    const ends = o.steps ? [o.steps[0], o.steps.at(-1)] : o.marks;
+    return `<span class="marks">${ends.map(m => `<span>${m}</span>`).join('')}</span>`;
+  }
+  // One of a few, as a row of buttons.
+  const buttons = o => {
+    const list = o.choices.map(
+      c =>
+        `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`,
+    );
+    return `<div class="row boxes">${list.join('')}</div>`;
+  };
+  const OPTION = {
+    mic: o => `<button type="button" class="micnote" hidden>${o.label}</button>`,
+    text: field,
+    select,
+    slider: o => (o.marks?.length === o.max - o.min + 1 ? stopsSlider(o) : rangeSlider(o)),
+    buttons,
+  };
+  const option = o =>
+    OPTION[o.type]?.(o) ?? `<button type="button" class="tog opt" data-key="${o.key}">${o.label}</button>`;
+
+  // Checkboxes are buttons that light up. Side-by-side ones share a row.
+  const options = list =>
+    list
+      .map(option)
+      .join('')
+      .replace(
+        /(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
+        row => `<div class="row boxes">${row}</div>`,
+      );
+
+  // Flat: a button per option, and "enabled" is any option on. No name when grouped.
+  function flatHtml(meta) {
+    const list = meta.options
+      .map(o => `<button type="button" class="tog" data-key="${o.key}">${o.label}</button>`)
+      .join('');
+    return `
+        <div class="row boxes">
+          ${meta.group ? '' : `<span class="text"><span class="name">${meta.name}</span></span>`}
+          ${list}
+        </div><div class="status"></div>`;
+  }
+
+  function scriptHtml(meta) {
+    const more = meta.options.some(o => o.hidden)
+      ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>` +
+        `${options(meta.options.filter(o => o.hidden))}</details>`
+      : '';
+    return `
+        <label class="row">
+          <span class="text"><span class="name">${meta.name}</span><span class="desc">${meta.description}</span></span>
+          <input type="checkbox" class="switch" data-key="enabled">
+        </label>
+        <div class="opts">${options(meta.options.filter(o => !o.hidden))}${more}<div class="status"></div></div>`;
+  }
+
+  // A slider with a label per stop. The labels are spread to fit and each stop sits at its
+  // label's centre, so the stops aren't evenly spaced. The end ones sit at the track's ends,
+  // thumb flush with the edge like a native range. Click, drag or arrow keys pick one.
+  function stops(el, opt, value, pick) {
+    const labels = [...el.querySelectorAll('.marks span')];
+    // Half the thumb's width.
+    const THUMB = 8;
+    const centres = () => {
+      const r = el.getBoundingClientRect();
+      const c = labels.map(l => {
+        const b = l.getBoundingClientRect();
+        return b.left + b.width / 2 - r.left;
+      });
+      return c.map((x, i) => (i === 0 ? THUMB : i === c.length - 1 ? r.width - THUMB : x));
+    };
+    const draw = () => {
+      labels.forEach((l, i) => {
+        l.classList.toggle('on', i === value - opt.min);
+      });
+      el.style.setProperty('--x', `${centres()[value - opt.min] ?? 0}px`);
+      el.setAttribute('aria-valuenow', value);
+    };
+    const set = v => {
+      v = Math.max(opt.min, Math.min(opt.max, v));
+      if (v === value) return;
+      value = v;
+      draw();
+      pick(v);
+    };
+    const at = e => {
+      const x = e.clientX - el.getBoundingClientRect().left;
+      const c = centres();
+      const nearest = c.reduce((best, cx, i) => (Math.abs(cx - x) < Math.abs(c[best] - x) ? i : best), 0);
+      set(opt.min + nearest);
+    };
+    el.addEventListener('pointerdown', e => {
+      el.setPointerCapture(e.pointerId);
+      at(e);
+    });
+    el.addEventListener('pointermove', e => {
+      if (e.buttons & 1) at(e);
+    });
+    el.addEventListener('keydown', e => {
+      const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      set(value + step);
+    });
+    // Also redraws when its section opens.
+    new ResizeObserver(draw).observe(el);
+    draw();
+    return {
+      show(v) {
+        value = v;
+        draw();
+      },
+    };
+  }
+
+  // A search box at the top of the form. It hides the cards whose text(card) doesn't match,
+  // and opens the sections that still have some. The suggestions are the scripts' names.
+  function searchBox(container, registry, text) {
+    const search = document.createElement('div');
+    search.className = 'search';
+    const names = registry
+      .filter(m => !m.flat)
+      .map(m => `<option value="${m.name}">`)
+      .join('');
+    search.innerHTML =
+      '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
+      ` list="ggs-names" autocomplete="off">
+      <datalist id="ggs-names">${names}</datalist>`;
+    container.append(search);
+    const box = search.querySelector('input');
+    // The sections' open state before the search, put back when it's cleared.
+    let openBefore = null;
+    function showSections(secs, q) {
+      secs.forEach((s, i) => {
+        const any = [...s.querySelectorAll('.cards > section')].some(c => !c.hidden);
+        s.hidden = !any;
+        if (q) s.open = any;
+        else if (openBefore) s.open = openBefore[i];
+      });
+    }
+    box.addEventListener('input', () => {
+      const q = box.value.trim().toLowerCase();
+      const secs = [...container.querySelectorAll(':scope > .sec')];
+      if (q && !openBefore) openBefore = secs.map(s => s.open);
+      // Matched from the start of a word, so "lag" finds Lag but not Draw the flag.
+      const words = new RegExp(`(^|[^a-z0-9])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+      for (const card of container.querySelectorAll('.cards > section')) {
+        card.hidden = !!q && !words.test(text(card));
+      }
+      showSections(secs, q);
+      if (!q) openBefore = null;
+      // A suggestion picked whole: bring its card into view.
+      const exact = registry.find(m => m.name.toLowerCase() === q);
+      if (exact)
+        container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  ggs.formParts = { flatHtml, scriptHtml, stops, searchBox };
 })();
 
 // ==================== src/form.js =================================================
 // Settings form: one card per script in ggs.registry, under a search box. Cards sit in a
 // collapsible section per `section` (SECTIONS below, in that order), A to Z by name.
 // Used by the popup and by the in-page panel (src/panel.js). update(settings) shows
-// settings changed elsewhere without firing save.
+// settings changed elsewhere without firing save. The HTML, the stops slider and the search
+// box are in src/form-parts.js, loaded just before this.
 //   ggs.settingsForm(container, { settings, save(id, key, value) })
 //     -> { setStatus(id, text), update(settings) }
 (() => {
@@ -3352,10 +3771,18 @@ section.flat .status:empty { display: none; }
   ggs.settingsForm = (container, { settings: initial, save }) => {
     let settings = initial;
     const { registry, config } = ggs;
+    const { flatHtml, scriptHtml, stops, searchBox } = ggs.formParts;
     // hideable: options with a hideIn, hidden by game mode.
     const statusEls = {};
     const refreshers = [];
     const hideable = [];
+    const refresh = () => {
+      for (const fn of refreshers) fn();
+    };
+    const store = (id, key, value) => {
+      settings[id] = { ...settings[id], [key]: value };
+      save(id, key, value);
+    };
     // The page's microphone permission (its '_mic' status line).
     let micState = '';
     const micNotes = [];
@@ -3365,62 +3792,6 @@ section.flat .status:empty { display: none; }
       settings._mic = { ask: Date.now() };
       save('_mic', 'ask', settings._mic.ask);
     };
-
-    function option(o) {
-      if (o.type === 'mic') return `<button type="button" class="micnote" hidden>${o.label}</button>`;
-      if (o.type === 'text') {
-        const type = o.secret ? 'password' : 'text';
-        return (
-          `<label class="row"><span class="text">${o.label}</span>
-             <input type="${type}" class="field" data-key="${o.key}" placeholder="${o.placeholder ?? ''}"` +
-          ' autocomplete="off"></label>'
-        );
-      }
-      if (o.type === 'select') {
-        const choices = o.choices.map(c => `<option value="${c.value}">${c.label}</option>`).join('');
-        return `<label class="row"><span class="text">${o.label}</span>
-             <select data-key="${o.key}">${choices}</select></label>`;
-      }
-      // A label per stop: the stops sit under their labels.
-      if (o.type === 'slider' && o.marks?.length === o.max - o.min + 1) {
-        const marks = o.marks.map(m => `<span data-t="${m}">${m}</span>`).join('');
-        return (
-          `<div class="row slider"><span class="text">${o.label}</span>
-             <span class="stops" data-key="${o.key}" tabindex="0" role="slider" aria-label="${o.label}">` +
-          `<span class="track"><i></i><b></b></span>
-             <span class="marks">${marks}</span></span></div>`
-        );
-      }
-      if (o.type === 'slider') {
-        return `<label class="row slider"><span class="text">${o.label}${o.steps ? ': <b class="val"></b>' : ''}</span>
-             <input type="range" data-key="${o.key}" min="${o.min}" max="${o.max}" step="1">
-             ${marksHtml(o)}</label>`;
-      }
-      // One of a few, as a row of buttons.
-      if (o.type === 'buttons') {
-        const buttons = o.choices.map(
-          c =>
-            `<button type="button" class="tog opt" data-key="${o.key}" data-value="${c.value}">${c.label}</button>`,
-        );
-        return `<div class="row boxes">${buttons.join('')}</div>`;
-      }
-      return `<button type="button" class="tog opt" data-key="${o.key}">${o.label}</button>`;
-    }
-    // A plain slider's labels, spread out. With `steps` (a name per stop) only the ends are
-    // marked, and the label says the stop it's on.
-    function marksHtml(o) {
-      const ends = o.steps ? [o.steps[0], o.steps.at(-1)] : o.marks;
-      return `<span class="marks">${ends.map(m => `<span>${m}</span>`).join('')}</span>`;
-    }
-    // Checkboxes are buttons that light up. Side-by-side ones share a row.
-    const options = list =>
-      list
-        .map(option)
-        .join('')
-        .replace(
-          /(<button type="button" class="tog opt" data-key="[^"]*">[^<]*<\/button>)+/g,
-          row => `<div class="row boxes">${row}</div>`,
-        );
 
     // Metas sharing a `group` render inside one card, each as a .part. The card is off when
     // none of its parts is enabled.
@@ -3435,39 +3806,36 @@ section.flat .status:empty { display: none; }
       const changes = { [key]: value, enabled };
       settings[meta.id] = { ...settings[meta.id], ...changes };
       for (const [k, v] of Object.entries(changes)) save(meta.id, k, v);
-      for (const fn of refreshers) fn();
+      refresh();
     };
     const byId = Object.fromEntries(registry.map(m => [m.id, m]));
 
-    // Search hides the cards whose name and description don't match, and opens the sections
-    // that still have some. The suggestions are the scripts' names.
-    const search = document.createElement('div');
-    search.className = 'search';
-    const names = registry
-      .filter(m => !m.flat)
-      .map(m => `<option value="${m.name}">`)
-      .join('');
-    search.innerHTML =
-      '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
-      ` list="ggs-names" autocomplete="off">
-      <datalist id="ggs-names">${names}</datalist>`;
-    container.append(search);
+    // Search hides the cards whose name and description don't match.
+    const cardText = card =>
+      parts[card.dataset.id]
+        .map(m => `${m.name} ${m.description} ${m.flat ? m.options.map(o => o.label).join(' ') : ''}`)
+        .join(' ');
+    searchBox(container, registry, cardText);
 
     // One <details> per section that has scripts. Its summary counts the scripts that are on.
+    // No fold for a LONE section: the card sits straight in the list.
     const sections = {};
-    for (const [key, title] of Object.entries(SECTIONS)) {
-      const metas = registry.filter(m => (m.section ?? 'misc') === key);
-      if (!metas.length) continue;
-      // No fold: the card sits straight in the list.
-      if (LONE.includes(key)) {
-        const el = document.createElement('div');
-        el.className = 'sec lone';
-        el.dataset.section = key;
-        el.innerHTML = '<div class="cards"></div>';
-        sections[key] = el.firstChild;
-        container.append(el);
-        continue;
-      }
+    function addLoneSection(key) {
+      const el = document.createElement('div');
+      el.className = 'sec lone';
+      el.dataset.section = key;
+      el.innerHTML = '<div class="cards"></div>';
+      sections[key] = el.firstChild;
+      container.append(el);
+    }
+    // A flat script (Controls, UI) counts each option that's on.
+    const countOn = metas =>
+      metas.reduce((n, m) => {
+        const cfg = config(m, settings);
+        if (m.flat) return n + m.options.filter(o => cfg[o.key] === true).length;
+        return n + (cfg.enabled ? 1 : 0);
+      }, 0);
+    function addSection(key, title, metas) {
       const el = document.createElement('details');
       el.className = 'sec';
       el.dataset.section = key;
@@ -3483,23 +3851,22 @@ section.flat .status:empty { display: none; }
       });
       const count = el.querySelector('.count');
       refreshers.push(() => {
-        // A flat script (Controls, UI) counts each option that's on.
-        const on = metas.reduce((n, m) => {
-          const cfg = config(m, settings);
-          return n + (m.flat ? m.options.filter(o => cfg[o.key] === true).length : cfg.enabled ? 1 : 0);
-        }, 0);
+        const on = countOn(metas);
         count.textContent = on ? `${on} on` : '';
       });
       sections[key] = el.querySelector('.cards');
       container.append(el);
     }
+    for (const [key, title] of Object.entries(SECTIONS)) {
+      const metas = registry.filter(m => (m.section ?? 'misc') === key);
+      if (!metas.length) continue;
+      if (LONE.includes(key)) addLoneSection(key);
+      else addSection(key, title, metas);
+    }
 
     // A script's `turnsOn` options go on with it, and off with it unless the user has touched
     // them since. `auto_<key>` on the option's script remembers which script switched it on.
-    const mark = (id, k, by) => {
-      settings[id] = { ...settings[id], [`auto_${k}`]: by };
-      save(id, `auto_${k}`, by);
-    };
+    const mark = (id, k, by) => store(id, `auto_${k}`, by);
     const autoOn = meta => {
       for (const { id, key: k } of meta.turnsOn ?? []) {
         if (config(byId[id], settings)[k]) continue;
@@ -3524,68 +3891,9 @@ section.flat .status:empty { display: none; }
       if (!opt?.steps) return;
       box.closest('.slider').querySelector('.val').textContent = opt.steps[box.value - opt.min] ?? '';
     }
-    // A slider with a label per stop. The labels are spread to fit and each stop sits at its
-    // label's centre, so the stops aren't evenly spaced. The end ones sit at the track's ends,
-    // thumb flush with the edge like a native range. Click, drag or arrow keys pick one.
-    function stops(el, meta, opt) {
-      const key = el.dataset.key;
-      const labels = [...el.querySelectorAll('.marks span')];
-      let value = config(meta, settings)[key];
-      // Half the thumb's width.
-      const THUMB = 8;
-      const centres = () => {
-        const r = el.getBoundingClientRect();
-        const c = labels.map(l => {
-          const b = l.getBoundingClientRect();
-          return b.left + b.width / 2 - r.left;
-        });
-        return c.map((x, i) => (i === 0 ? THUMB : i === c.length - 1 ? r.width - THUMB : x));
-      };
-      const draw = () => {
-        labels.forEach((l, i) => {
-          l.classList.toggle('on', i === value - opt.min);
-        });
-        el.style.setProperty('--x', `${centres()[value - opt.min] ?? 0}px`);
-        el.setAttribute('aria-valuenow', value);
-      };
-      const set = v => {
-        v = Math.max(opt.min, Math.min(opt.max, v));
-        if (v === value) return;
-        value = v;
-        draw();
-        settings[meta.id] = { ...settings[meta.id], [key]: v };
-        save(meta.id, key, v);
-        for (const fn of refreshers) fn();
-      };
-      const at = e => {
-        const x = e.clientX - el.getBoundingClientRect().left;
-        const c = centres();
-        const nearest = c.reduce((best, cx, i) => (Math.abs(cx - x) < Math.abs(c[best] - x) ? i : best), 0);
-        set(opt.min + nearest);
-      };
-      el.addEventListener('pointerdown', e => {
-        el.setPointerCapture(e.pointerId);
-        at(e);
-      });
-      el.addEventListener('pointermove', e => {
-        if (e.buttons & 1) at(e);
-      });
-      el.addEventListener('keydown', e => {
-        const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
-        if (!step) return;
-        e.preventDefault();
-        set(value + step);
-      });
-      // Also redraws when its section opens.
-      new ResizeObserver(draw).observe(el);
-      refreshers.push(() => {
-        value = config(meta, settings)[key];
-        draw();
-      });
-      draw();
-    }
 
-    for (const meta of [...registry].sort((a, b) => a.name.localeCompare(b.name))) {
+    // The card a script goes in: its own, or its group's.
+    function cardFor(meta) {
       let card = meta.group && groups[meta.group];
       if (!card) {
         card = document.createElement('section');
@@ -3594,163 +3902,139 @@ section.flat .status:empty { display: none; }
         sections[meta.section ?? 'misc'].append(card);
       }
       parts[card.dataset.id] ??= [];
+      parts[card.dataset.id].push(meta);
+      return card;
+    }
+
+    function addCard(meta) {
+      const card = cardFor(meta);
       const metasHere = parts[card.dataset.id];
-      metasHere.push(meta);
       const part = meta.group ? document.createElement('div') : card;
       part.className = meta.group ? 'part' : '';
       part.dataset.id = meta.id;
       const setOff = () => reflect(card, metasHere);
       setOff();
       card.classList.toggle('flat', !!meta.flat && !meta.group);
-      // Flat: a button per option, and "enabled" is any option on. No name when grouped.
-      if (meta.flat) {
-        const buttons = meta.options
-          .map(o => `<button type="button" class="tog" data-key="${o.key}">${o.label}</button>`)
-          .join('');
-        part.innerHTML = `
-        <div class="row boxes">
-          ${meta.group ? '' : `<span class="text"><span class="name">${meta.name}</span></span>`}
-          ${buttons}
-        </div><div class="status"></div>`;
-      } else {
-        const more = meta.options.some(o => o.hidden)
-          ? `<details class="more"><summary>${meta.moreLabel ?? 'More'}</summary>` +
-            `${options(meta.options.filter(o => o.hidden))}</details>`
-          : '';
-        part.innerHTML = `
-        <label class="row">
-          <span class="text"><span class="name">${meta.name}</span><span class="desc">${meta.description}</span></span>
-          <input type="checkbox" class="switch" data-key="enabled">
-        </label>
-        <div class="opts">${options(meta.options.filter(o => !o.hidden))}${more}<div class="status"></div></div>`;
-      }
+      part.innerHTML = meta.flat ? flatHtml(meta) : scriptHtml(meta);
       if (meta.group) card.append(part);
-      for (const btn of part.querySelectorAll('button.tog:not(.opt)')) {
-        const key = btn.dataset.key;
-        const show = () => {
-          const cfg = config(meta, settings);
-          btn.setAttribute('aria-pressed', !!cfg[key]);
-          setOff();
-        };
-        show();
-        refreshers.push(show);
-        btn.addEventListener('click', () => setByUser(meta, key, !config(meta, settings)[key]));
-      }
-      // Option buttons: a checkbox flips, or one of a 'buttons' choice is picked.
-      for (const btn of part.querySelectorAll('button.opt')) {
-        const key = btn.dataset.key;
-        const pick = btn.dataset.value;
-        const value = () => config(meta, settings)[key];
-        const show = () =>
-          btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
-        show();
-        refreshers.push(show);
-        btn.addEventListener('click', () => {
-          const next = pick ?? !value();
-          settings[meta.id] = { ...settings[meta.id], [key]: next };
-          save(meta.id, key, next);
-          for (const fn of refreshers) fn();
-        });
-      }
+      wire(part, meta, setOff);
+    }
+
+    // The part's controls, each kept in step with the settings by a refresher.
+    function wire(part, meta, setOff) {
+      for (const btn of part.querySelectorAll('button.tog:not(.opt)')) flatButton(btn, meta, setOff);
+      for (const btn of part.querySelectorAll('button.opt')) optionButton(btn, meta);
       statusEls[meta.id] = part.querySelector('.status');
       for (const note of part.querySelectorAll('.micnote')) {
         micNotes.push(note);
         note.addEventListener('click', askMic);
       }
-      for (const o of meta.options) {
-        const el = o.hideIn && part.querySelector(`[data-key="${o.key}"]`)?.closest('button, label');
-        if (el) hideable.push({ el, hideIn: o.hideIn });
-      }
-      for (const el of part.querySelectorAll('.stops[data-key]')) {
-        stops(
-          el,
-          meta,
-          meta.options.find(o => o.key === el.dataset.key),
-        );
-      }
-      for (const box of part.querySelectorAll('input[data-key], select[data-key]')) {
-        const key = box.dataset.key;
-        const range = box.type === 'range';
-        const select = box.tagName === 'SELECT';
-        const text = box.type === 'text' || box.type === 'password';
-        const opt = meta.options.find(o => o.key === key);
-        const show = () => {
-          const v = config(meta, settings)[key];
-          if (range || select || text) box.value = v;
-          else box.checked = !!v;
-          if (range) marks(box, opt);
-          if (key === 'enabled') setOff();
-        };
-        show();
-        refreshers.push(show);
-        if (range) box.addEventListener('input', () => marks(box, opt));
-        box.addEventListener('change', () => {
-          const value = range ? Number(box.value) : select || text ? box.value : box.checked;
-          // Microphone blocked, so it stays off.
-          if (key === 'enabled' && value && meta.mic && micState === 'denied') {
-            box.checked = false;
-            statusEls[meta.id].textContent =
-              'Microphone blocked: allow it for geoguessr.com from the address bar';
-            return;
-          }
-          settings[meta.id] = { ...settings[meta.id], [key]: value };
-          save(meta.id, key, value);
-          if (key === 'enabled' && value) {
-            // Switching this one on switches off the scripts it can't run beside...
-            const clashes = registry.filter(
-              m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id),
-            );
-            for (const ex of clashes) {
-              if (!config(ex, settings).enabled) continue;
-              settings[ex.id] = { ...settings[ex.id], enabled: false };
-              save(ex.id, 'enabled', false);
-              autoOff(ex);
-            }
-            // ...and switches on the (flat) options it wants, which can be switched off again.
-            autoOn(meta);
-          } else if (key === 'enabled') {
-            autoOff(meta);
-          }
-          for (const fn of refreshers) fn();
-        });
-      }
+      for (const o of meta.options) hideIn(part, o);
+      for (const el of part.querySelectorAll('.stops[data-key]')) stopsFor(el, meta);
+      for (const box of part.querySelectorAll('input[data-key], select[data-key]')) input(box, meta, setOff);
     }
+
+    function hideIn(part, o) {
+      const el = o.hideIn && part.querySelector(`[data-key="${o.key}"]`)?.closest('button, label');
+      if (el) hideable.push({ el, hideIn: o.hideIn });
+    }
+
+    function flatButton(btn, meta, setOff) {
+      const key = btn.dataset.key;
+      const show = () => {
+        const cfg = config(meta, settings);
+        btn.setAttribute('aria-pressed', !!cfg[key]);
+        setOff();
+      };
+      show();
+      refreshers.push(show);
+      btn.addEventListener('click', () => setByUser(meta, key, !config(meta, settings)[key]));
+    }
+
+    // Option buttons: a checkbox flips, or one of a 'buttons' choice is picked.
+    function optionButton(btn, meta) {
+      const key = btn.dataset.key;
+      const pick = btn.dataset.value;
+      const value = () => config(meta, settings)[key];
+      const show = () =>
+        btn.setAttribute('aria-pressed', pick == null ? !!value() : String(value()) === pick);
+      show();
+      refreshers.push(show);
+      btn.addEventListener('click', () => {
+        store(meta.id, key, pick ?? !value());
+        refresh();
+      });
+    }
+
+    function stopsFor(el, meta) {
+      const key = el.dataset.key;
+      const opt = meta.options.find(o => o.key === key);
+      const slider = stops(el, opt, config(meta, settings)[key], v => {
+        store(meta.id, key, v);
+        refresh();
+      });
+      refreshers.push(() => slider.show(config(meta, settings)[key]));
+    }
+
+    // Inputs, selects, range sliders and the script's own switch ('enabled').
+    function input(box, meta, setOff) {
+      const key = box.dataset.key;
+      const range = box.type === 'range';
+      const valued = range || box.tagName === 'SELECT' || box.type === 'text' || box.type === 'password';
+      const opt = meta.options.find(o => o.key === key);
+      const show = () => {
+        const v = config(meta, settings)[key];
+        if (valued) box.value = v;
+        else box.checked = !!v;
+        if (range) marks(box, opt);
+        if (key === 'enabled') setOff();
+      };
+      show();
+      refreshers.push(show);
+      if (range) box.addEventListener('input', () => marks(box, opt));
+      box.addEventListener('change', () => {
+        const value = range ? Number(box.value) : valued ? box.value : box.checked;
+        if (key === 'enabled' && value && micBlocked(box, meta)) return;
+        store(meta.id, key, value);
+        if (key === 'enabled') switched(meta, value);
+        refresh();
+      });
+    }
+
+    // Microphone blocked, so it stays off.
+    function micBlocked(box, meta) {
+      if (!meta.mic || micState !== 'denied') return false;
+      box.checked = false;
+      statusEls[meta.id].textContent = 'Microphone blocked: allow it for geoguessr.com from the address bar';
+      return true;
+    }
+
+    function switched(meta, on) {
+      if (on) switchOn(meta);
+      else autoOff(meta);
+    }
+
+    // Switching a script on switches off the scripts it can't run beside, and switches on
+    // the (flat) options it wants, which can be switched off again.
+    function switchOn(meta) {
+      const clashes = registry.filter(m => meta.excludes?.includes(m.id) || m.excludes?.includes(meta.id));
+      for (const ex of clashes) {
+        if (!config(ex, settings).enabled) continue;
+        store(ex.id, 'enabled', false);
+        autoOff(ex);
+      }
+      autoOn(meta);
+    }
+
+    for (const meta of [...registry].sort((a, b) => a.name.localeCompare(b.name))) addCard(meta);
 
     // While Chaos mode is on it picks the other scripts itself, so their sections are greyed out.
     const chaos = byId.chaos;
     if (chaos)
       refreshers.push(() => container.classList.toggle('chaos-on', !!config(chaos, settings).enabled));
 
-    const box = search.querySelector('input');
-    // The sections' open state before the search, put back when it's cleared.
-    let openBefore = null;
-    box.addEventListener('input', () => {
-      const q = box.value.trim().toLowerCase();
-      const secs = [...container.querySelectorAll(':scope > .sec')];
-      if (q && !openBefore) openBefore = secs.map(s => s.open);
-      // Matched from the start of a word, so "lag" finds Lag but not Draw the flag.
-      const words = new RegExp(`(^|[^a-z0-9])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
-      for (const card of container.querySelectorAll('.cards > section')) {
-        const text = parts[card.dataset.id]
-          .map(m => `${m.name} ${m.description} ${m.flat ? m.options.map(o => o.label).join(' ') : ''}`)
-          .join(' ');
-        card.hidden = !!q && !words.test(text);
-      }
-      secs.forEach((s, i) => {
-        const any = [...s.querySelectorAll('.cards > section')].some(c => !c.hidden);
-        s.hidden = !any;
-        if (q) s.open = any;
-        else if (openBefore) s.open = openBefore[i];
-      });
-      if (!q) openBefore = null;
-      // A suggestion picked whole: bring its card into view.
-      const exact = registry.find(m => m.name.toLowerCase() === q);
-      if (exact)
-        container.querySelector(`.cards [data-id="${exact.id}"]`)?.scrollIntoView({ block: 'nearest' });
-    });
-
     // Fills in the section counts.
-    for (const fn of refreshers) fn();
+    refresh();
 
     return {
       setStatus(id, text) {
@@ -3765,7 +4049,7 @@ section.flat .status:empty { display: none; }
       },
       update(next) {
         settings = next;
-        for (const fn of refreshers) fn();
+        refresh();
       },
     };
   };
@@ -4859,18 +5143,20 @@ section.flat .status:empty { display: none; }
   // The nearest row with some land, a little inside the country's top and bottom.
   function rowAt(shape, t) {
     const i = Math.round(Math.min(1, Math.max(0, t)) * (ROWS - 1));
-    if (!shape.rowCache.has(i)) {
-      let r = null;
-      for (let d = 0; d < ROWS && !r?.length; d++) {
-        for (const k of [i - d, i + d]) {
-          if (k < 0 || k >= ROWS || r?.length) continue;
-          r = row(shape, shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0));
-          r.y = shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0);
-        }
-      }
-      shape.rowCache.set(i, r);
-    }
+    if (!shape.rowCache.has(i)) shape.rowCache.set(i, nearestRow(shape, i));
     return shape.rowCache.get(i);
+  }
+  function nearestRow(shape, i) {
+    let r = null;
+    for (let d = 0; d < ROWS && !r?.length; d++) {
+      for (const k of [i - d, i + d]) {
+        if (k < 0 || k >= ROWS || r?.length) continue;
+        const y = shape.y0 + ((k + 0.5) / ROWS) * (shape.y1 - shape.y0);
+        r = row(shape, y);
+        r.y = y;
+      }
+    }
+    return r;
   }
 
   const wrap = lng => ((lng + 540) % 360) - 180;
@@ -5284,40 +5570,12 @@ section.flat .status:empty { display: none; }
 // Generated by dev/tools/radio_shapes.py: country outlines for radio mode, each 64 points as flat [x, y, ...] in -100..100.
 (() => { globalThis.__ggs.radioShapes = [[-2,-46,8,-44,8,-37,9,-36,19,-35,32,-35,36,-29,47,-32,56,-32,62,-30,75,-23,88,-25,100,-20,94,-13,95,-6,82,-1,78,9,72,20,68,8,79,-5,74,-5,63,3,52,1,43,14,49,18,45,36,35,46,40,31,30,23,21,22,7,27,-7,21,-18,25,-30,23,-39,17,-50,14,-56,22,-68,21,-74,31,-74,44,-83,43,-86,33,-90,25,-96,14,-100,1,-97,-9,-99,-24,-87,-23,-93,-18,-87,-12,-79,-16,-75,-18,-66,-22,-54,-25,-49,-28,-41,-27,-44,-17,-34,-20,-39,-31,-36,-31,-28,-27,-26,-36,-23,-38,-11,-42],[6,-63,15,-56,20,-49,28,-45,36,-55,40,-46,34,-40,22,-38,26,-34,14,-30,15,-25,9,-15,14,-3,27,4,38,13,45,26,46,13,51,-2,49,-16,56,-22,68,-17,68,-8,75,-7,80,-14,84,-6,86,2,91,8,90,15,100,17,91,28,74,31,66,40,54,53,41,63,38,52,26,39,10,35,-6,34,-26,34,-46,34,-59,32,-65,28,-69,21,-70,19,-73,15,-74,5,-85,-9,-96,-15,-100,-30,-100,-50,-87,-51,-78,-55,-81,-51,-69,-57,-60,-55,-45,-52,-36,-46,-23,-42,-18,-50,-15,-49,1,-47,6,-48,7,-47,10,-54],[58,-68,72,-67,78,-55,88,-49,98,-46,100,-39,90,-32,88,-24,79,-18,69,-13,57,-7,60,-16,49,-9,50,-1,62,-1,55,4,55,14,57,22,58,27,59,32,56,38,51,46,47,52,41,59,32,60,25,65,19,68,14,65,5,58,-4,60,-9,64,-16,58,-21,51,-18,39,-25,34,-34,35,-45,38,-53,38,-64,36,-74,28,-84,23,-84,13,-91,5,-96,-1,-100,-11,-90,-16,-79,-21,-79,-32,-72,-36,-62,-41,-54,-50,-45,-44,-40,-33,-28,-29,-17,-23,-3,-21,9,-22,23,-25,29,-33,41,-37,53,-40,42,-45,44,-53,53,-59],[-29,-100,-28,-87,-17,-85,-8,-89,5,-88,14,-99,19,-86,16,-76,11,-68,20,-66,26,-66,35,-72,46,-68,49,-61,56,-64,71,-62,83,-54,96,-49,99,-34,91,-22,84,-12,78,-4,78,10,74,24,67,36,58,44,49,45,37,51,29,57,29,70,21,82,11,91,18,82,12,89,4,100,-1,89,-12,83,-11,76,0,67,-1,58,-5,49,-12,40,-19,32,-17,20,-22,9,-31,3,-38,-5,-51,-11,-56,-23,-67,-21,-81,-19,-86,-24,-95,-29,-99,-41,-91,-52,-79,-56,-77,-71,-76,-80,-72,-85,-64,-83,-53,-83,-50,-91,-48,-97,-36,-100],[-91,-51,-77,-51,-62,-51,-48,-51,-33,-51,-19,-51,-4,-51,7,-49,20,-47,33,-44,43,-37,47,-25,51,-21,61,-27,73,-33,87,-35,95,-43,100,-34,93,-29,87,-22,87,-19,77,-15,75,-9,71,-8,70,-2,69,-9,67,-4,68,-3,67,1,70,6,67,6,67,9,62,15,55,21,50,29,53,41,55,47,50,51,47,42,42,33,32,31,27,30,21,32,20,35,12,34,4,34,-2,39,-6,47,-13,45,-20,33,-31,33,-41,25,-53,27,-67,21,-77,17,-87,10,-94,-1,-94,-2,-100,-13,-100,-26,-98,-39,-100,-44,-95,-45,-94,-43],[-8,-76,3,-72,12,-71,15,-66,9,-56,20,-49,31,-41,39,-50,40,-64,42,-75,48,-72,51,-59,59,-52,62,-39,70,-30,78,-21,84,-14,91,-5,98,6,100,20,97,33,90,44,85,55,82,68,69,73,62,76,57,71,47,75,34,71,28,60,24,56,18,56,22,47,17,48,8,53,3,44,-7,38,-20,36,-33,40,-47,44,-58,49,-71,51,-84,55,-93,47,-90,37,-94,23,-99,11,-100,6,-97,4,-100,-9,-97,-14,-86,-23,-73,-27,-61,-32,-56,-44,-50,-44,-45,-48,-43,-53,-40,-59,-34,-62,-27,-54,-19,-56,-17,-66,-9,-71],[-40,-99,-30,-97,-24,-85,-26,-77,-17,-68,-16,-58,-8,-48,7,-43,21,-39,36,-35,41,-47,48,-38,64,-38,68,-46,81,-55,95,-58,99,-50,100,-41,87,-34,82,-20,76,-11,70,-4,64,-12,64,-19,63,-26,51,-31,41,-36,43,-26,43,-16,45,-2,40,0,35,1,26,12,19,16,7,28,-4,40,-16,46,-16,61,-19,74,-23,86,-28,94,-39,99,-43,90,-49,75,-55,59,-61,45,-66,30,-67,18,-69,3,-68,-4,-74,5,-89,2,-88,-6,-93,-9,-100,-16,-87,-19,-83,-28,-91,-39,-80,-46,-67,-55,-58,-68,-50,-79,-58,-89,-56,-98],[3,-100,10,-92,19,-87,28,-81,30,-73,28,-65,38,-63,46,-68,50,-76,52,-67,45,-61,38,-54,32,-46,30,-36,28,-26,28,-16,33,-9,36,0,30,9,19,12,9,12,8,18,4,27,-6,25,-7,34,-1,34,-5,36,-7,41,-11,50,-18,55,-19,64,-12,70,-16,75,-22,84,-28,86,-30,92,-28,97,-31,100,-42,99,-46,92,-52,87,-49,79,-46,70,-43,61,-42,53,-41,49,-43,41,-43,33,-44,23,-41,14,-40,5,-38,-4,-36,-14,-33,-23,-36,-32,-35,-41,-34,-50,-30,-60,-25,-68,-26,-78,-21,-86,-19,-95,-12,-100,-4,-95],[10,-53,20,-52,26,-45,34,-44,38,-40,48,-46,53,-40,60,-30,66,-19,73,-21,83,-21,91,-13,100,-11,100,-3,94,5,86,9,79,15,77,23,66,25,69,34,67,43,60,41,48,40,37,38,30,42,21,45,11,52,6,53,-2,48,-5,40,-14,35,-26,34,-34,26,-44,21,-55,26,-55,38,-55,50,-62,46,-72,48,-76,39,-81,30,-78,27,-72,21,-69,14,-76,9,-87,13,-91,10,-99,3,-100,-7,-96,-16,-91,-18,-82,-25,-72,-25,-63,-19,-56,-18,-46,-21,-37,-17,-27,-21,-34,-28,-28,-36,-27,-40,-23,-44,-12,-46,-1,-49],[-86,-65,-75,-60,-62,-56,-48,-55,-38,-58,-25,-54,-17,-44,-6,-39,4,-43,12,-32,19,-21,31,-15,29,-5,28,9,30,15,32,23,40,34,48,38,60,38,71,37,76,28,82,18,95,16,100,21,96,31,92,38,85,42,73,44,75,52,67,57,63,65,53,55,48,54,39,58,26,55,14,50,2,43,-10,38,-21,30,-22,20,-25,8,-34,-2,-41,-8,-45,-14,-50,-21,-57,-30,-67,-38,-73,-50,-81,-56,-84,-51,-77,-40,-71,-30,-65,-22,-59,-12,-54,-4,-52,6,-61,-3,-67,-14,-75,-22,-85,-28,-80,-32,-88,-42,-95,-52,-100,-63],[58,-99,69,-98,66,-90,67,-79,62,-70,59,-61,66,-53,73,-45,76,-35,78,-24,80,-15,81,-4,81,7,81,17,80,25,84,35,92,40,100,46,97,54,88,60,79,66,69,72,60,78,52,85,44,93,34,97,23,99,16,97,11,89,2,85,-4,77,-13,71,-22,64,-30,57,-39,51,-48,44,-57,38,-66,31,-75,25,-84,19,-93,13,-100,6,-100,-5,-92,-13,-83,-17,-74,-20,-65,-25,-56,-30,-52,-37,-45,-42,-36,-45,-27,-47,-30,-55,-32,-65,-34,-75,-31,-80,-21,-85,-12,-90,-2,-94,9,-95,19,-97,30,-98,40,-96,49,-99],[47,-100,60,-99,69,-91,81,-93,90,-87,96,-79,100,-69,95,-59,87,-50,84,-38,79,-26,77,-15,79,-3,81,9,82,22,90,32,96,44,83,46,74,52,73,63,71,76,76,87,86,87,85,100,75,96,66,88,57,80,47,84,37,77,27,77,18,74,6,76,4,65,0,53,0,40,-8,34,-17,30,-26,37,-35,41,-47,41,-53,29,-59,19,-72,19,-85,18,-98,19,-100,13,-93,5,-84,3,-77,8,-67,-1,-60,-11,-58,-23,-50,-33,-44,-43,-42,-56,-39,-69,-34,-81,-33,-93,-23,-99,-12,-92,1,-90,10,-95,23,-97,36,-98],[44,-100,49,-92,56,-99,63,-99,67,-97,72,-99,87,-92,75,-87,87,-82,76,-73,70,-83,54,-81,47,-64,30,-67,18,-71,11,-61,-1,-55,-11,-44,-18,-27,-24,-12,-26,5,-38,16,-38,35,-35,52,-37,69,-43,87,-49,76,-56,86,-68,100,-81,94,-80,85,-84,83,-81,73,-75,63,-84,74,-86,63,-84,53,-69,51,-79,52,-87,42,-80,40,-78,33,-69,30,-74,24,-65,21,-58,14,-45,11,-52,15,-49,1,-40,-10,-38,-16,-28,-27,-28,-36,-17,-43,-16,-46,-17,-54,-10,-56,-8,-62,1,-75,9,-82,16,-84,18,-83,24,-88,36,-86],[-28,-47,-19,-45,-11,-42,-8,-34,0,-30,8,-33,17,-32,25,-29,30,-23,39,-22,48,-23,56,-25,63,-30,72,-30,80,-29,80,-22,76,-13,78,-9,86,-8,94,-10,100,-4,99,2,91,2,84,5,79,10,71,14,64,18,56,17,50,21,52,28,45,34,39,39,30,41,21,42,12,46,5,47,-2,46,-11,43,-18,39,-27,39,-36,38,-45,38,-50,31,-53,24,-61,20,-69,17,-78,16,-81,9,-80,1,-84,-7,-90,-11,-97,-15,-100,-21,-93,-25,-87,-29,-80,-33,-72,-36,-66,-35,-59,-32,-52,-28,-44,-28,-36,-29,-36,-36,-34,-44],[-59,-83,-49,-82,-40,-78,-32,-73,-24,-67,-16,-61,-8,-55,1,-52,10,-51,20,-50,27,-45,34,-41,39,-34,45,-28,49,-22,49,-14,54,-6,59,-1,65,6,71,13,80,15,90,17,98,19,100,28,97,37,93,46,84,49,75,52,66,56,56,57,46,59,37,60,28,65,23,74,16,75,7,74,-3,72,-12,73,-19,74,-22,83,-26,76,-32,68,-37,60,-41,51,-47,44,-54,38,-58,30,-59,20,-62,12,-66,4,-74,-1,-77,-10,-82,-18,-87,-26,-93,-34,-99,-41,-100,-47,-96,-53,-87,-53,-80,-60,-72,-64,-74,-71,-77,-77,-68,-80],[10,-100,12,-90,14,-81,17,-73,15,-65,13,-56,11,-47,6,-37,4,-28,4,-19,6,-9,4,0,0,9,-1,19,-3,28,-4,38,-2,47,-4,51,-2,59,-5,68,-9,76,-9,85,-4,91,6,93,9,94,1,100,-5,99,-2,97,-8,97,-5,96,-9,96,-13,93,-6,94,-7,91,-12,89,-16,83,-12,86,-13,81,-13,77,-15,72,-11,69,-14,67,-17,61,-17,59,-12,57,-12,59,-10,55,-7,50,-8,42,-6,36,-9,34,-12,27,-10,16,-9,7,-5,-3,-2,-13,-2,-24,0,-34,1,-44,3,-55,3,-66,5,-76,5,-87,4,-98],[-96,-91,-88,-83,-76,-80,-66,-87,-57,-86,-58,-79,-50,-72,-44,-63,-34,-57,-22,-52,-10,-54,2,-56,2,-61,12,-66,23,-70,35,-72,45,-67,56,-64,65,-57,76,-52,79,-43,77,-31,73,-23,74,-14,73,-4,74,8,83,13,81,24,76,34,82,44,92,51,96,61,100,68,91,73,84,82,79,91,69,88,57,87,45,84,37,78,33,67,21,68,11,74,-1,70,-11,63,-21,57,-28,48,-32,38,-39,28,-49,26,-50,29,-59,25,-63,16,-64,5,-72,-3,-80,-10,-87,-19,-84,-29,-81,-38,-85,-43,-91,-52,-96,-63,-98,-72,-100,-83],[-27,-95,-15,-95,-4,-91,6,-84,16,-77,26,-70,36,-63,46,-56,56,-50,63,-41,72,-34,83,-30,87,-22,95,-19,100,-13,100,-1,99,11,96,22,87,28,76,29,64,30,54,33,43,32,32,37,23,43,13,47,8,55,-2,55,-6,63,-12,71,-16,81,-19,91,-27,92,-33,89,-39,94,-48,95,-53,85,-54,79,-60,70,-66,68,-76,69,-85,69,-90,66,-92,55,-97,48,-100,37,-96,30,-88,28,-79,27,-67,27,-59,27,-47,27,-35,27,-23,27,-17,19,-21,8,-22,-4,-23,-16,-25,-28,-26,-40,-27,-52,-28,-64,-30,-76,-31,-88],[-3,-100,6,-95,14,-88,20,-80,26,-75,36,-77,47,-75,53,-69,47,-59,55,-54,46,-55,35,-51,26,-45,21,-37,17,-28,13,-20,15,-12,21,-3,24,3,31,9,42,8,48,5,48,16,54,20,62,25,68,35,66,44,67,55,62,63,62,73,66,80,59,88,57,96,49,100,40,93,32,86,22,81,12,76,2,71,-6,63,-13,55,-14,46,-19,36,-24,27,-30,18,-35,8,-40,-2,-45,-12,-51,-22,-59,-29,-67,-36,-67,-44,-68,-54,-60,-62,-58,-57,-57,-53,-48,-49,-41,-50,-37,-60,-32,-67,-22,-71,-12,-77,-6,-86,-3,-94],[41,-100,47,-96,56,-91,66,-92,74,-93,83,-90,88,-82,89,-72,91,-62,97,-54,92,-48,82,-49,73,-45,63,-42,66,-33,57,-29,48,-23,40,-17,31,-16,22,-13,13,-8,5,-2,4,9,3,17,-4,21,-13,24,-23,22,-28,28,-34,36,-39,44,-42,54,-50,60,-57,67,-62,76,-63,87,-68,95,-76,100,-86,99,-97,100,-95,91,-89,83,-86,73,-84,69,-78,61,-71,54,-70,44,-66,34,-58,28,-53,19,-48,10,-38,8,-29,3,-21,-4,-14,-11,-8,-20,-10,-29,-9,-40,-4,-49,0,-58,8,-65,17,-69,26,-74,32,-83,36,-93],[16,-84,25,-83,37,-83,50,-83,62,-83,74,-83,82,-77,85,-69,86,-57,88,-45,96,-37,100,-30,90,-24,83,-17,80,-6,76,6,76,18,73,29,66,37,59,47,57,59,50,64,47,76,45,67,36,59,36,47,31,41,24,45,26,56,19,65,9,72,-1,67,-9,72,-19,78,-29,74,-41,75,-50,69,-59,65,-66,73,-70,84,-81,84,-80,73,-85,63,-89,52,-94,43,-100,35,-97,27,-94,17,-92,8,-87,-3,-76,-4,-76,-17,-76,-29,-76,-41,-76,-53,-68,-57,-64,-66,-64,-78,-56,-83,-44,-83,-32,-83,-19,-83,-7,-83,5,-83],[-72,-96,-60,-92,-49,-93,-37,-89,-26,-85,-22,-74,-11,-69,1,-67,12,-63,22,-56,33,-59,37,-70,36,-81,44,-89,56,-93,67,-92,76,-86,86,-82,98,-80,99,-72,99,-60,98,-49,100,-37,100,-25,100,-13,100,-1,100,11,100,23,100,36,100,48,100,60,100,72,100,84,97,93,87,95,81,96,70,91,59,85,49,79,38,73,27,67,17,61,6,56,-4,50,-15,44,-26,48,-36,54,-46,49,-57,45,-69,42,-74,31,-85,27,-93,21,-98,10,-98,0,-97,-10,-95,-22,-96,-34,-98,-46,-100,-55,-91,-63,-92,-74,-83,-82,-74,-89],[74,-98,85,-94,90,-83,100,-78,100,-66,88,-61,75,-63,63,-61,68,-52,64,-42,73,-34,81,-27,71,-19,70,-7,63,3,55,13,46,23,38,33,27,39,16,37,8,48,13,57,16,69,23,77,26,89,15,90,3,91,-5,96,-16,98,-22,88,-29,79,-36,73,-42,75,-55,77,-67,75,-79,77,-91,78,-92,68,-85,58,-74,53,-79,47,-79,33,-91,27,-98,16,-100,10,-87,14,-73,14,-60,14,-47,12,-34,7,-33,-6,-23,-12,-15,-17,-3,-19,4,-27,8,-39,15,-46,17,-53,27,-58,32,-68,31,-80,35,-89,47,-95,61,-96],[58,-88,70,-87,82,-86,85,-74,89,-63,91,-51,90,-39,83,-38,76,-28,80,-18,90,-17,97,-22,100,-15,97,-3,90,6,82,14,76,25,70,35,61,44,53,53,44,61,35,69,24,74,12,76,3,79,-8,79,-20,80,-31,80,-42,84,-54,86,-64,88,-73,84,-78,83,-79,72,-85,62,-79,54,-83,43,-89,33,-94,22,-98,10,-100,1,-93,-3,-87,5,-75,6,-65,4,-59,-4,-59,-16,-59,-28,-59,-40,-58,-51,-51,-42,-49,-30,-46,-23,-35,-25,-26,-33,-21,-44,-11,-41,0,-37,11,-41,15,-52,25,-58,30,-69,39,-76,48,-83],[15,-100,19,-93,9,-87,1,-78,-2,-66,-1,-60,6,-51,6,-39,16,-35,28,-35,38,-29,47,-25,60,-25,64,-19,61,-7,64,4,63,14,67,20,72,31,70,31,62,28,56,30,43,30,37,36,45,41,36,43,36,54,42,63,40,76,38,88,36,100,28,97,32,87,28,80,17,78,6,80,-3,75,-9,66,-18,59,-27,51,-37,47,-47,48,-57,42,-67,36,-72,28,-68,21,-58,16,-52,6,-55,1,-54,-9,-53,-19,-54,-29,-60,-39,-54,-44,-54,-54,-48,-45,-46,-55,-37,-63,-33,-72,-29,-79,-19,-83,-16,-85,-5,-86,6,-93],[49,-79,59,-78,69,-76,77,-69,86,-71,90,-66,91,-56,96,-47,100,-39,99,-30,98,-20,97,-10,96,0,94,10,88,18,81,25,75,34,70,43,71,52,62,56,54,61,44,57,34,57,24,60,16,64,6,62,-3,57,-12,61,-19,56,-28,52,-37,52,-47,53,-51,62,-57,70,-57,79,-65,72,-73,73,-76,72,-79,66,-87,64,-90,57,-95,53,-100,44,-100,35,-90,34,-81,31,-71,31,-62,30,-54,25,-50,16,-49,6,-49,-4,-49,-15,-45,-22,-35,-24,-26,-28,-19,-34,-11,-41,-3,-47,6,-53,15,-58,23,-63,32,-69,41,-74],[17,-100,24,-98,32,-92,39,-87,40,-79,41,-72,41,-63,44,-55,37,-52,32,-51,26,-47,25,-41,26,-32,21,-25,14,-19,8,-16,5,-11,2,-7,-2,-2,-2,6,-3,13,-3,22,3,26,9,33,4,41,5,43,-1,49,-9,52,-7,56,-8,65,-8,74,-10,83,-15,89,-22,91,-24,100,-33,100,-34,91,-34,85,-36,78,-39,70,-42,62,-44,54,-43,46,-41,42,-38,34,-35,25,-36,17,-35,10,-37,2,-38,-8,-39,-17,-35,-25,-26,-27,-26,-34,-24,-42,-21,-51,-19,-58,-14,-65,-9,-73,-8,-80,-2,-87,3,-90,9,-93,17,-93],[58,-100,57,-90,58,-79,59,-70,59,-58,62,-52,59,-42,52,-32,44,-25,34,-21,24,-16,15,-8,8,-1,0,6,-9,13,-11,20,-6,30,-3,42,-1,44,-1,55,-1,64,-8,73,-19,77,-29,82,-34,91,-32,97,-40,100,-42,90,-42,79,-44,67,-48,56,-51,45,-42,37,-37,28,-32,18,-33,7,-31,-3,-31,-14,-31,-26,-42,-29,-52,-34,-61,-37,-62,-48,-50,-51,-39,-55,-28,-59,-20,-53,-12,-49,-15,-38,-11,-29,-5,-21,-4,-31,3,-38,3,-50,-3,-59,-12,-67,-14,-78,-11,-89,0,-89,10,-88,21,-88,30,-93,41,-95,51,-99],[-34,-78,-26,-72,-17,-75,-9,-73,0,-71,8,-66,14,-59,21,-52,27,-45,21,-37,19,-28,25,-25,34,-25,32,-17,38,-10,43,-2,51,3,60,6,69,9,78,12,87,15,97,16,100,19,93,25,86,32,79,39,73,46,66,53,59,58,50,58,41,60,33,66,24,68,16,71,7,69,-1,70,-9,75,-17,78,-27,76,-35,73,-43,68,-52,65,-61,62,-62,54,-69,50,-74,42,-78,34,-85,27,-91,21,-100,18,-95,10,-86,9,-85,0,-84,-10,-83,-19,-76,-22,-73,-30,-69,-39,-64,-47,-58,-51,-55,-60,-52,-70,-44,-72,-38,-70],[-32,-100,-23,-96,-14,-91,-6,-87,3,-82,12,-78,20,-73,29,-69,38,-64,46,-60,55,-56,64,-51,64,-41,64,-32,64,-22,64,-12,62,-3,53,-3,49,5,45,12,42,19,41,28,40,35,45,40,47,49,50,56,42,58,36,64,29,70,23,77,14,80,4,81,3,87,-4,93,-14,94,-22,98,-28,97,-37,100,-41,93,-46,85,-53,79,-57,71,-48,69,-38,69,-43,62,-45,52,-45,43,-49,35,-56,30,-62,22,-64,13,-59,4,-53,-4,-47,-11,-40,-18,-39,-27,-38,-37,-37,-47,-36,-57,-36,-65,-40,-73,-43,-81,-45,-91,-41,-97],[9,-100,15,-92,20,-86,20,-75,15,-68,9,-60,9,-50,20,-52,22,-45,28,-39,28,-31,35,-24,45,-27,39,-19,35,-11,27,-9,18,-5,11,0,7,8,11,17,18,26,22,33,18,42,18,51,25,60,26,71,30,81,24,91,19,100,20,90,20,82,20,72,17,61,14,58,12,49,10,39,9,30,3,22,0,28,-4,30,-12,37,-16,37,-21,35,-24,35,-24,26,-23,15,-25,6,-29,4,-29,0,-32,-7,-37,-10,-40,-13,-45,-16,-42,-22,-40,-30,-37,-37,-34,-47,-29,-50,-23,-58,-21,-67,-17,-77,-9,-84,1,-87,3,-91],[-81,-98,-71,-95,-60,-92,-49,-92,-37,-92,-25,-92,-13,-91,-2,-91,8,-85,19,-84,31,-83,42,-82,53,-83,65,-85,76,-87,88,-90,100,-89,100,-84,90,-81,81,-74,73,-81,62,-79,50,-77,40,-75,40,-63,40,-51,40,-39,40,-28,40,-16,28,-16,25,-8,25,4,25,16,25,28,25,39,25,51,25,63,25,75,25,86,18,93,9,98,-2,97,-13,94,-17,85,-24,91,-33,89,-41,80,-46,70,-48,58,-52,48,-53,36,-56,25,-58,14,-59,2,-58,-8,-64,-17,-70,-28,-76,-38,-80,-49,-85,-59,-91,-69,-98,-79,-100,-90,-92,-94],[-29,-100,-27,-91,-26,-80,-24,-69,-16,-63,-6,-58,5,-55,14,-50,23,-44,34,-43,45,-38,47,-27,45,-18,49,-10,52,0,64,0,76,0,75,10,82,19,87,28,85,38,82,48,83,57,77,53,67,46,55,46,43,48,32,50,24,57,19,67,17,79,13,90,3,87,-7,90,-12,99,-18,90,-30,89,-40,85,-47,92,-55,100,-63,96,-67,85,-70,74,-74,65,-74,57,-72,47,-80,39,-82,27,-87,18,-85,10,-78,1,-85,-7,-83,-17,-82,-27,-80,-36,-80,-48,-75,-58,-81,-68,-87,-79,-80,-81,-70,-82,-60,-87,-51,-93,-40,-99],[-57,-85,-49,-81,-35,-77,-27,-66,-14,-64,1,-65,14,-59,29,-58,43,-63,40,-65,55,-66,71,-67,58,-64,60,-58,67,-55,76,-54,88,-45,80,-34,85,-33,100,-33,95,-22,91,-11,87,-6,81,5,87,17,85,29,72,34,58,38,49,39,36,35,29,38,36,50,42,62,43,68,32,77,19,85,10,85,-3,82,-9,69,-16,57,-13,48,-19,35,-20,20,-14,7,-26,4,-41,5,-52,-5,-65,-10,-81,-9,-91,-18,-92,-32,-100,-44,-100,-51,-96,-66,-86,-77,-74,-84,-82,-75,-79,-63,-84,-50,-75,-41,-70,-54,-77,-67,-65,-74,-51,-78],[37,-100,48,-93,58,-87,68,-80,79,-74,89,-67,88,-64,75,-64,68,-59,69,-47,71,-35,72,-22,73,-10,75,2,76,15,77,27,79,39,80,51,81,64,85,75,84,87,74,89,61,89,49,89,37,89,26,86,17,91,5,91,-3,89,-11,93,-18,100,-26,92,-33,83,-42,78,-51,70,-62,71,-74,73,-81,81,-81,74,-77,62,-74,51,-75,38,-81,28,-78,21,-79,9,-85,2,-89,1,-82,-5,-69,-5,-57,-5,-45,-5,-32,-5,-29,-14,-30,-26,-24,-35,-14,-40,-14,-53,-14,-65,-14,-77,-4,-80,9,-80,21,-80,33,-80,36,-89],[-76,-100,-63,-100,-49,-100,-36,-100,-23,-99,-18,-87,-13,-75,-6,-64,6,-65,19,-65,26,-74,34,-82,43,-79,54,-76,64,-72,65,-59,64,-46,68,-34,71,-21,73,-13,86,-15,98,-17,98,-4,98,9,94,18,81,18,67,18,66,30,66,43,66,56,67,70,73,80,83,89,83,95,70,98,56,100,43,100,31,98,17,97,7,90,-7,90,-20,90,-33,90,-47,90,-60,90,-71,84,-84,86,-96,87,-98,77,-98,64,-93,52,-89,39,-86,27,-79,15,-70,7,-66,-6,-66,-19,-72,-30,-76,-42,-76,-50,-74,-62,-80,-74,-85,-86,-88,-96],[-73,-64,-62,-60,-52,-54,-42,-47,-35,-38,-25,-33,-13,-35,-1,-34,8,-32,15,-24,18,-16,23,-10,25,2,36,3,42,10,48,7,56,-2,66,-8,75,-14,72,-8,69,-1,78,4,83,-2,89,5,100,8,92,13,84,19,73,18,72,12,67,8,57,9,55,18,52,20,47,28,36,28,37,36,41,44,43,54,38,64,29,63,23,56,17,49,7,45,-3,37,-12,31,-22,24,-27,14,-32,3,-43,2,-52,-2,-53,-11,-62,-16,-70,-20,-71,-14,-79,-13,-88,-7,-90,2,-100,-1,-100,-13,-100,-25,-100,-37,-100,-49,-96,-58,-84,-61],[71,-100,74,-95,73,-86,72,-78,76,-78,70,-74,69,-65,65,-58,61,-50,56,-43,52,-35,47,-28,44,-20,41,-12,36,-4,31,2,26,10,20,17,14,23,8,29,2,35,-4,41,-12,45,-20,50,-27,55,-33,61,-40,67,-46,73,-52,79,-57,86,-63,93,-67,100,-72,93,-75,85,-75,77,-75,68,-76,59,-76,50,-76,42,-75,33,-69,27,-64,19,-58,14,-49,12,-43,7,-35,3,-27,3,-18,3,-12,-3,-6,-10,0,-16,6,-22,12,-28,19,-34,25,-40,30,-47,35,-55,40,-62,41,-70,41,-79,41,-88,47,-91,56,-94,64,-97],[42,-75,51,-75,56,-68,54,-57,58,-48,68,-53,77,-59,85,-58,94,-60,100,-58,95,-53,84,-51,73,-50,63,-47,54,-41,54,-32,56,-22,49,-13,48,-3,37,-2,34,2,35,11,26,17,23,27,19,37,9,35,0,40,-5,45,-14,48,-19,58,-20,68,-31,71,-42,73,-52,75,-64,75,-75,75,-86,71,-94,67,-87,58,-81,48,-89,41,-96,36,-96,24,-99,13,-96,5,-100,-3,-96,-10,-91,-19,-89,-29,-80,-27,-71,-23,-63,-30,-56,-35,-46,-40,-41,-50,-34,-57,-26,-63,-15,-59,-5,-57,4,-53,14,-56,23,-55,28,-63,37,-66],[25,-59,34,-52,34,-44,43,-40,48,-31,55,-26,65,-25,74,-20,84,-19,94,-14,100,-7,98,1,97,9,93,17,83,20,79,30,68,33,58,37,47,42,46,42,42,50,37,48,27,47,16,46,9,42,10,39,11,38,7,28,6,37,-3,39,-9,49,-17,55,-22,58,-32,59,-27,51,-24,40,-16,41,-13,36,-19,26,-22,16,-31,12,-40,6,-50,10,-60,15,-71,18,-82,15,-92,15,-100,7,-96,-3,-94,-10,-88,-20,-79,-28,-81,-38,-81,-47,-71,-51,-59,-52,-47,-49,-38,-45,-28,-45,-20,-43,-9,-42,-6,-49,4,-55,14,-58],[-19,-100,-14,-94,-8,-90,-3,-81,-5,-70,-5,-61,4,-69,14,-67,23,-72,33,-72,40,-63,43,-52,49,-42,55,-34,54,-22,46,-18,34,-18,22,-17,14,-8,13,1,16,12,17,16,9,10,-1,6,-8,2,-13,-6,-20,0,-21,12,-26,23,-30,34,-32,46,-26,53,-21,61,-16,70,-14,81,-18,76,-10,84,1,87,7,96,-2,100,-6,97,-14,91,-21,89,-26,80,-33,73,-41,67,-44,58,-40,47,-37,35,-30,25,-27,14,-32,4,-32,-8,-40,-18,-45,-28,-40,-37,-37,-45,-42,-54,-50,-64,-55,-73,-52,-81,-47,-92,-36,-92,-27,-98],[-73,-99,-62,-99,-51,-99,-40,-99,-28,-99,-17,-99,-7,-94,3,-89,12,-83,22,-78,32,-72,42,-66,52,-61,53,-52,61,-44,71,-38,80,-31,78,-21,74,-10,75,0,82,9,84,16,82,26,83,35,85,46,88,55,91,66,98,71,100,78,91,84,80,88,70,92,60,91,52,97,41,97,31,99,21,95,11,96,2,94,-4,85,-5,74,-8,64,-16,59,-25,60,-35,56,-45,51,-54,47,-63,42,-72,38,-77,28,-82,18,-88,9,-96,1,-96,-9,-98,-20,-100,-31,-93,-36,-85,-43,-79,-53,-74,-61,-80,-67,-74,-73,-73,-84,-78,-93],[-80,-89,-66,-87,-53,-82,-40,-79,-27,-75,-15,-83,-3,-87,-2,-86,9,-88,21,-85,20,-82,27,-81,40,-80,53,-83,59,-74,64,-61,66,-48,62,-35,58,-21,48,-24,39,-35,33,-47,28,-59,29,-48,33,-35,42,-24,47,-12,51,1,57,13,64,26,70,38,77,50,77,57,80,71,91,79,100,89,86,89,72,89,58,89,44,89,30,89,16,89,8,87,-5,89,-19,89,-33,89,-47,89,-61,89,-74,89,-88,89,-98,84,-98,71,-98,57,-98,43,-98,29,-98,15,-98,1,-98,-13,-98,-27,-98,-41,-100,-55,-100,-68,-99,-81,-93,-88],[-19,-42,-8,-42,-1,-38,8,-36,16,-33,26,-29,36,-28,46,-28,57,-30,66,-35,76,-34,83,-32,89,-25,90,-16,100,-12,97,-7,94,0,97,9,98,17,100,25,94,23,84,22,75,25,66,26,55,26,46,31,35,31,25,30,15,30,13,38,6,42,7,33,3,31,-6,30,-15,36,-24,39,-34,37,-42,31,-52,30,-56,37,-66,37,-73,31,-80,31,-82,30,-83,27,-85,24,-89,17,-94,11,-97,5,-91,8,-91,2,-93,-6,-100,-7,-97,-16,-88,-21,-82,-22,-74,-20,-70,-23,-61,-25,-68,-30,-58,-31,-48,-30,-39,-35,-29,-40],[46,-86,55,-81,66,-76,76,-71,88,-66,95,-59,100,-48,95,-39,94,-28,96,-15,92,-9,90,2,86,12,92,17,80,21,68,25,55,29,43,33,45,45,32,45,21,51,16,61,4,67,-4,76,-13,86,-25,86,-37,84,-48,79,-61,78,-74,80,-84,73,-94,64,-99,54,-100,41,-100,28,-100,15,-100,2,-91,-2,-78,-2,-66,-3,-65,-15,-65,-28,-65,-39,-59,-30,-47,-33,-41,-26,-30,-21,-17,-20,-9,-25,-2,-15,10,-11,18,-1,27,4,35,4,35,-9,30,-15,21,-15,12,-24,12,-36,15,-49,14,-61,15,-72,20,-82,33,-84],[-50,-81,-39,-78,-31,-69,-21,-69,-11,-72,-1,-67,10,-64,20,-68,30,-73,42,-73,53,-71,64,-69,72,-76,83,-79,90,-70,92,-59,100,-52,98,-41,88,-36,82,-27,77,-16,73,-7,69,3,61,10,57,21,52,31,48,40,40,42,33,34,24,35,16,43,8,50,3,61,-1,71,-6,72,-14,77,-23,76,-27,79,-31,76,-35,79,-42,81,-51,75,-54,66,-55,62,-56,57,-63,52,-72,46,-83,45,-84,42,-94,45,-99,40,-99,29,-100,18,-99,6,-94,-1,-89,-11,-85,-20,-82,-28,-86,-39,-85,-48,-84,-60,-77,-68,-72,-78,-61,-80],[22,-66,31,-65,38,-58,43,-50,43,-40,42,-32,51,-30,55,-24,64,-20,67,-13,75,-7,82,-1,86,6,92,12,99,18,100,25,91,26,82,24,72,22,65,28,56,27,47,30,38,32,29,33,24,41,15,39,5,38,-4,36,-11,29,-19,25,-28,28,-33,36,-35,44,-37,49,-45,50,-54,48,-64,50,-68,57,-71,66,-74,65,-78,57,-85,51,-91,43,-92,36,-96,28,-97,19,-100,11,-94,5,-90,-4,-85,-11,-76,-13,-68,-17,-62,-14,-54,-18,-44,-20,-35,-21,-29,-28,-30,-35,-20,-36,-11,-38,-3,-41,4,-48,10,-54,14,-62],[13,-100,23,-93,31,-83,39,-76,50,-79,56,-68,69,-63,80,-56,92,-55,100,-48,94,-34,94,-20,82,-15,75,-5,70,8,72,8,81,13,82,24,82,36,84,45,85,57,93,63,84,73,73,82,59,80,48,77,35,72,24,82,23,97,13,100,1,96,-11,90,-22,92,-36,90,-48,84,-55,76,-48,64,-46,49,-46,40,-42,28,-36,38,-43,25,-44,16,-52,6,-59,-6,-55,-12,-65,-17,-75,-21,-88,-26,-100,-31,-95,-36,-100,-43,-86,-46,-72,-46,-60,-44,-48,-45,-52,-58,-52,-68,-42,-62,-27,-60,-25,-66,-13,-73,-2,-82,0,-96],[11,-100,19,-97,26,-91,23,-82,22,-77,20,-68,27,-61,32,-53,27,-44,26,-35,30,-26,33,-16,30,-9,29,-1,33,7,37,15,33,24,39,32,45,40,43,49,37,58,31,66,25,74,19,82,12,89,3,91,1,91,-4,93,-13,97,-21,100,-25,100,-29,98,-30,92,-37,88,-40,80,-39,70,-40,62,-41,52,-41,43,-38,35,-32,31,-27,24,-21,16,-15,8,-8,2,-7,-5,-11,-14,-17,-16,-21,-26,-19,-35,-21,-45,-22,-52,-23,-61,-29,-68,-38,-73,-45,-80,-42,-85,-35,-81,-29,-74,-20,-76,-11,-72,-4,-78,-2,-88,2,-97],[-9,-100,-2,-92,11,-89,15,-84,16,-76,20,-67,11,-71,0,-65,-5,-60,-4,-51,-3,-38,7,-29,18,-21,22,-8,29,3,40,12,53,14,56,20,63,28,76,34,87,41,96,51,92,59,84,50,72,46,66,58,72,68,75,80,66,87,60,98,51,100,55,88,58,78,54,65,47,56,40,47,30,44,24,37,15,29,4,25,-6,16,-15,6,-23,0,-32,-9,-36,-21,-42,-33,-53,-39,-66,-39,-75,-29,-81,-32,-89,-37,-91,-47,-96,-57,-90,-65,-91,-75,-78,-75,-70,-85,-63,-79,-58,-77,-52,-87,-42,-84,-39,-90,-33,-96,-22,-98],[-9,-100,0,-95,11,-94,11,-85,18,-79,28,-76,19,-70,11,-67,6,-58,-1,-49,-1,-38,7,-30,9,-23,17,-14,26,-6,33,1,40,10,43,21,45,30,47,41,45,48,43,55,39,63,29,69,19,75,13,75,8,77,8,82,8,82,3,84,4,86,-4,93,-13,100,-14,91,-10,81,-18,75,-11,68,0,68,2,65,4,57,12,53,22,49,22,37,20,26,22,15,20,6,19,-2,10,-8,5,-18,-3,-26,-10,-35,-18,-41,-24,-48,-16,-51,-15,-59,-18,-65,-28,-65,-38,-70,-40,-80,-47,-85,-43,-92,-34,-92,-26,-91,-18,-94],[-15,-69,-5,-63,5,-59,7,-51,11,-41,22,-40,32,-38,37,-28,42,-17,51,-10,60,-2,70,3,80,10,90,14,100,20,98,30,87,27,78,32,72,41,67,51,57,56,50,62,41,69,32,65,23,61,22,49,16,43,7,38,-3,31,-11,24,-22,22,-32,18,-42,14,-52,17,-63,19,-70,28,-81,30,-82,18,-82,6,-85,-4,-92,-9,-88,-12,-94,-18,-97,-21,-96,-32,-90,-33,-80,-31,-72,-33,-74,-42,-80,-52,-89,-57,-97,-50,-97,-42,-100,-52,-90,-59,-79,-61,-68,-55,-62,-45,-52,-42,-40,-42,-37,-49,-31,-58,-23,-64,-18,-63],[33,-100,38,-96,42,-88,45,-80,47,-72,48,-63,51,-55,50,-47,45,-46,40,-50,41,-41,42,-33,38,-26,37,-18,36,-9,33,-1,30,7,28,15,25,23,23,32,20,40,17,48,15,56,13,65,10,73,7,81,4,89,-2,94,-11,96,-18,100,-26,99,-34,96,-40,90,-44,83,-45,74,-45,66,-49,59,-51,50,-48,42,-44,35,-40,28,-36,20,-34,12,-37,4,-38,-4,-40,-13,-41,-21,-36,-28,-34,-36,-28,-40,-21,-42,-14,-45,-7,-44,-5,-50,2,-54,3,-55,8,-62,11,-60,14,-64,16,-71,17,-78,23,-80,28,-86,28,-94],[57,-79,61,-73,61,-62,61,-52,70,-46,76,-37,77,-28,79,-19,76,-10,65,-10,59,-1,68,4,77,9,84,18,91,25,95,35,100,45,92,52,84,60,77,68,69,76,59,74,48,77,39,79,31,77,21,79,14,77,6,70,-1,62,-10,65,-20,63,-30,64,-37,57,-45,49,-48,39,-58,34,-62,25,-68,17,-78,12,-82,3,-90,-4,-100,-8,-99,-16,-93,-23,-90,-34,-85,-43,-75,-45,-68,-40,-60,-32,-51,-30,-40,-31,-32,-27,-21,-26,-14,-31,-4,-35,3,-42,12,-38,21,-34,30,-38,38,-46,45,-54,47,-63,44,-73,51,-75],[-82,-80,-71,-79,-61,-78,-49,-78,-38,-77,-26,-74,-15,-76,-4,-74,7,-73,18,-74,23,-67,33,-64,43,-61,54,-59,63,-61,70,-54,80,-52,90,-53,100,-51,98,-42,89,-36,79,-29,68,-26,59,-20,55,-13,49,-4,42,6,44,17,48,25,39,32,35,43,29,48,20,54,14,64,4,65,-7,66,-19,66,-28,71,-38,75,-46,80,-53,72,-54,62,-61,59,-69,56,-74,48,-68,39,-70,32,-68,22,-70,13,-72,4,-64,-2,-63,-11,-64,-22,-57,-31,-57,-37,-64,-43,-74,-41,-85,-41,-89,-46,-96,-47,-95,-55,-97,-61,-100,-70,-89,-73],[87,-91,90,-82,95,-69,100,-56,99,-43,93,-31,87,-21,81,-10,83,4,77,17,75,31,77,41,70,53,61,57,65,44,58,47,53,50,47,61,42,58,36,58,27,65,13,66,10,62,7,56,2,66,1,74,-7,84,-17,91,-25,80,-20,68,-31,63,-44,65,-56,70,-69,74,-79,78,-87,79,-100,79,-100,71,-88,65,-77,56,-68,46,-55,45,-41,44,-28,40,-18,45,-8,38,-4,26,4,14,7,1,13,3,9,14,20,11,33,5,42,-6,52,-15,57,-28,62,-40,65,-54,63,-62,64,-75,70,-86,77,-79,87,-83,79,-87],[32,-100,39,-94,44,-85,47,-75,47,-64,50,-54,57,-46,46,-45,36,-46,28,-40,35,-31,44,-25,50,-16,55,-7,50,2,45,11,40,20,39,27,39,38,41,48,47,57,50,65,57,73,65,80,66,91,65,100,55,95,45,94,36,92,25,92,15,90,4,90,-6,90,-17,89,-26,92,-37,92,-45,87,-42,76,-47,67,-46,62,-50,60,-59,57,-63,49,-66,46,-62,36,-59,26,-51,18,-44,10,-35,9,-27,8,-21,17,-14,10,-10,2,-5,-7,-1,-18,6,-24,9,-34,15,-42,19,-52,23,-62,32,-68,38,-75,38,-86,31,-92],[56,-85,68,-84,74,-77,74,-72,65,-70,71,-61,76,-54,84,-45,81,-36,90,-28,100,-20,96,-14,84,-17,79,-12,73,-1,73,12,69,21,59,27,55,32,51,39,53,47,49,55,46,62,43,72,33,79,22,85,15,81,11,73,5,70,-5,70,-13,66,-20,68,-32,70,-41,72,-44,62,-56,64,-64,64,-73,61,-76,48,-78,37,-81,25,-92,20,-96,12,-95,1,-100,-10,-97,-22,-95,-30,-86,-38,-83,-28,-74,-19,-63,-16,-50,-18,-39,-20,-31,-28,-18,-28,-8,-23,3,-26,15,-28,18,-39,26,-48,28,-58,34,-66,35,-78,44,-84],[13,-100,17,-90,23,-82,27,-72,32,-62,40,-55,50,-50,55,-41,63,-38,63,-27,69,-18,79,-15,89,-12,95,-5,90,-1,82,5,72,10,65,18,57,24,49,30,46,41,38,49,29,53,24,62,20,72,10,76,0,77,-10,73,-20,69,-30,66,-37,73,-41,83,-49,90,-57,97,-66,100,-77,100,-82,92,-78,83,-81,72,-86,62,-94,55,-95,44,-95,33,-95,23,-95,12,-95,1,-91,-7,-80,-7,-74,-12,-74,-23,-74,-34,-74,-45,-74,-56,-74,-67,-74,-78,-74,-88,-63,-90,-52,-91,-41,-93,-31,-95,-23,-89,-16,-89,-7,-95,3,-98],[-53,-100,-45,-100,-41,-92,-38,-83,-29,-81,-19,-80,-10,-74,-1,-69,8,-64,18,-63,28,-62,37,-65,44,-72,54,-76,62,-73,72,-71,78,-70,72,-61,66,-53,61,-45,62,-35,62,-24,62,-14,62,-4,62,7,62,17,63,27,70,35,71,43,62,47,59,54,50,58,46,66,41,75,38,85,33,94,27,100,18,94,10,88,2,82,-5,75,-6,66,-15,61,-24,56,-33,51,-42,46,-51,41,-60,36,-69,31,-78,27,-78,17,-78,7,-74,-3,-68,-11,-61,-17,-57,-26,-58,-36,-61,-46,-66,-54,-68,-63,-74,-70,-75,-78,-68,-86,-60,-93]]; })();
 
-// ==================== src/scripts/radio/main.js ===================================
-// Radio mode: Street View is hidden and a live station near the round's location plays
-// instead. Stations come from Radio Browser (radio-browser.info), which is sent the round's
-// coordinates. The audio streams from each station's own server. Nothing about the station
-// shows until the guess is in.
+// ==================== src/scripts/radio/audio.js ==================================
+// Radio's sound plumbing: silences GeoGuessr's own music and sounds while radio mode is on,
+// routes a station through an analyser so its loudness and bass can be read, and keeps the
+// recent readings that tell music from talk in streamer mode.
 (() => {
   const ggs = globalThis.__ggs;
-
-  const API = 'https://de1.api.radio-browser.info/json/stations/search';
-  const RADII_KM = [50, 250, 1000, 3000]; // widen until there are a few stations
-  const PANO_SELECTORS = ['[class*="game_panorama"]', '[data-qa="panorama"]'];
-  const HIDE_PANO_CSS = `
-    ${PANO_SELECTORS.join(', ')}, .widget-scene-canvas { visibility: hidden !important; }
-    body { background: #0d0a2a !important; }`;
-
-  // Stream networks that insert ads into the audio itself; tried last.
-  const AD_STREAMS = /zeno\.fm|zenomedia|adswizz|streamtheworld\.com|tritondigital|[?&]aw_0_/i;
-
-  // Streamer mode: talk stations only, by Radio Browser's tags.
-  const TALK_TAGS = new RegExp(
-    '\\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|' +
-      'informa|notizie|public radio|comedy|debate|politics)',
-    'i',
-  );
-  const MUSIC_TAGS = new RegExp(
-    '\\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|' +
-      'country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|' +
-      'soul|funk|blues|folk|indie|christian|gospel)\\b',
-    'i',
-  );
-  const isTalk = s => TALK_TAGS.test(s.tags) && !MUSIC_TAGS.test(s.tags);
-
-  const START_MS = 8000; // a stream that hasn't started playing by now is skipped
-  const STALL_MS = 8000; // so is one that has been buffering this long
 
   // ---- silence GeoGuessr's own music and sounds while radio mode is on ----
   // Wrapped at document_start so every AudioContext and media element the page makes is
@@ -5353,6 +5611,165 @@ section.flat .status:empty { display: none; }
     window.Howler?.mute?.(on);
   }
 
+  // ---- our own output: the station's <audio>, through an analyser and a gain ----
+  // The AudioContext is the real constructor, so muteGame leaves it alone, and is made only
+  // after a click or key press (Chrome's rule).
+  function output() {
+    let ctx = null;
+    let analyser = null;
+    let gain = null;
+    let td = null;
+    let fd = null;
+    function ensure() {
+      if (ctx || !RealAudioContext || navigator.userActivation?.hasBeenActive === false) return;
+      ctx = new RealAudioContext();
+      ours.add(ctx);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0;
+      td = new Uint8Array(analyser.fftSize);
+      fd = new Float32Array(analyser.frequencyBinCount);
+      gain = ctx.createGain();
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+    }
+    return {
+      // An <audio> element of ours, marked so muteGame leaves it alone.
+      element(volume) {
+        const a = new Audio();
+        ours.add(a);
+        a.volume = volume;
+        return a;
+      },
+      // Routes `a` through the analyser so its sound can be read (needs CORS). Null when
+      // there's no context yet.
+      connect(a) {
+        ensure();
+        if (!ctx) return null;
+        a.crossOrigin = 'anonymous';
+        const node = ctx.createMediaElementSource(a);
+        node.connect(analyser);
+        return node;
+      },
+      silent(on) {
+        if (!gain) return;
+        gain.gain.cancelScheduledValues(0);
+        gain.gain.value = on ? 0 : 1;
+      },
+      fadeIn() {
+        gain?.gain.setTargetAtTime(1, ctx.currentTime, 0.08);
+      },
+      resume: () => ctx?.resume(),
+      close: () => ctx?.close().catch(() => {}),
+      // loudness, 0..1-ish
+      rms() {
+        analyser.getByteTimeDomainData(td);
+        let sum = 0;
+        for (const v of td) sum += (v - 128) ** 2;
+        return Math.sqrt(sum / td.length) / 128;
+      },
+      // [energy below 90 Hz, energy up to 10 kHz]
+      bass() {
+        analyser.getFloatFrequencyData(fd);
+        const hz = ctx.sampleRate / analyser.fftSize;
+        let low = 0;
+        let all = 0;
+        for (let i = 1; i * hz < 10000; i++) {
+          const p = 10 ** (fd[i] / 10);
+          all += p;
+          if (i * hz < 90) low += p;
+        }
+        return [low, all];
+      },
+    };
+  }
+
+  // ---- streamer mode: skip music ----
+  // Music puts far more of its energy below 90 Hz than speech does. A new station is
+  // listened to silently for PRE_MS first, then the last BASS_MS are checked every 250 ms.
+  const PRE_MS = 3000;
+  const BASS_MS = 7000;
+  const BASS_EVERY_MS = 250;
+  const BASS_SHARE = 0.2;
+  function musicCheck() {
+    let recent = [];
+    let lastCheck = 0;
+    return {
+      reset() {
+        recent = [];
+        lastCheck = 0;
+      },
+      span(now) {
+        return recent.length ? now - recent[0][0] : 0;
+      },
+      // per frame: loudness, energy below 90 Hz, energy up to 10 kHz
+      push(rms, low, all, now) {
+        recent.push([now, rms, low, all]);
+        while (now - recent[0][0] > BASS_MS) recent.shift();
+      },
+      music(now, ms) {
+        if (this.span(now) < ms * 0.95) return false;
+        let r = 0;
+        let l = 0;
+        let a = 0;
+        let k = 0;
+        for (const f of recent) {
+          if (now - f[0] > ms) continue;
+          r += f[1];
+          l += f[2];
+          a += f[3];
+          k++;
+        }
+        return k > 0 && r / k >= 0.005 && a > 0 && l / a > BASS_SHARE;
+      },
+      // One frame's reading. 'music' if it's music; 'talk' once the silent pre-listen found
+      // none; otherwise null (not sure yet, or not time to check again).
+      hear(rms, [low, all], now, preListen) {
+        this.push(rms, low, all, now);
+        return preListen ? this.afterPreListen(now) : this.whilePlaying(now);
+      },
+      afterPreListen(now) {
+        if (this.span(now) < PRE_MS * 0.95) return null;
+        return this.music(now, PRE_MS) ? 'music' : 'talk';
+      },
+      whilePlaying(now) {
+        if (now - lastCheck < BASS_EVERY_MS) return null;
+        lastCheck = now;
+        return this.music(now, BASS_MS) ? 'music' : null;
+      },
+    };
+  }
+
+  ggs.radio ??= {};
+  Object.assign(ggs.radio, { muteGame, output, musicCheck });
+})();
+
+// ==================== src/scripts/radio/stations.js ===============================
+// Radio's station search: live stations near the round's location from Radio Browser
+// (radio-browser.info), which is sent the round's coordinates. In streamer mode only talk
+// stations, by Radio Browser's tags. Also the line naming a station once the guess is in.
+(() => {
+  const ggs = globalThis.__ggs;
+
+  const API = 'https://de1.api.radio-browser.info/json/stations/search';
+  const RADII_KM = [50, 250, 1000, 3000]; // widen until there are a few stations
+
+  // Stream networks that insert ads into the audio itself; tried last.
+  const AD_STREAMS = /zeno\.fm|zenomedia|adswizz|streamtheworld\.com|tritondigital|[?&]aw_0_/i;
+
+  const TALK_TAGS = new RegExp(
+    '\\b(news|talk|sports?|speech|information|info|noticias|nachrichten|actualit|' +
+      'informa|notizie|public radio|comedy|debate|politics)',
+    'i',
+  );
+  const MUSIC_TAGS = new RegExp(
+    '\\b(music|musica|música|musik|musique|hits?|pop|rock|dance|jazz|classical|' +
+      'country|oldies|top ?40|chart|r&b|hip ?hop|electronic|house|latin|reggae|metal|disco|[5-9]0s|schlager|' +
+      'soul|funk|blues|folk|indie|christian|gospel)\\b',
+    'i',
+  );
+  const isTalk = s => TALK_TAGS.test(s.tags) && !MUSIC_TAGS.test(s.tags);
+
   async function search(params) {
     const q = new URLSearchParams({
       is_https: 'true',
@@ -5369,37 +5786,46 @@ section.flat .status:empty { display: none; }
   const near = (lat, lng, dist, limit) =>
     search({ geo_lat: lat, geo_long: lng, geo_distance: dist * 1000, limit });
 
-  async function findStations(lat, lng, talkOnly) {
+  async function anyNear(lat, lng) {
     let list = [];
-    if (!talkOnly) {
-      for (const d of RADII_KM) {
-        list = await near(lat, lng, d, 30);
-        if (list.length >= 3) break;
-      }
-    } else {
-      // Talk stations are sparser: the round's country first, then nearby, then wider.
-      const close = await near(lat, lng, 250, 300);
-      const pool = close.length ? close : await near(lat, lng, 1000, 300);
-      const dist = s => km({ lat, lng }, { lat: s.geo_lat, lng: s.geo_long });
-      const cc = pool.filter(s => s.geo_lat != null).sort((a, b) => dist(a) - dist(b))[0]?.countrycode;
-      const talkClose = close.filter(isTalk);
-      list = talkClose.filter(s => s.countrycode === cc);
-      if (cc) list.push(...(await search({ countrycode: cc, limit: 300 })).filter(isTalk));
-      list.push(...talkClose.filter(s => s.countrycode !== cc));
-      for (const d of RADII_KM.slice(2)) {
-        if (list.length >= 3) break;
-        list.push(...(await near(lat, lng, d, 300)).filter(isTalk));
-      }
+    for (const d of RADII_KM) {
+      list = await near(lat, lng, d, 30);
+      if (list.length >= 3) break;
     }
-    // one entry per station (many are listed once per bitrate)
+    return list;
+  }
+
+  // Talk stations are sparser: the round's country first, then nearby, then wider.
+  async function talkNear(lat, lng) {
+    const close = await near(lat, lng, 250, 300);
+    const pool = close.length ? close : await near(lat, lng, 1000, 300);
+    const dist = s => km({ lat, lng }, { lat: s.geo_lat, lng: s.geo_long });
+    const cc = pool.filter(s => s.geo_lat != null).sort((a, b) => dist(a) - dist(b))[0]?.countrycode;
+    const talkClose = close.filter(isTalk);
+    const list = talkClose.filter(s => s.countrycode === cc);
+    if (cc) list.push(...(await search({ countrycode: cc, limit: 300 })).filter(isTalk));
+    list.push(...talkClose.filter(s => s.countrycode !== cc));
+    for (const d of RADII_KM.slice(2)) {
+      if (list.length >= 3) break;
+      list.push(...(await near(lat, lng, d, 300)).filter(isTalk));
+    }
+    return list;
+  }
+
+  // one entry per station (many are listed once per bitrate)
+  function onePerStation(list) {
     const seen = new Set();
-    list = list.filter(s => {
+    return list.filter(s => {
       const k = s.name
         .split(/\s[|–-]\s|\(/)[0]
         .trim()
         .toLowerCase();
       return !seen.has(k) && seen.add(k);
     });
+  }
+
+  async function findStations(lat, lng, talkOnly) {
+    const list = onePerStation(talkOnly ? await talkNear(lat, lng) : await anyNear(lat, lng));
     const ads = s => AD_STREAMS.test(s.url_resolved) || AD_STREAMS.test(s.url);
     // ad-free first, each half still in popularity order
     return [...list.filter(s => !ads(s)), ...list.filter(ads)];
@@ -5413,7 +5839,6 @@ section.flat .status:empty { display: none; }
       Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
     return Math.round(12742 * Math.asin(Math.sqrt(h)));
   };
-  const esc = ggs.esc;
   const describe = (s, loc) => {
     const where = [s.state, s.country].filter(Boolean).join(', ');
     const dist =
@@ -5421,7 +5846,359 @@ section.flat .status:empty { display: none; }
     return where + dist;
   };
 
-  // ---- the player: "stage" in Street View's place, or a "mini" bar top-left ----
+  ggs.radio ??= {};
+  Object.assign(ggs.radio, { findStations, describe });
+})();
+
+// ==================== src/scripts/radio/visual.js =================================
+// Radio's visual: a shape blending between random country outlines, rippling with the volume.
+// The outlines (shapes.js) are chosen without the round's location, so they give nothing away.
+// A circle while loading, an icon on play, pause or skip.
+(() => {
+  const ggs = globalThis.__ggs;
+
+  const MORPH_MS = 3000;
+  const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
+  const ICON_POLYS = {
+    play: [
+      [
+        [-0.4, -0.55],
+        [0.55, 0],
+        [-0.4, 0.55],
+      ],
+    ],
+    pause: [
+      [
+        [-0.45, -0.55],
+        [-0.13, -0.55],
+        [-0.13, 0.55],
+        [-0.45, 0.55],
+      ],
+      [
+        [0.13, -0.55],
+        [0.45, -0.55],
+        [0.45, 0.55],
+        [0.13, 0.55],
+      ],
+    ],
+    skip: [
+      [
+        [-0.55, -0.5],
+        [0.2, 0],
+        [-0.55, 0.5],
+      ],
+      [
+        [0.25, -0.5],
+        [0.5, -0.5],
+        [0.5, 0.5],
+        [0.25, 0.5],
+      ],
+    ],
+    back: [
+      [
+        [-0.5, -0.5],
+        [-0.25, -0.5],
+        [-0.25, 0.5],
+        [-0.5, 0.5],
+      ],
+      [
+        [0.55, -0.5],
+        [0.55, 0.5],
+        [-0.2, 0],
+      ],
+    ],
+  };
+  // echo rings round the shape: [how far out, opacity]
+  const ECHOES = [
+    [1, 0.14],
+    [2, 0.07],
+  ];
+
+  // rounds a polygon's corners
+  function soften(poly, r = 0.06) {
+    const out = [];
+    poly.forEach((p, i) => {
+      const a = poly[(i + poly.length - 1) % poly.length];
+      const b = poly[(i + 1) % poly.length];
+      const la = Math.hypot(a[0] - p[0], a[1] - p[1]);
+      const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+      const d = Math.min(r, la / 2.2, lb / 2.2);
+      const st = [p[0] + ((a[0] - p[0]) * d) / la, p[1] + ((a[1] - p[1]) * d) / la];
+      const en = [p[0] + ((b[0] - p[0]) * d) / lb, p[1] + ((b[1] - p[1]) * d) / lb];
+      for (let k = 0; k <= 6; k++) {
+        const t = k / 6;
+        const u = 1 - t;
+        out.push([
+          u * u * st[0] + 2 * u * t * p[0] + t * t * en[0],
+          u * u * st[1] + 2 * u * t * p[1] + t * t * en[1],
+        ]);
+      }
+    });
+    return out;
+  }
+  // m points evenly spaced round a closed polygon
+  function loop(poly, m) {
+    const seg = poly.map((p, i) => {
+      const q = poly[(i + 1) % poly.length];
+      return Math.hypot(q[0] - p[0], q[1] - p[1]);
+    });
+    const total = seg.reduce((a, v) => a + v, 0);
+    const out = [];
+    for (let j = 0, i = 0, acc = 0; j < m; j++) {
+      const d = (j / m) * total;
+      while (acc + seg[i] < d) acc += seg[i++];
+      const t = (d - acc) / seg[i];
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      out.push(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+    }
+    return out;
+  }
+  // K points round a circle, with the same start (top) and winding as the outlines
+  function circle(K) {
+    const out = new Float32Array(2 * K);
+    for (let i = 0; i < K; i++) {
+      const a = -Math.PI / 2 + (i / K) * Math.PI * 2;
+      out[2 * i] = Math.cos(a) * 0.8;
+      out[2 * i + 1] = Math.sin(a) * 0.8;
+    }
+    return out;
+  }
+  function iconShapes(K) {
+    const icons = {};
+    for (const [name, polys] of Object.entries(ICON_POLYS)) {
+      const pts = Float32Array.from(polys.flatMap(p => loop(soften(p), K / polys.length)));
+      icons[name] = { parts: polys.length, pts };
+    }
+    return icons;
+  }
+  const wave = (i, K, t, ph) => {
+    const th = (i / K) * Math.PI * 2;
+    return (
+      Math.sin(3 * th + t * 1.3 + ph) * 0.5 +
+      Math.sin(7 * th - t * 2.1 + ph) * 0.3 +
+      Math.sin(13 * th + t * 3.4 + ph * 2) * 0.2
+    );
+  };
+
+  function blob(canvas) {
+    const g = canvas.getContext('2d');
+    const all = (ggs.radioShapes ?? []).map(a => Float32Array.from(a, v => v / 100));
+    const n = all[0]?.length ?? 0;
+    const K = n / 2;
+    const round = circle(K);
+    const base = new Float32Array(n);
+    const shape = new Float32Array(n);
+    const ring = new Float32Array(n);
+    const icons = iconShapes(K);
+    let flashName = null;
+    let flashUntil = 0;
+    let iconMix = 0;
+    let iconTarget = null;
+    let parts = 1;
+    let partsAt = 0;
+    const iconCur = new Float32Array(n); // the icon on show, easing from one icon to the next
+    const pick = prev => {
+      let s;
+      do s = all[Math.floor(Math.random() * all.length)];
+      while (all.length > 1 && s === prev);
+      return s;
+    };
+    let from = pick();
+    let to = pick(from);
+    let since = performance.now();
+    let load = 1;
+    let level = 0;
+
+    function trace(p, c, s, parts = 1) {
+      g.beginPath();
+      const per = K / parts;
+      for (let q = 0; q < parts; q++) {
+        const o = q * per;
+        for (let i = 0; i <= per; i++) {
+          const j = (o + (i % per)) * 2;
+          const k = (o + ((i + 1) % per)) * 2;
+          const mx = c + ((p[j] + p[k]) / 2) * s;
+          const my = c + ((p[j + 1] + p[k + 1]) / 2) * s;
+          if (i === 0) g.moveTo(mx, my);
+          else g.quadraticCurveTo(c + p[j] * s, c + p[j + 1] * s, mx, my);
+        }
+        g.closePath();
+      }
+    }
+    // outward normal at point i
+    let nx = 0;
+    let ny = 0;
+    function normal(p, i) {
+      const a = ((i + K - 2) % K) * 2;
+      const b = ((i + 2) % K) * 2;
+      const tx = p[b] - p[a];
+      const ty = p[b + 1] - p[a + 1];
+      const len = Math.hypot(tx, ty) || 1;
+      nx = ty / len;
+      ny = -tx / len;
+    }
+    // `out` is `p` pushed out along its normals by d(i)
+    function push(out, p, d) {
+      for (let i = 0; i < K; i++) {
+        normal(p, i);
+        const di = d(i);
+        out[2 * i] = p[2 * i] + nx * di;
+        out[2 * i + 1] = p[2 * i + 1] + ny * di;
+      }
+    }
+
+    // keeps the canvas at its on-screen size in device pixels; returns that size
+    function fit() {
+      const dpr = devicePixelRatio || 1;
+      const cw = canvas.clientWidth || 1;
+      const W = Math.round(cw * dpr);
+      if (canvas.width !== W || canvas.height !== W) canvas.width = canvas.height = W;
+      return W;
+    }
+    // how far through the current blend, 0..1, moving on to a new outline at the end
+    function progress(now) {
+      const p = (now - since) / MORPH_MS;
+      if (p < 1) return p;
+      from = to;
+      to = pick(from);
+      since = now;
+      return 0;
+    }
+    // base = the blend at p, slowly spinning, timed so each outline is north up when the blend
+    // reaches it, then pulled towards the circle while loading
+    function blend(p) {
+      const m = p * p * (3 - 2 * p);
+      const a0 = SPIN_STEP * p;
+      const a1 = SPIN_STEP * (p - 1);
+      const c0 = Math.cos(a0);
+      const s0 = Math.sin(a0);
+      const c1 = Math.cos(a1);
+      const s1 = Math.sin(a1);
+      for (let i = 0; i < n; i += 2) {
+        const x0 = from[i] * c0 - from[i + 1] * s0;
+        const y0 = from[i] * s0 + from[i + 1] * c0;
+        const x1 = to[i] * c1 - to[i + 1] * s1;
+        const y1 = to[i] * s1 + to[i + 1] * c1;
+        const x = x0 + (x1 - x0) * m;
+        const y = y0 + (y1 - y0) * m;
+        base[i] = x + (round[i] - x) * load;
+        base[i + 1] = y + (round[i + 1] - y) * load;
+      }
+    }
+    // icons ease in and out; returns how much of an icon is showing, 0..1
+    function easeIcon(now, hold) {
+      const want = hold ?? (now < flashUntil ? flashName : null);
+      const target = icons[want];
+      if (target) towards(target, want, now);
+      else iconTarget = null;
+      iconMix += ((target ? 1 : 0) - iconMix) * 0.18;
+      if (iconMix > 0.001) for (let i = 0; i < n; i++) base[i] += (iconCur[i] - base[i]) * iconMix;
+      parts = partsNow(target, now);
+      return iconMix;
+    }
+    // an icon in two parts splits once it's mostly showing
+    function partsNow(target, now) {
+      if (iconMix <= 0.5) return 1;
+      return target && now >= partsAt ? target.parts : parts;
+    }
+    function towards(target, want, now) {
+      if (iconMix < 0.01) iconCur.set(base); // start from the shape as it is
+      for (let i = 0; i < n; i++) iconCur[i] += (target.pts[i] - iconCur[i]) * 0.18;
+      // split or join once it's partway there
+      if (iconTarget !== want) {
+        iconTarget = want;
+        partsAt = now + 150;
+      }
+    }
+
+    // echoes, pushed outward
+    function echoes(c, s, t, amp, px, plain) {
+      g.lineJoin = 'round';
+      for (const [k, alpha] of ECHOES) {
+        push(ring, shape, i => 0.06 * k + amp * k * (0.5 + 0.5 * wave(i, K, t, k * 2.3)));
+        trace(ring, c, s, parts);
+        g.strokeStyle = `rgba(255, 255, 255, ${alpha * (0.6 + level) * plain})`;
+        g.lineWidth = 1.2 * px;
+        g.stroke();
+      }
+    }
+    function body(c, s, px) {
+      trace(shape, c, s, parts);
+      const fill = g.createRadialGradient(c, c - s * 0.3, s * 0.1, c, c, s * 1.1);
+      fill.addColorStop(0, `rgba(254, 205, 25, ${0.1 + level * 0.25})`);
+      fill.addColorStop(1, `rgba(120, 90, 230, ${0.08 + level * 0.15})`);
+      g.fillStyle = fill;
+      g.fill();
+      g.shadowColor = 'rgba(254, 205, 25, .5)';
+      g.shadowBlur = (4 + level * 18) * px;
+      g.lineWidth = 2 * px;
+      g.strokeStyle = 'rgba(255, 255, 255, .92)';
+      g.stroke();
+      g.shadowBlur = 0;
+    }
+    // three dots circling the shape while loading
+    function loadingDots(c, s, t, px, plain) {
+      for (let i = 0; i < 3; i++) {
+        const a = t * 2.4 + (i * Math.PI * 2) / 3;
+        g.fillStyle = `rgba(254, 205, 25, ${load * plain * (0.9 - i * 0.2)})`;
+        g.beginPath();
+        g.arc(c + Math.cos(a) * s * 1.02, c + Math.sin(a) * s * 1.02, (4 - i) * px, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+
+    // vol: 0..1 loudness; loading: finding/connecting; hold: an icon to keep showing
+    function draw(now, { vol, loading, hold }) {
+      const W = fit();
+      const px = W / 300;
+      const t = now / 1000;
+      const c = W / 2;
+      g.clearRect(0, 0, W, W);
+      if (!n) return;
+
+      const p = progress(now);
+      load += ((loading ? 1 : 0) - load) * 0.05;
+      level += (vol - level) * (vol > level ? 0.35 : 0.07);
+      blend(p);
+      const plain = 1 - easeIcon(now, hold); // icons stay crisp: no ripples or echoes
+
+      const breathe = Math.sin(t * 3.1);
+      const s = W * 0.34 * (1 + (level * 0.07 + load * 0.035 * breathe) * plain);
+      const amp = (0.015 + level * 0.14 + load * 0.035 * (0.7 + 0.3 * breathe)) * plain;
+      push(shape, base, i => amp * wave(i, K, t, 0));
+
+      echoes(c, s, t, amp, px, plain);
+      body(c, s, px);
+      if (load * plain > 0.02) loadingDots(c, s, t, px, plain);
+    }
+    draw.flash = (name, ms) => {
+      flashName = name;
+      flashUntil = performance.now() + ms;
+    };
+    return draw;
+  }
+
+  ggs.radio ??= {};
+  ggs.radio.blob = blob;
+})();
+
+// ==================== src/scripts/radio/ui.js =====================================
+// Radio's player on the page: "stage" in Street View's place, or a "mini" bar top-left. Hides
+// Street View, builds the player in a shadow root, wires its buttons and runs its animation.
+(() => {
+  const ggs = globalThis.__ggs;
+
+  const PANO_SELECTORS = ['[class*="game_panorama"]', '[data-qa="panorama"]'];
+  const hidePano = document.createElement('style');
+  hidePano.textContent = `
+    ${PANO_SELECTORS.join(', ')}, .widget-scene-canvas { visibility: hidden !important; }
+    body { background: #0d0a2a !important; }`;
+  function showPano(show) {
+    if (show) hidePano.remove();
+    else (document.head ?? document.documentElement).append(hidePano);
+  }
+
   const ICON = {
     play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
     pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
@@ -5485,385 +6262,15 @@ section.flat .status:empty { display: none; }
     .reveal b { display: block; font-size: 15px; font-style: italic; }
     .reveal span { font-size: 12px; color: rgba(255, 255, 255, .65); }`;
 
-  // ---- the visual ----
-  // A shape blending between random country outlines, rippling with the volume. They are
-  // chosen without the round's location, so they give nothing away. A circle while loading,
-  // an icon on play, pause or skip.
-  const MORPH_MS = 3000;
-  const SPIN_STEP = (Math.PI * 3) / 8; // turn per blend
-  const ICON_POLYS = {
-    play: [
-      [
-        [-0.4, -0.55],
-        [0.55, 0],
-        [-0.4, 0.55],
-      ],
-    ],
-    pause: [
-      [
-        [-0.45, -0.55],
-        [-0.13, -0.55],
-        [-0.13, 0.55],
-        [-0.45, 0.55],
-      ],
-      [
-        [0.13, -0.55],
-        [0.45, -0.55],
-        [0.45, 0.55],
-        [0.13, 0.55],
-      ],
-    ],
-    skip: [
-      [
-        [-0.55, -0.5],
-        [0.2, 0],
-        [-0.55, 0.5],
-      ],
-      [
-        [0.25, -0.5],
-        [0.5, -0.5],
-        [0.5, 0.5],
-        [0.25, 0.5],
-      ],
-    ],
-    back: [
-      [
-        [-0.5, -0.5],
-        [-0.25, -0.5],
-        [-0.25, 0.5],
-        [-0.5, 0.5],
-      ],
-      [
-        [0.55, -0.5],
-        [0.55, 0.5],
-        [-0.2, 0],
-      ],
-    ],
-  };
-  // rounds a polygon's corners
-  function soften(poly, r = 0.06) {
-    const out = [];
-    poly.forEach((p, i) => {
-      const a = poly[(i + poly.length - 1) % poly.length];
-      const b = poly[(i + 1) % poly.length];
-      const la = Math.hypot(a[0] - p[0], a[1] - p[1]);
-      const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
-      const d = Math.min(r, la / 2.2, lb / 2.2);
-      const st = [p[0] + ((a[0] - p[0]) * d) / la, p[1] + ((a[1] - p[1]) * d) / la];
-      const en = [p[0] + ((b[0] - p[0]) * d) / lb, p[1] + ((b[1] - p[1]) * d) / lb];
-      for (let k = 0; k <= 6; k++) {
-        const t = k / 6;
-        const u = 1 - t;
-        out.push([
-          u * u * st[0] + 2 * u * t * p[0] + t * t * en[0],
-          u * u * st[1] + 2 * u * t * p[1] + t * t * en[1],
-        ]);
-      }
-    });
-    return out;
-  }
-  // m points evenly spaced round a closed polygon
-  function loop(poly, m) {
-    const seg = poly.map((p, i) => {
-      const q = poly[(i + 1) % poly.length];
-      return Math.hypot(q[0] - p[0], q[1] - p[1]);
-    });
-    const total = seg.reduce((a, v) => a + v, 0);
-    const out = [];
-    for (let j = 0, i = 0, acc = 0; j < m; j++) {
-      const d = (j / m) * total;
-      while (acc + seg[i] < d) acc += seg[i++];
-      const t = (d - acc) / seg[i];
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      out.push(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
-    }
-    return out;
-  }
-  function blob(canvas) {
-    const g = canvas.getContext('2d');
-    const all = (ggs.radioShapes ?? []).map(a => Float32Array.from(a, v => v / 100));
-    const n = all[0]?.length ?? 0;
-    const K = n / 2;
-    const circle = new Float32Array(n); // same start (top) and winding as the outlines
-    for (let i = 0; i < K; i++) {
-      const a = -Math.PI / 2 + (i / K) * Math.PI * 2;
-      circle[2 * i] = Math.cos(a) * 0.8;
-      circle[2 * i + 1] = Math.sin(a) * 0.8;
-    }
-    const base = new Float32Array(n);
-    const shape = new Float32Array(n);
-    const ring = new Float32Array(n);
-    const icons = {};
-    for (const [name, polys] of Object.entries(ICON_POLYS)) {
-      const pts = Float32Array.from(polys.flatMap(p => loop(soften(p), K / polys.length)));
-      icons[name] = { parts: polys.length, pts };
-    }
-    let flashName = null;
-    let flashUntil = 0;
-    let iconMix = 0;
-    let iconTarget = null;
-    let parts = 1;
-    let partsAt = 0;
-    const iconCur = new Float32Array(n); // the icon on show, easing from one icon to the next
-    const pick = prev => {
-      let s;
-      do s = all[Math.floor(Math.random() * all.length)];
-      while (all.length > 1 && s === prev);
-      return s;
-    };
-    let from = pick();
-    let to = pick(from);
-    let since = performance.now();
-    let load = 1;
-    let level = 0;
+  const label = streamerMode => (streamerMode ? 'Talk radio' : 'Live radio');
 
-    function trace(p, c, s, parts = 1) {
-      g.beginPath();
-      const per = K / parts;
-      for (let q = 0; q < parts; q++) {
-        const o = q * per;
-        for (let i = 0; i <= per; i++) {
-          const j = (o + (i % per)) * 2;
-          const k = (o + ((i + 1) % per)) * 2;
-          const mx = c + ((p[j] + p[k]) / 2) * s;
-          const my = c + ((p[j + 1] + p[k + 1]) / 2) * s;
-          if (i === 0) g.moveTo(mx, my);
-          else g.quadraticCurveTo(c + p[j] * s, c + p[j + 1] * s, mx, my);
-        }
-        g.closePath();
-      }
-    }
-    // outward normal at point i
-    let nx = 0;
-    let ny = 0;
-    function normal(p, i) {
-      const a = ((i + K - 2) % K) * 2;
-      const b = ((i + 2) % K) * 2;
-      const tx = p[b] - p[a];
-      const ty = p[b + 1] - p[a + 1];
-      const len = Math.hypot(tx, ty) || 1;
-      nx = ty / len;
-      ny = -tx / len;
-    }
-    const wave = (i, t, ph) => {
-      const th = (i / K) * Math.PI * 2;
-      return (
-        Math.sin(3 * th + t * 1.3 + ph) * 0.5 +
-        Math.sin(7 * th - t * 2.1 + ph) * 0.3 +
-        Math.sin(13 * th + t * 3.4 + ph * 2) * 0.2
-      );
-    };
-
-    // vol: 0..1 loudness; loading: finding/connecting; hold: an icon to keep showing
-    function draw(now, { vol, loading, hold }) {
-      const dpr = devicePixelRatio || 1;
-      const cw = canvas.clientWidth || 1;
-      const W = Math.round(cw * dpr);
-      if (canvas.width !== W || canvas.height !== W) canvas.width = canvas.height = W;
-      const px = W / 300;
-      const t = now / 1000;
-      const c = W / 2;
-      g.clearRect(0, 0, W, W);
-      if (!n) return;
-
-      let p = (now - since) / MORPH_MS;
-      if (p >= 1) {
-        from = to;
-        to = pick(from);
-        since = now;
-        p = 0;
-      }
-      const m = p * p * (3 - 2 * p);
-      load += ((loading ? 1 : 0) - load) * 0.05;
-      level += (vol - level) * (vol > level ? 0.35 : 0.07);
-      // slowly spinning, timed so each outline is north up when the blend reaches it
-      const a0 = SPIN_STEP * p;
-      const a1 = SPIN_STEP * (p - 1);
-      const c0 = Math.cos(a0);
-      const s0 = Math.sin(a0);
-      const c1 = Math.cos(a1);
-      const s1 = Math.sin(a1);
-      for (let i = 0; i < n; i += 2) {
-        const x0 = from[i] * c0 - from[i + 1] * s0;
-        const y0 = from[i] * s0 + from[i + 1] * c0;
-        const x1 = to[i] * c1 - to[i + 1] * s1;
-        const y1 = to[i] * s1 + to[i + 1] * c1;
-        const x = x0 + (x1 - x0) * m;
-        const y = y0 + (y1 - y0) * m;
-        base[i] = x + (circle[i] - x) * load;
-        base[i + 1] = y + (circle[i + 1] - y) * load;
-      }
-      // icons ease in and out
-      const want = hold ?? (now < flashUntil ? flashName : null);
-      const target = icons[want];
-      if (target) {
-        if (iconMix < 0.01) iconCur.set(base); // start from the shape as it is
-        for (let i = 0; i < n; i++) iconCur[i] += (target.pts[i] - iconCur[i]) * 0.18;
-        // split or join once it's partway there
-        if (iconTarget !== want) {
-          iconTarget = want;
-          partsAt = now + 150;
-        }
-      } else iconTarget = null;
-      iconMix += ((target ? 1 : 0) - iconMix) * 0.18;
-      if (iconMix > 0.001) for (let i = 0; i < n; i++) base[i] += (iconCur[i] - base[i]) * iconMix;
-      if (iconMix <= 0.5) parts = 1;
-      else if (target && now >= partsAt) parts = target.parts;
-      const plain = 1 - iconMix; // icons stay crisp: no ripples or echoes
-
-      const breathe = Math.sin(t * 3.1);
-      const s = W * 0.34 * (1 + (level * 0.07 + load * 0.035 * breathe) * plain);
-      const amp = (0.015 + level * 0.14 + load * 0.035 * (0.7 + 0.3 * breathe)) * plain;
-
-      for (let i = 0; i < K; i++) {
-        normal(base, i);
-        const d = amp * wave(i, t, 0);
-        shape[2 * i] = base[2 * i] + nx * d;
-        shape[2 * i + 1] = base[2 * i + 1] + ny * d;
-      }
-
-      // echoes, pushed outward
-      g.lineJoin = 'round';
-      for (const [k, alpha] of [
-        [1, 0.14],
-        [2, 0.07],
-      ]) {
-        for (let i = 0; i < K; i++) {
-          normal(shape, i);
-          const d = 0.06 * k + amp * k * (0.5 + 0.5 * wave(i, t, k * 2.3));
-          ring[2 * i] = shape[2 * i] + nx * d;
-          ring[2 * i + 1] = shape[2 * i + 1] + ny * d;
-        }
-        trace(ring, c, s, parts);
-        g.strokeStyle = `rgba(255, 255, 255, ${alpha * (0.6 + level) * plain})`;
-        g.lineWidth = 1.2 * px;
-        g.stroke();
-      }
-
-      trace(shape, c, s, parts);
-      const fill = g.createRadialGradient(c, c - s * 0.3, s * 0.1, c, c, s * 1.1);
-      fill.addColorStop(0, `rgba(254, 205, 25, ${0.1 + level * 0.25})`);
-      fill.addColorStop(1, `rgba(120, 90, 230, ${0.08 + level * 0.15})`);
-      g.fillStyle = fill;
-      g.fill();
-      g.shadowColor = 'rgba(254, 205, 25, .5)';
-      g.shadowBlur = (4 + level * 18) * px;
-      g.lineWidth = 2 * px;
-      g.strokeStyle = 'rgba(255, 255, 255, .92)';
-      g.stroke();
-      g.shadowBlur = 0;
-
-      if (load * plain > 0.02) {
-        for (let i = 0; i < 3; i++) {
-          const a = t * 2.4 + (i * Math.PI * 2) / 3;
-          g.fillStyle = `rgba(254, 205, 25, ${load * plain * (0.9 - i * 0.2)})`;
-          g.beginPath();
-          g.arc(c + Math.cos(a) * s * 1.02, c + Math.sin(a) * s * 1.02, (4 - i) * px, 0, Math.PI * 2);
-          g.fill();
-        }
-      }
-    }
-    draw.flash = (name, ms) => {
-      flashName = name;
-      flashUntil = performance.now() + ms;
-    };
-    return draw;
-  }
-
-  // ---- streamer mode: skip music ----
-  // Music puts far more of its energy below 90 Hz than speech does. A new station is
-  // listened to silently for PRE_MS first, then the last BASS_MS are checked every 250 ms.
-  const PRE_MS = 3000;
-  const BASS_MS = 7000;
-  const BASS_EVERY_MS = 250;
-  const BASS_SHARE = 0.2;
-  function musicCheck() {
-    let recent = [];
-    return {
-      reset() {
-        recent = [];
-      },
-      span(now) {
-        return recent.length ? now - recent[0][0] : 0;
-      },
-      // per frame: loudness, energy below 90 Hz, energy up to 10 kHz
-      push(rms, low, all, now) {
-        recent.push([now, rms, low, all]);
-        while (now - recent[0][0] > BASS_MS) recent.shift();
-      },
-      music(now, ms) {
-        if (this.span(now) < ms * 0.95) return false;
-        let r = 0;
-        let l = 0;
-        let a = 0;
-        let k = 0;
-        for (const f of recent) {
-          if (now - f[0] > ms) continue;
-          r += f[1];
-          l += f[2];
-          a += f[3];
-          k++;
-        }
-        return k > 0 && r / k >= 0.005 && a > 0 && l / a > BASS_SHARE;
-      },
-    };
-  }
-
-  function start(cfg) {
-    const hidePano = document.createElement('style');
-    hidePano.textContent = HIDE_PANO_CSS;
-    const setPano = show =>
-      show ? hidePano.remove() : (document.head ?? document.documentElement).append(hidePano);
-    setPano(cfg.showStreetView);
-
-    muteGame(true);
-    let audio = null;
-    let node = null;
-    let ctx = null;
-    let analyser = null;
-    let gain = null;
-    let td = null;
-    let fd = null;
-    let tuning = false;
-    let preListen = false;
-    let allowMusic = false;
-    let lastCheck = 0;
-    const music = musicCheck();
-    let volume = 0.6;
-    let watchdog = 0;
-    let stallTimer = 0;
-    let waitingSince = 0;
-    let blocked = false;
-    let userPaused = false;
-    let skipping = 0;
-    let host = null;
-    let root = null;
-    let draw = null;
-    let raf = 0;
-    let lastT = 0;
-    let lastMove = 0;
-    let live = false;
-    let round = null;
-    let loc = null;
-    let stations = [];
-    let idx = 0;
-
-    const $ = sel => root.querySelector(sel);
-    const setStatus = t => {
-      $('.status').textContent = t;
-    };
-
-    function create() {
-      host = document.createElement('div');
-      host.setAttribute('data-ggs-ui', 'radio');
-      root = host.attachShadow({ mode: 'open' });
-      root.innerHTML = `<style>${CSS}</style>
+  // the player's shadow root contents
+  const playerHtml = (streamerMode, volume) => `<style>${CSS}</style>
         <div class="wrap">
           <canvas></canvas>
           <div class="side">
             <div class="info">
-              <div class="label">${cfg.streamerMode ? 'Talk radio' : 'Live radio'}</div>
+              <div class="label">${label(streamerMode)}</div>
               <div class="status"></div>
             </div>
             <div class="controls">
@@ -5875,135 +6282,210 @@ section.flat .status:empty { display: none; }
           </div>
           <div class="extra"><div class="reveal"></div></div>
         </div>`;
-      const togglePlay = () => {
-        if (!audio) return;
-        if (audio.paused) {
-          userPaused = false;
-          ctx?.resume();
-          audio.play().catch(() => {});
-          draw.flash('play', 700);
-        } else {
-          userPaused = true;
-          audio.pause();
-        }
-      };
-      $('.play').onclick = togglePlay;
-      $('canvas').onclick = togglePlay;
-      $('.wrap').onclick = e => {
-        if (e.target === e.currentTarget) togglePlay();
-      };
-      $('.prev').onclick = () => {
-        draw.flash('back', 600);
-        tune(idx - 1);
-      };
-      $('.next').onclick = () => {
-        draw.flash('skip', 600);
-        tune(idx + 1);
-      };
-      $('input').oninput = e => {
-        volume = +e.target.value;
-        if (audio) audio.volume = volume;
-      };
-      draw = blob($('canvas'));
-      let playing = null;
-      const frame = now => {
-        raf = requestAnimationFrame(frame);
-        if (host.hidden) return;
-        const t = audio?.currentTime ?? 0;
-        if (t !== lastT) {
-          lastT = t;
-          lastMove = now;
-        }
-        live = !!audio && !audio.paused && now - lastMove < 400; // sound is arriving
-        const isPlaying = !!audio && !audio.paused;
-        if (isPlaying !== playing) {
-          playing = isPlaying;
-          $('.play').innerHTML = playing ? ICON.pause : ICON.play;
-        }
-        // loudness: measured when the stream allows it (CORS), otherwise a made-up wobble
-        let vol = 0;
-        if (node && live) {
-          analyser.getByteTimeDomainData(td);
-          let sum = 0;
-          for (const v of td) sum += (v - 128) ** 2;
-          const rms = Math.sqrt(sum / td.length) / 128;
-          vol = Math.min(1, rms * 4);
-          if (cfg.streamerMode && !allowMusic && !skipping) {
-            analyser.getFloatFrequencyData(fd);
-            const hz = ctx.sampleRate / analyser.fftSize;
-            let low = 0;
-            let all = 0;
-            for (let i = 1; i * hz < 10000; i++) {
-              const p = 10 ** (fd[i] / 10);
-              all += p;
-              if (i * hz < 90) low += p;
-            }
-            music.push(rms, low, all, now);
-            if (preListen) {
-              if (music.span(now) >= PRE_MS * 0.95) {
-                if (music.music(now, PRE_MS)) musicSkip();
-                else unmute();
-              }
-            } else if (now - lastCheck >= BASS_EVERY_MS) {
-              lastCheck = now;
-              if (music.music(now, BASS_MS)) musicSkip();
-            }
-          }
-        } else if (live) {
-          vol = 0.3 + 0.25 * Math.abs(Math.sin(t * 5.3) * Math.sin(t * 1.7 + 1));
-        }
-        const wait = waitingSince && !blocked ? (Date.now() - waitingSince) / START_MS : 0;
-        if (wait) {
-          const left = Math.max(0, Math.ceil((START_MS / 1000) * (1 - wait)));
-          setStatus(`Station ${idx + 1} of ${stations.length} · waiting for audio ${left}s`);
-        } else if (live && cfg.streamerMode && !skipping) {
-          const note = allowMusic
-            ? ''
-            : !node
-              ? " · can't check this one for music"
-              : preListen
-                ? ' · checking for music…'
-                : '';
-          const text = `Station ${idx + 1} of ${stations.length}${note}`;
-          if ($('.status').textContent !== text) setStatus(text);
-        }
-        draw(now, {
-          vol,
-          loading: tuning || (!!waitingSince && !blocked) || preListen,
-          hold: userPaused && audio?.paused ? 'pause' : null,
-        });
-      };
+
+  // The player, its buttons calling on.toggle, on.prev, on.next and on.volume(v). Each animation
+  // frame on.frame(now) gives { playing, vol, loading, hold } (see visual.js for the last three).
+  function player(streamerMode, volume, on) {
+    const host = document.createElement('div');
+    host.setAttribute('data-ggs-ui', 'radio');
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = playerHtml(streamerMode, volume);
+    const $ = sel => root.querySelector(sel);
+    $('.play').onclick = on.toggle;
+    $('canvas').onclick = on.toggle;
+    $('.wrap').onclick = e => {
+      if (e.target === e.currentTarget) on.toggle();
+    };
+    $('.prev').onclick = () => {
+      draw.flash('back', 600);
+      on.prev();
+    };
+    $('.next').onclick = () => {
+      draw.flash('skip', 600);
+      on.next();
+    };
+    $('input').oninput = e => on.volume(+e.target.value);
+    const draw = ggs.radio.blob($('canvas'));
+
+    let playing = null;
+    let raf = 0;
+    const frame = now => {
       raf = requestAnimationFrame(frame);
+      if (host.hidden) return;
+      const look = on.frame(now);
+      if (look.playing !== playing) {
+        playing = look.playing;
+        $('.play').innerHTML = playing ? ICON.pause : ICON.play;
+      }
+      draw(now, look);
+    };
+    raf = requestAnimationFrame(frame);
+
+    return {
+      flash: draw.flash,
+      hide(hidden) {
+        host.hidden = hidden;
+      },
+      status: () => $('.status').textContent,
+      setStatus(text) {
+        $('.status').textContent = text;
+      },
+      setLabel(streamerMode) {
+        $('.label').textContent = label(streamerMode);
+      },
+      revealed: () => !!$('.reveal').innerHTML,
+      reveal(html) {
+        $('.reveal').innerHTML = html;
+      },
+      // on the panorama's spot during a round with Street View hidden, otherwise top-left
+      place(inRound, showStreetView) {
+        const pano =
+          !showStreetView && inRound && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
+        if (pano?.parentElement) {
+          if (host.previousElementSibling !== pano) pano.after(host);
+          host.className = 'stage';
+        } else {
+          if (host.parentElement !== document.body) document.body.append(host);
+          host.className = 'mini';
+        }
+      },
+      remove() {
+        cancelAnimationFrame(raf);
+        host.remove();
+      },
+    };
+  }
+
+  ggs.radio ??= {};
+  Object.assign(ggs.radio, { showPano, player });
+})();
+
+// ==================== src/scripts/radio/main.js ===================================
+// Radio mode: Street View is hidden and a live station near the round's location plays
+// instead (stations.js finds them). The audio streams from each station's own server. Nothing
+// about the station shows until the guess is in. This file tunes, skips and drives the player.
+(() => {
+  const ggs = globalThis.__ggs;
+  const R = ggs.radio;
+
+  const START_MS = 8000; // a stream that hasn't started playing by now is skipped
+  const STALL_MS = 8000; // so is one that has been buffering this long
+  const CLICK_TO_START = 'Click anywhere to start the radio';
+  const notActivated = () => navigator.userActivation?.hasBeenActive === false;
+
+  function start(cfg) {
+    R.showPano(cfg.showStreetView);
+    R.muteGame(true);
+    const out = R.output();
+    let audio = null;
+    let node = null;
+    let tuning = false;
+    let preListen = false;
+    let allowMusic = false;
+    const music = R.musicCheck();
+    let volume = 0.6;
+    let watchdog = 0;
+    let stallTimer = 0;
+    let waitingSince = 0;
+    let blocked = false;
+    let userPaused = false;
+    let skipping = 0;
+    let ui = null;
+    let lastT = 0;
+    let lastMove = 0;
+    let live = false;
+    let round = null;
+    let loc = null;
+    let stations = [];
+    let idx = 0;
+
+    const setStatus = t => ui.setStatus(t);
+    const stationLine = () => `Station ${idx + 1} of ${stations.length}`;
+    const stopTimers = () => {
+      clearTimeout(watchdog);
+      clearTimeout(stallTimer);
+    };
+
+    // ---- the player ----
+    function create() {
+      ui = R.player(cfg.streamerMode, volume, {
+        toggle: togglePlay,
+        prev: () => tune(idx - 1),
+        next: () => tune(idx + 1),
+        volume(v) {
+          volume = v;
+          if (audio) audio.volume = volume;
+        },
+        frame,
+      });
     }
 
-    function place(inRound) {
-      const pano =
-        !cfg.showStreetView && inRound && PANO_SELECTORS.map(s => document.querySelector(s)).find(Boolean);
-      if (pano?.parentElement) {
-        if (host.previousElementSibling !== pano) pano.after(host);
-        host.className = 'stage';
+    function togglePlay() {
+      if (!audio) return;
+      if (audio.paused) {
+        userPaused = false;
+        out.resume();
+        audio.play().catch(() => {});
+        ui.flash('play', 700);
       } else {
-        if (host.parentElement !== document.body) document.body.append(host);
-        host.className = 'mini';
+        userPaused = true;
+        audio.pause();
       }
     }
 
-    // Our own AudioContext (the real constructor, so muteGame leaves it alone), made only
-    // after a click or key press (Chrome's rule).
-    function ensureCtx() {
-      if (ctx || !RealAudioContext || navigator.userActivation?.hasBeenActive === false) return;
-      ctx = new RealAudioContext();
-      ours.add(ctx);
-      analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0;
-      td = new Uint8Array(analyser.fftSize);
-      fd = new Float32Array(analyser.frequencyBinCount);
-      gain = ctx.createGain();
-      analyser.connect(gain);
-      gain.connect(ctx.destination);
+    function frame(now) {
+      const t = audio?.currentTime ?? 0;
+      if (t !== lastT) {
+        lastT = t;
+        lastMove = now;
+      }
+      live = !!audio && !audio.paused && now - lastMove < 400; // sound is arriving
+      const playing = !!audio && !audio.paused;
+      const vol = loudness(now, t);
+      showWaiting();
+      return {
+        playing,
+        vol,
+        loading: tuning || (!!waitingSince && !blocked) || preListen,
+        hold: userPaused && audio?.paused ? 'pause' : null,
+      };
     }
 
+    // loudness: measured when the stream allows it (CORS), otherwise a made-up wobble
+    function loudness(now, t) {
+      if (node && live) {
+        const rms = out.rms();
+        if (cfg.streamerMode && !allowMusic && !skipping) listenForMusic(rms, now);
+        return Math.min(1, rms * 4);
+      }
+      if (live) return 0.3 + 0.25 * Math.abs(Math.sin(t * 5.3) * Math.sin(t * 1.7 + 1));
+      return 0;
+    }
+
+    function listenForMusic(rms, now) {
+      const heard = music.hear(rms, out.bass(), now, preListen);
+      if (heard === 'music') musicSkip();
+      else if (heard === 'talk') unmute();
+    }
+
+    function showWaiting() {
+      const wait = waitingSince && !blocked ? (Date.now() - waitingSince) / START_MS : 0;
+      if (wait) {
+        const left = Math.max(0, Math.ceil((START_MS / 1000) * (1 - wait)));
+        setStatus(`${stationLine()} · waiting for audio ${left}s`);
+      } else if (live && cfg.streamerMode && !skipping) {
+        const text = stationLine() + musicNote();
+        if (ui.status() !== text) setStatus(text);
+      }
+    }
+
+    function musicNote() {
+      if (allowMusic) return '';
+      if (!node) return " · can't check this one for music";
+      return preListen ? ' · checking for music…' : '';
+    }
+
+    // ---- the stream ----
     function drop() {
       if (!audio) return;
       const a = audio;
@@ -6019,22 +6501,12 @@ section.flat .status:empty { display: none; }
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
-      const a = new Audio();
+      const a = out.element(volume);
       audio = a;
-      ours.add(a);
-      a.volume = volume;
-      if (cors) ensureCtx();
-      const readable = cors && !!ctx;
-      if (readable) {
-        a.crossOrigin = 'anonymous';
-        node = ctx.createMediaElementSource(a);
-        node.connect(analyser);
-      }
+      node = cors ? out.connect(a) : null;
+      const readable = !!node;
       preListen = readable && !!cfg.streamerMode && !allowMusic;
-      if (gain) {
-        gain.gain.cancelScheduledValues(0);
-        gain.gain.value = preListen ? 0 : 1;
-      }
+      out.silent(preListen);
       let failed = false;
       const fail = () => {
         if (failed || a !== audio) return;
@@ -6046,10 +6518,9 @@ section.flat .status:empty { display: none; }
       };
       a.onerror = fail;
       a.onplaying = () => {
-        clearTimeout(watchdog);
-        clearTimeout(stallTimer);
+        stopTimers();
         waitingSince = 0;
-        setStatus(`Station ${idx + 1} of ${stations.length}`);
+        setStatus(stationLine());
       };
       a.onwaiting = a.onstalled = () => {
         clearTimeout(stallTimer);
@@ -6058,51 +6529,53 @@ section.flat .status:empty { display: none; }
       };
       a.src = url;
       if (startPaused) return;
-      ctx?.resume().catch(() => {});
+      out.resume()?.catch(() => {});
       a.play().catch(err => {
         if (a !== audio) return;
         if (err.name !== 'NotAllowedError') return fail();
         // no click on the page yet: start on the first one
         blocked = true;
         clearTimeout(watchdog);
-        setStatus('Click anywhere to start the radio');
+        setStatus(CLICK_TO_START);
       });
     }
 
     function tune(i, { paused = false } = {}) {
       if (!stations.length) return;
       idx = ((i % stations.length) + stations.length) % stations.length;
-      music.reset();
-      userPaused = paused;
-      allowMusic = paused;
-      lastCheck = 0;
-      clearTimeout(skipping);
-      skipping = 0;
-      $('.reveal').innerHTML = '';
-      clearTimeout(watchdog);
-      clearTimeout(stallTimer);
-      blocked = false;
-      if (cfg.streamerMode && !paused && navigator.userActivation?.hasBeenActive === false) {
+      resetStation(paused);
+      if (cfg.streamerMode && !paused && notActivated()) {
         // the music check needs a click first, so wait rather than play unchecked
         blocked = true;
         waitingSince = 0;
-        return setStatus('Click anywhere to start the radio');
+        return setStatus(CLICK_TO_START);
       }
+      const url = stations[idx].url_resolved;
       const cors = !setFor(uncheckableFor).has(stations[idx]);
       if (paused) {
         waitingSince = 0;
-        load(stations[idx].url_resolved, cors, true);
+        load(url, cors, true);
         return setStatus('Only music stations nearby · press play to hear it anyway');
       }
       waitingSince = Date.now();
       watchdog = setTimeout(() => {
         if (!blocked && (!audio || audio.currentTime < 0.5)) skip('no audio');
       }, START_MS);
-      load(stations[idx].url_resolved, cors);
+      load(url, cors);
+    }
+    function resetStation(paused) {
+      music.reset();
+      userPaused = paused;
+      allowMusic = paused;
+      clearTimeout(skipping);
+      skipping = 0;
+      ui.reveal('');
+      stopTimers();
+      blocked = false;
     }
     function unmute() {
       preListen = false;
-      gain?.gain.setTargetAtTime(1, ctx.currentTime, 0.08);
+      out.fadeIn();
     }
 
     // Music in streamer mode: skip to the next station not yet caught playing music. If all
@@ -6132,21 +6605,25 @@ section.flat .status:empty { display: none; }
       const flagged = setFor(flaggedFor);
       flagged.add(stations[idx]);
       audio?.pause();
-      draw?.flash('skip', 900);
+      ui?.flash('skip', 900);
       setStatus('Music detected, skipping…');
-      let next = null;
-      for (let k = 1; k < stations.length && next == null; k++) {
-        if (!flagged.has(stations[(idx + k) % stations.length])) next = (idx + k) % stations.length;
-      }
+      const next = nextUnflagged(flagged);
       skipping = setTimeout(() => {
         skipping = 0;
-        if (next != null) tune(next);
-        else
-          tune(
-            stations.findIndex(s => flagged.has(s)),
-            { paused: true },
-          );
+        if (next != null) return tune(next);
+        tune(
+          stations.findIndex(s => flagged.has(s)),
+          { paused: true },
+        );
       }, 600);
+    }
+    // the next station after this one not caught playing music, or null
+    function nextUnflagged(flagged) {
+      for (let k = 1; k < stations.length; k++) {
+        const j = (idx + k) % stations.length;
+        if (!flagged.has(stations[j])) return j;
+      }
+      return null;
     }
     function skip(why) {
       if (stations.length < 2) {
@@ -6157,95 +6634,101 @@ section.flat .status:empty { display: none; }
     }
     const unblock = () => {
       if (!blocked) return;
-      ctx?.resume().catch(() => {});
+      out.resume()?.catch(() => {});
       tune(idx);
     };
     window.addEventListener('pointerdown', unblock, true);
     window.addEventListener('keydown', unblock, true);
 
+    // ---- rounds ----
     async function newRound(key) {
       round = key;
-      stations = [];
-      loc = null;
-      drop();
-      clearTimeout(watchdog);
-      clearTimeout(stallTimer);
-      waitingSince = 0;
-      blocked = false;
-      $('.reveal').innerHTML = '';
-      setStatus('Tuning…');
-      tuning = true;
+      clearRound();
       loc = await ggs.game.roundLocation().catch(() => null);
       if (round !== key) return;
       if (!loc) {
         tuning = false;
         return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
       }
-      let failed = null;
-      stations = await findStations(loc.lat, loc.lng, !!cfg.streamerMode).catch(err => {
-        failed = err;
-        return [];
-      });
+      const { list, failed } = await searchStations();
+      stations = list;
       if (round !== key) return;
+      tuning = false;
+      playFound(failed);
+    }
+    function playFound(failed) {
       if (failed) {
-        tuning = false;
         ggs.log('radio: station search failed', failed);
         return setStatus(`Station search failed (${failed.message})`);
       }
-      tuning = false;
-      if (!stations.length) {
-        return setStatus(cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
-      }
+      if (!stations.length) return setStatus(noStations());
       tune(0);
     }
+    function clearRound() {
+      stations = [];
+      loc = null;
+      drop();
+      stopTimers();
+      waitingSince = 0;
+      blocked = false;
+      ui.reveal('');
+      setStatus('Tuning…');
+      tuning = true;
+    }
+    const searchStations = () =>
+      R.findStations(loc.lat, loc.lng, !!cfg.streamerMode).then(
+        list => ({ list }),
+        failed => ({ list: [], failed }),
+      );
+    const noStations = () => (cfg.streamerMode ? 'No talk station found nearby' : 'No station found nearby');
 
     // Result screens: the guess is in, so name the station.
     function reveal() {
       const s = stations[idx];
-      if (s && !$('.reveal').innerHTML) {
-        $('.reveal').innerHTML = `<b>${esc(s.name.trim())}</b><span>${esc(describe(s, loc))}</span>`;
+      if (s && !ui.revealed()) {
+        ui.reveal(`<b>${ggs.esc(s.name.trim())}</b><span>${ggs.esc(R.describe(s, loc))}</span>`);
       }
     }
 
-    const tick = setInterval(() => {
-      const inGame = !!ggs.game.context();
-      const inRound = !!ggs.maps.guessMapElement();
-      if (!inGame) {
-        drop();
-        if (host) host.hidden = true;
-        round = null;
-        return;
-      }
-      if (inRound && !host) create();
-      if (!host) return;
-      host.hidden = false;
-      place(inRound);
+    function leaveGame() {
+      drop();
+      ui?.hide(true);
+      round = null;
+    }
+    function showRound(inRound) {
+      ui.hide(false);
+      ui.place(inRound, cfg.showStreetView);
       const key = ggs.game.roundKey();
       if (inRound && key !== round) newRound(key);
       if (!inRound) reveal();
+    }
+    const tick = setInterval(() => {
+      const inGame = !!ggs.game.context();
+      const inRound = !!ggs.maps.guessMapElement();
+      if (!inGame) return leaveGame();
+      if (inRound && !ui) create();
+      if (ui) showRound(inRound);
     }, 500);
 
     return {
       update(next) {
-        if (!!next.showStreetView !== !!cfg.showStreetView) setPano(next.showStreetView);
+        if (!!next.showStreetView !== !!cfg.showStreetView) R.showPano(next.showStreetView);
         const retune = !!next.streamerMode !== !!cfg.streamerMode;
         cfg = next;
-        if (host) $('.label').textContent = cfg.streamerMode ? 'Talk radio' : 'Live radio';
+        ui?.setLabel(cfg.streamerMode);
         if (retune) round = null; // retune this round
       },
       stop() {
         clearInterval(tick);
-        cancelAnimationFrame(raf);
         clearTimeout(skipping);
         window.removeEventListener('pointerdown', unblock, true);
         window.removeEventListener('keydown', unblock, true);
-        clearTimeout(watchdog);
-        clearTimeout(stallTimer);
+        stopTimers();
         drop();
-        ctx?.close().catch(() => {});
-        muteGame(false);
-        host?.remove();
-        hidePano.remove();
+        out.close();
+        R.muteGame(false);
+        ui?.remove();
+        R.showPano(true);
       },
     };
   }
@@ -6452,43 +6935,49 @@ section.flat .status:empty { display: none; }
       };
 
       const { bars, tape } = CAR;
-      bars.ys.forEach((y, i) => {
-        for (const side of [-1, 1]) {
-          const x0 = side * bars.inner;
-          const x1 = side * bars.outer;
-          const hw = bars.w;
-          if (!rect(x0, x1, y - hw, y + hw, bars.z)) continue;
-
-          ctx.save();
-          ctx.filter = 'blur(3px)';
-          const shadow = rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01);
-          fill(shadow, 'rgba(0,0,0,.28)');
-          ctx.restore();
-
-          const metal = ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384'];
-          shade(x0, x1, y, hw, bars.z, metal);
-          fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
-          fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
-          fill(cap(x1, y, hw, side, bars.z), '#b9babb');
-          fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
-
-          if (i === tape.bar && side === tape.side) {
-            const tx0 = side * (bars.outer - tape.len);
-            const tx1 = x1 + side * 0.015;
-            const tw = tape.w;
-            const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
-            shade(tx0, tx1, y, tw, bars.z + 0.002, black);
-            fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
-            for (const k of [0.3, 0.62]) {
-              const x = side * (bars.outer - tape.len * k);
-              fill(rect(x, x + side * 0.006, y - tw, y + tw, bars.z + 0.003), 'rgba(255,255,255,.07)');
-            }
-          }
-
-          fade(x0, side * (bars.inner + (bars.outer - bars.inner) * 0.35), y, hw * 1.6, bars.z);
+      // black tape wrapped round the tip of a bar
+      const drawTape = (x1, y, side) => {
+        const tx0 = side * (bars.outer - tape.len);
+        const tx1 = x1 + side * 0.015;
+        const tw = tape.w;
+        const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
+        shade(tx0, tx1, y, tw, bars.z + 0.002, black);
+        fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
+        for (const k of [0.3, 0.62]) {
+          const x = side * (bars.outer - tape.len * k);
+          fill(rect(x, x + side * 0.006, y - tw, y + tw, bars.z + 0.003), 'rgba(255,255,255,.07)');
         }
+      };
+      const drawBarEnd = (y, side, taped) => {
+        const x0 = side * bars.inner;
+        const x1 = side * bars.outer;
+        const hw = bars.w;
+        if (!rect(x0, x1, y - hw, y + hw, bars.z)) return;
+
+        ctx.save();
+        ctx.filter = 'blur(3px)';
+        const shadow = rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01);
+        fill(shadow, 'rgba(0,0,0,.28)');
+        ctx.restore();
+
+        const metal = ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384'];
+        shade(x0, x1, y, hw, bars.z, metal);
+        fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
+        fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
+        fill(cap(x1, y, hw, side, bars.z), '#b9babb');
+        fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
+        if (taped) drawTape(x1, y, side);
+
+        fade(x0, side * (bars.inner + (bars.outer - bars.inner) * 0.35), y, hw * 1.6, bars.z);
+      };
+      bars.ys.forEach((y, i) => {
+        for (const side of [-1, 1]) drawBarEnd(y, side, i === tape.bar && side === tape.side);
       });
     }
+
+    // the tape goes on Gen 4 panoramas in Ghana, or on every one with cfg.everywhere
+    const wanted = (pos, id) => pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]));
+    const fits = t => t && (cfg.everywhere || t.width >= GEN4_WIDTH);
 
     async function refresh(pano) {
       const st = attached.get(pano);
@@ -6496,10 +6985,10 @@ section.flat .status:empty { display: none; }
       st.info = null;
       const pos = pano.getPosition();
       const id = pano.getPano();
-      if (pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]))) {
+      if (wanted(pos, id)) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;
-        if (t && (cfg.everywhere || t.width >= GEN4_WIDTH)) st.info = t;
+        if (fits(t)) st.info = t;
       }
       draw(pano);
     }
@@ -6596,21 +7085,11 @@ section.flat .status:empty { display: none; }
   });
 })();
 
-// ==================== src/scripts/lying-signs/main.js =============================
-// Lying signs: text on every Street View tile (via ggs.tiles, core/tiles.js) is found by a
-// detector in a worker (worker.js: PP-OCRv4 on onnxruntime-web, loaded from ggs.extBase),
-// painted over, and replaced with new text in another script, language or Minecraft glyphs.
-// A blurred tile shows while the detector works, then the edit replaces it in the same texture.
+// ==================== src/scripts/lying-signs/words.js ============================
+// Lying signs: the words written on signs, one list per script (indexed by the "script"
+// option), and Minecraft's enchanting-table letters. Shared as ggs.lyingSigns.words; this
+// file also creates the ggs.lyingSigns namespace the other lying-signs files add to.
 (() => {
-  const ggs = globalThis.__ggs;
-  // Detector input size. 512-px tiles are upscaled so small text is found.
-  const DET_SIZE = 768;
-  // Boxes whose text differs from the sign by less than this (summed RGB) are ignored.
-  const MIN_CONTRAST = 45;
-  // Letter height as a share of the box height, for boxes cut by a tile edge.
-  const TEXT_OF_BOX = 0.8;
-  const VENDOR = 'src/scripts/lying-signs/vendor/';
-
   // biome-ignore format: word list
   const ENGLISH = [
     'JackSucksAtLife', 'JackSucksAtStuff', 'JackSucksAtGeography', 'Llama Crossing', 'JackSucksAtGuessing',
@@ -6796,34 +7275,326 @@ section.flat .status:empty { display: none; }
     [[[3,1],[3,9]],[[7,1],[7,9]]],                        // ||
     [[[2,9],[2,2],[8,2],[8,9]]],                          // ⨅
   ];
-  function drawGalactic(g, b, rand = Math.random) {
-    const h = b.h * 0.72;
-    const adv = h * 0.62;
-    const gap = h * 0.16;
-    const n = Math.max(1, Math.floor((b.w - 2) / adv));
-    const x0 = b.x + (b.w - n * adv + gap) / 2;
-    const y0 = b.y + (b.h - h) / 2;
-    g.lineWidth = Math.max(1, h * 0.11);
-    g.lineCap = g.lineJoin = 'round';
-    g.strokeStyle = g.fillStyle;
-    for (let i = 0; i < n; i++) {
-      const glyph = GALACTIC[Math.floor(rand() * GALACTIC.length)];
-      const gx = x0 + i * adv;
-      const s = (adv - gap) / 10;
-      for (const line of glyph) {
-        g.beginPath();
-        if (line.length === 1) {
-          g.arc(gx + line[0][0] * s, y0 + line[0][1] * (h / 10), g.lineWidth * 0.7, 0, 7);
-          g.fill();
-          continue;
-        }
-        line.forEach(([x, y], k) => {
-          (k ? g.lineTo : g.moveTo).call(g, gx + x * s, y0 + y * (h / 10));
-        });
-        g.stroke();
+
+  globalThis.__ggs.lyingSigns = { words: { WORDS, GALACTIC_INDEX, JOINED, GALACTIC } };
+})();
+
+// ==================== src/scripts/lying-signs/erase.js ============================
+// Lying signs: finding the old text's strokes in a box and filling them in from the sign
+// around them. Pure pixel work on ImageData arrays; shared on ggs.lyingSigns.
+(() => {
+  const ls = globalThis.__ggs.lyingSigns;
+  // Boxes whose text differs from the sign by less than this (summed RGB) are ignored.
+  const MIN_CONTRAST = 45;
+
+  // Colours are counted in an 8-level colour cube: per cell a count and the summed r, g, b.
+  const newCube = () => new Float64Array(512 * 4);
+  function addToCube(cube, d, i) {
+    const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
+    cube[k]++;
+    cube[k + 1] += d[i];
+    cube[k + 2] += d[i + 1];
+    cube[k + 3] += d[i + 2];
+  }
+  function commonest(cube) {
+    let b = 0;
+    for (let k = 4; k < cube.length; k += 4) if (cube[k] > cube[b]) b = k;
+    return b;
+  }
+
+  // The old text inside `box` ([x0, y0, x1, y1]). The sign colour is the commonest one and
+  // the strokes are what's far from it. Returns the strokes as a mask grown by `grow` px,
+  // their colour, the rows they span and how grainy the sign is, or null if nothing stands out.
+  function strokes(d, w, h, box, grow) {
+    const sign = signColour(d, w, box);
+    if (!sign) return null;
+    const { bg } = sign;
+    const dist = i => Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]);
+    const contrast = strokeContrast(d, w, box, dist, sign.n);
+    if (contrast < MIN_CONTRAST) return null;
+    const s = traceStrokes(d, w, h, box, dist, contrast);
+    // text colour: the commonest stroke colour, so an outline or shading doesn't grey the fill
+    const f = commonest(s.ink);
+    if (!s.ink[f]) return null;
+    return {
+      mask: dilate(s.core, w, h, grow),
+      fg: [1, 2, 3].map(j => Math.round(s.ink[f + j] / s.ink[f])),
+      bg,
+      contrast,
+      top: s.top,
+      bottom: s.bottom,
+      grain: s.gn ? Math.min(6, (s.gsum / s.gn) * 0.5) : 0,
+    };
+  }
+  // The commonest colour of the opaque pixels in the box, and how many there are.
+  function signColour(d, w, [x0, y0, x1, y1]) {
+    const bins = newCube();
+    let n = 0;
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 200) continue;
+        n++;
+        addToCube(bins, d, i);
+      }
+    if (!n) return null;
+    const b = commonest(bins);
+    return { bg: [bins[b + 1] / bins[b], bins[b + 2] / bins[b], bins[b + 3] / bins[b]], n };
+  }
+  // Typical stroke pixel: the median of the eighth furthest from the sign colour.
+  function strokeContrast(d, w, [x0, y0, x1, y1], dist, n) {
+    const hist = new Uint32Array(766);
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] >= 200) hist[dist(i) | 0]++;
+      }
+    for (let v = 765, c = 0; v >= 0; v--) {
+      c += hist[v];
+      if (c >= n / 16) return v;
+    }
+    return 765;
+  }
+  // Marks the stroke pixels (far from the sign colour), counts the colours of the clearest
+  // ones, notes the rows with enough of them, and measures the sign's grain in between.
+  function traceStrokes(d, w, h, box, dist, contrast) {
+    const [x0, y0, x1, y1] = box;
+    const s = {
+      thr: Math.max(24, contrast * 0.45),
+      strong: contrast * 0.8,
+      core: new Uint8Array(w * h),
+      ink: newCube(),
+      top: h,
+      bottom: -1,
+      gsum: 0,
+      gn: 0,
+    };
+    const rowMin = Math.max(2, (x1 - x0) * 0.03);
+    for (let y = y0; y < y1; y++) {
+      if (traceRow(d, w, y, x0, x1, dist, s) < rowMin) continue;
+      if (y < s.top) s.top = y;
+      s.bottom = y;
+    }
+    return s;
+  }
+  // One row of traceStrokes; returns how many stroke pixels it has.
+  function traceRow(d, w, y, x0, x1, dist, s) {
+    let row = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      if (d[i + 3] < 200) continue;
+      const v = dist(i);
+      if (v > s.thr) {
+        s.core[y * w + x] = 1;
+        row++;
+      }
+      if (v > s.strong) addToCube(s.ink, d, i);
+      else if (v <= s.thr && x + 1 < x1 && dist(i + 4) <= s.thr) {
+        // grain: brightness change between neighbouring sign pixels
+        s.gsum += Math.abs(d[i] + d[i + 1] + d[i + 2] - d[i + 4] - d[i + 5] - d[i + 6]) / 3;
+        s.gn++;
       }
     }
+    return row;
   }
+
+  // Google's "© 2025 Google" marks: always the same small size and shape on a tile, grey and
+  // see-through. The background is lightened by about the same fraction in every channel.
+  // Real white or grey lettering is far more opaque.
+  function watermark(raw, tileW, bg, fg) {
+    const h = raw.h / tileW;
+    const aspect = raw.w / raw.h;
+    if (raw.vertical || h < 0.018 || h > 0.045 || aspect < 3.5 || aspect > 8) return false;
+    if (Math.max(...fg) - Math.min(...fg) > 30) return false; // coloured: not the grey mark
+    const a = [0, 1, 2].map(k => (fg[k] - bg[k]) / (256 - bg[k]));
+    return Math.min(...a) > 0.1 && Math.max(...a) < 0.55 && Math.max(...a) - Math.min(...a) < 0.1;
+  }
+
+  // Where the sign is: pixels of its colour or of the old text's colour. Anything else (a
+  // pole in front, the sky past the end of the sign, the side of a curved building) isn't,
+  // so the new word is cut off there as the old one was. Closed by r px so outlines and
+  // anti-aliasing between the two colours count as sign.
+  function surface(d, w, h, s, r) {
+    const near = (i, c, lim) =>
+      Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < lim;
+    const lim = Math.max(40, s.contrast * 0.45);
+    const m = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const j = i * 4;
+      if (d[j + 3] >= 200 && (near(j, s.bg, lim) || near(j, s.fg, lim))) m[i] = 1;
+    }
+    const grown = dilate(m, w, h, r);
+    for (let i = 0; i < w * h; i++) grown[i] = !grown[i];
+    const shrunk = dilate(grown, w, h, r);
+    for (let i = 0; i < w * h; i++) m[i] = !shrunk[i];
+    return m;
+  }
+
+  // Grows a mask by r px in every direction (a square), with running counts along rows, then columns.
+  function dilate(m, w, h, r) {
+    const rows = new Uint8Array(w * h);
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) dilateLine(m, rows, y * w, 1, w, r);
+    for (let x = 0; x < w; x++) dilateLine(rows, out, x, w, h, r);
+    return out;
+  }
+  // One row or column: `len` cells from `start`, `step` apart.
+  function dilateLine(src, dst, start, step, len, r) {
+    let c = 0;
+    for (let k = 0; k < Math.min(r, len); k++) c += src[start + k * step];
+    for (let k = 0; k < len; k++) {
+      if (k + r < len) c += src[start + (k + r) * step];
+      if (k - r - 1 >= 0) c -= src[start + (k - r - 1) * step];
+      dst[start + k * step] = c > 0;
+    }
+  }
+
+  // Fills the masked pixels of `d` from the rest (push-pull): halve the picture until every
+  // cell has something in it, averaging only known pixels, then on the way back up give each
+  // unknown pixel the smooth, bilinear value from the level above. Linear in the pixel count.
+  // Returns the levels ({ c: rgb, wt: weight, w, h }), finest first.
+  function pushPull(d, mask, w, h) {
+    const levels = [knownPixels(d, mask, w, h)];
+    while (levels.at(-1).w > 1 || levels.at(-1).h > 1) levels.push(halve(levels.at(-1)));
+    for (let l = levels.length - 2; l >= 0; l--) pull(levels[l], levels[l + 1]);
+    const c0 = levels[0].c;
+    for (let i = 0; i < w * h; i++) {
+      if (!mask[i]) continue;
+      d[i * 4] = c0[i * 3];
+      d[i * 4 + 1] = c0[i * 3 + 1];
+      d[i * 4 + 2] = c0[i * 3 + 2];
+    }
+    return levels;
+  }
+  // The finest level: opaque pixels outside the mask, at full weight.
+  function knownPixels(d, mask, w, h) {
+    const c = new Float32Array(w * h * 3);
+    const wt = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      if (mask[i] || d[i * 4 + 3] < 200) continue;
+      wt[i] = 1;
+      c[i * 3] = d[i * 4];
+      c[i * 3 + 1] = d[i * 4 + 1];
+      c[i * 3 + 2] = d[i * 4 + 2];
+    }
+    return { c, wt, w, h };
+  }
+  // The level above: each cell the weighted mean of the (up to) four cells under it.
+  function halve(lv) {
+    const w = Math.ceil(lv.w / 2);
+    const h = Math.ceil(lv.h / 2);
+    const up = { c: new Float32Array(w * h * 3), wt: new Float32Array(w * h), w, h };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) meanCell(lv, up, x, y);
+    return up;
+  }
+  function meanCell(lv, up, x, y) {
+    let s0 = 0;
+    let s1 = 0;
+    let s2 = 0;
+    let ws = 0;
+    for (let dy = 0; dy < 2; dy++)
+      for (let dx = 0; dx < 2; dx++) {
+        const sx = 2 * x + dx;
+        const sy = 2 * y + dy;
+        if (sx >= lv.w || sy >= lv.h) continue;
+        const j = sy * lv.w + sx;
+        const q = lv.wt[j];
+        s0 += lv.c[j * 3] * q;
+        s1 += lv.c[j * 3 + 1] * q;
+        s2 += lv.c[j * 3 + 2] * q;
+        ws += q;
+      }
+    const j = y * up.w + x;
+    if (ws) {
+      up.c[j * 3] = s0 / ws;
+      up.c[j * 3 + 1] = s1 / ws;
+      up.c[j * 3 + 2] = s2 / ws;
+    }
+    up.wt[j] = Math.min(1, ws);
+  }
+  // Blends each cell not fully known with the bilinear value from the level above.
+  function pull(lv, above) {
+    const { c, wt } = lv;
+    for (let y = 0; y < lv.h; y++)
+      for (let x = 0; x < lv.w; x++) {
+        const j = y * lv.w + x;
+        const q = wt[j];
+        if (q >= 1) continue;
+        for (let k = 0; k < 3; k++) {
+          const up = bilinear(above, (x + 0.5) / 2 - 0.5, (y + 0.5) / 2 - 0.5, k);
+          c[j * 3 + k] = c[j * 3 + k] * q + up * (1 - q);
+        }
+        wt[j] = 1;
+      }
+  }
+  // Channel k of a level at (fx, fy) in its own cells, clamped to its edges.
+  function bilinear(lv, fx, fy, k) {
+    const { c, w, h } = lv;
+    const x = Math.min(w - 1, Math.max(0, fx));
+    const y = Math.min(h - 1, Math.max(0, fy));
+    const x0 = x | 0;
+    const y0 = y | 0;
+    const x1 = Math.min(w - 1, x0 + 1);
+    const y1 = Math.min(h - 1, y0 + 1);
+    const tx = x - x0;
+    const ty = y - y0;
+    return (
+      (c[(y0 * w + x0) * 3 + k] * (1 - tx) + c[(y0 * w + x1) * 3 + k] * tx) * (1 - ty) +
+      (c[(y1 * w + x0) * 3 + k] * (1 - tx) + c[(y1 * w + x1) * 3 + k] * tx) * ty
+    );
+  }
+
+  // The push-pull fill is smooth, which shows on paving, brick or a grainy sign. Each filled
+  // pixel gets the fine detail (pixel minus its blurred value, clamped) of the pixel mirrored
+  // across the nearest box edge, so the texture outside carries on into the box. With nothing
+  // to mirror it gets plain grain.
+  function texture(d, mask, w, h, box, levels, grain) {
+    const blur = levels[Math.min(2, levels.length - 1)];
+    const f = 2 ** Math.min(2, levels.length - 1);
+    const known = (x, y) =>
+      x >= 0 && y >= 0 && x < w && y < h && !mask[y * w + x] && d[(y * w + x) * 4 + 3] >= 200;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (!mask[i]) continue;
+        const src = mirrorOf(x, y, box, known);
+        if (src) copyDetail(d, i, src, w, blur, f);
+        else addGrain(d, i, grain);
+      }
+  }
+  // The mirror image of (x, y) across the nearest box edge that lands on a known pixel.
+  function mirrorOf(x, y, [x0, y0, x1, y1], known) {
+    const m = [
+      [2 * x0 - x - 1, y, x - x0],
+      [2 * x1 - x - 1, y, x1 - x],
+      [x, 2 * y0 - y - 1, y - y0],
+      [x, 2 * y1 - y - 1, y1 - y],
+    ].sort((a, b) => a[2] - b[2]);
+    return m.find(([mx, my]) => known(mx, my));
+  }
+  function copyDetail(d, i, [sx, sy], w, blur, f) {
+    const j = (sy * w + sx) * 4;
+    for (let k = 0; k < 3; k++) {
+      const smooth = bilinear(blur, (sx + 0.5) / f - 0.5, (sy + 0.5) / f - 0.5, k);
+      d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - smooth));
+    }
+  }
+  function addGrain(d, i, grain) {
+    const n = (Math.random() - 0.5) * 2 * grain;
+    d[i * 4] += n;
+    d[i * 4 + 1] += n;
+    d[i * 4 + 2] += n;
+  }
+
+  Object.assign(ls, { strokes, watermark, surface, pushPull, texture });
+})();
+
+// ==================== src/scripts/lying-signs/text.js =============================
+// Lying signs: writing the new word. Seeded randomness, choosing a word that fits a box, and
+// drawing it (or Minecraft glyphs) onto a canvas. Shared on ggs.lyingSigns.
+(() => {
+  const ls = globalThis.__ggs.lyingSigns;
+  const { GALACTIC } = ls.words;
 
   // Randomness seeded on a sign's place in the panorama, so it reads the same at every zoom.
   function hash(str) {
@@ -6845,61 +7616,401 @@ section.flat .status:empty { display: none; }
     };
   }
 
-  let active = null; // cfg while the script is on
-  const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, editMs: 0, editMax: 0 };
-  ggs.lyingSigns = { stats };
+  // Random enchanting-table letters filling box b, in the context's fill colour.
+  function drawGalactic(g, b, rand = Math.random) {
+    const h = b.h * 0.72;
+    const adv = h * 0.62;
+    const gap = h * 0.16;
+    const n = Math.max(1, Math.floor((b.w - 2) / adv));
+    const x0 = b.x + (b.w - n * adv + gap) / 2;
+    const y0 = b.y + (b.h - h) / 2;
+    g.lineWidth = Math.max(1, h * 0.11);
+    g.lineCap = g.lineJoin = 'round';
+    g.strokeStyle = g.fillStyle;
+    for (let i = 0; i < n; i++) {
+      const glyph = GALACTIC[Math.floor(rand() * GALACTIC.length)];
+      drawGlyph(g, glyph, x0 + i * adv, y0, (adv - gap) / 10, h / 10);
+    }
+  }
+  function drawGlyph(g, glyph, gx, y0, sx, sy) {
+    for (const line of glyph) {
+      g.beginPath();
+      if (line.length === 1) {
+        g.arc(gx + line[0][0] * sx, y0 + line[0][1] * sy, g.lineWidth * 0.7, 0, 7);
+        g.fill();
+        continue;
+      }
+      line.forEach(([x, y], k) => {
+        (k ? g.lineTo : g.moveTo).call(g, gx + x * sx, y0 + y * sy);
+      });
+      g.stroke();
+    }
+  }
 
-  // ---- detector worker ----
+  const measurer = new OffscreenCanvas(1, 1).getContext('2d');
+  const segmenter = new Intl.Segmenter();
+  const graphemes = word => [...segmenter.segment(word)].map(g => g.segment).filter(g => g.trim());
+
+  // Of a few seeded words, the one that best fills a box of this shape (`aspect` = width /
+  // height) at this letter height (`textH`, a fraction of the box height). Chosen once per
+  // sign so every zoom writes the same word. `stacked` is for a vertical sign: the characters
+  // go one under another, upright.
+  function chooseWord(textH, aspect, pick, stacked) {
+    measurer.font = 'bold 100px sans-serif';
+    let best = null;
+    for (let k = 0; k < 6; k++) {
+      const word = pick();
+      const fill =
+        (aspect * 0.92) / (stacked ? graphemes(word).length * textH * 1.1 : levelWidth(word, textH));
+      if (!best || Math.abs(Math.log(fill)) < Math.abs(Math.log(best.fill))) best = { word, fill };
+    }
+    return { word: best.word, stacked };
+  }
+  // A word's width written level with letters textH tall, in the same units as textH.
+  function levelWidth(word, textH) {
+    const m = measurer.measureText(word);
+    const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
+    return (m.width * textH) / gh;
+  }
+
+  // Writes a chosen word centred at (cx, cy) with letters textH px tall, stretched a little
+  // to fill boxW, shrunk if it still doesn't fit.
+  function writeWord(t, cx, cy, textH, boxW, { word, stacked }) {
+    if (stacked) {
+      writeStacked(t, cx, cy, textH, boxW, word);
+      return;
+    }
+    t.font = 'bold 100px sans-serif';
+    let m = t.measureText(word);
+    const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
+    const width = (m.width * textH) / gh;
+    const sx = Math.min(1.25, Math.max(0.75, (boxW * 0.92) / width));
+    let size = (100 * textH) / gh;
+    if (width * sx > boxW) size *= boxW / (width * sx);
+    t.font = `bold ${size}px sans-serif`;
+    m = t.measureText(word);
+    t.save();
+    t.translate(cx, cy);
+    t.scale(sx, 1);
+    t.fillText(word, -m.width / 2, (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
+    t.restore();
+  }
+  // A vertical sign: one character under another, each turned to read along the box.
+  function writeStacked(t, cx, cy, textH, boxW, word) {
+    const chars = graphemes(word);
+    const step = Math.min(textH * 1.1, (boxW * 0.92) / chars.length);
+    t.font = `bold ${step / 1.1}px sans-serif`;
+    t.textAlign = 'center';
+    t.textBaseline = 'middle';
+    chars.forEach((ch, i) => {
+      t.save();
+      t.translate(cx + (i - (chars.length - 1) / 2) * step, cy);
+      t.rotate(-Math.PI / 2);
+      t.fillText(ch, 0, 0);
+      t.restore();
+    });
+  }
+
+  Object.assign(ls, { hash, rng, drawGalactic, chooseWord, writeWord });
+})();
+
+// ==================== src/scripts/lying-signs/edit.js =============================
+// Lying signs: editing one tile. The blurred placeholder, the nadir mosaic, and replacing the
+// text in each detector box with a new word. Also creates ggs.lyingSigns.stats, the counters
+// every lying-signs file adds to (read them in the console).
+(() => {
+  const ggs = globalThis.__ggs;
+  const ls = ggs.lyingSigns;
+  const { WORDS, GALACTIC_INDEX, JOINED } = ls.words;
+  const { hash, rng, drawGalactic, chooseWord, writeWord, strokes, watermark, surface, pushPull, texture } =
+    ls;
+  // Letter height as a share of the box height, for boxes cut by a tile edge.
+  const TEXT_OF_BOX = 0.8;
+  // Road markings, tyres, drain covers: anything below this pitch is ground.
+  const GROUND_PITCH = -30;
+  // The bottom of the panorama (the car) is stretched too much for the detector, so
+  // everything below this pitch is smeared into a coarse mosaic instead.
+  const NADIR_PITCH = -68;
+
+  const stats = { seen: 0, edited: 0, boxes: 0, failed: 0, detectMs: 0, detected: 0, editMs: 0, editMax: 0 };
+  ls.stats = stats;
+
+  // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
+  function blurred(img) {
+    const W = img.naturalWidth || img.width;
+    const H = img.naturalHeight || img.height;
+    const small = new OffscreenCanvas(Math.max(1, (W / 10) | 0), Math.max(1, (H / 10) | 0));
+    small.getContext('2d').drawImage(img, 0, 0, small.width, small.height);
+    const c = new OffscreenCanvas(W, H);
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(small, 0, 0, W, H);
+    return c;
+  }
+
+  // Edits a tile with the detector's boxes and returns an OffscreenCanvas. With `onto`, an
+  // earlier edit of the same tile, only the given boxes are added to it.
+  function editSync(src, boxes, cfg, key, onto) {
+    const t0 = performance.now();
+    const W = src.naturalWidth || src.width;
+    const H = src.naturalHeight || src.height;
+    const c = onto || new OffscreenCanvas(W, H);
+    const g = c.getContext('2d', { willReadFrequently: true });
+    if (!onto) {
+      g.drawImage(src, 0, 0);
+      nadir(g, key, W, H);
+    }
+    const script = scriptFor(cfg, key);
+    for (const raw of usable(boxes, key, H)) editBox(g, raw, script, W);
+    const ms = performance.now() - t0;
+    stats.editMs += ms;
+    stats.editMax = Math.max(stats.editMax, ms);
+    return c;
+  }
+  // One box, with randomness seeded on its sign. A failure loses only that box.
+  function editBox(g, raw, script, tileW) {
+    const list = WORDS[script];
+    const rand = rng(raw.sign.seed);
+    const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
+    try {
+      replaceBox(g, raw, script, pick, rand, tileW);
+    } catch (err) {
+      stats.failed++;
+      if (stats.failed < 4) ggs.log('lying-signs: box failed', err);
+    }
+  }
+  // The word list to write from: the "script" option, or for random (0) one per panorama.
+  function scriptFor(cfg, key) {
+    const script = cfg.script | 0;
+    if (WORDS[script]) return script;
+    return 1 + (hash(`script:${key?.pano || ''}`) % (WORDS.length - 1));
+  }
+
+  // The boxes worth editing: big enough at this zoom, and not on the ground.
+  function usable(boxes, key, H) {
+    return boxes.filter(b => {
+      if (b.h < 4 || b.w < 4) return false;
+      if (onGround(key, b, H)) {
+        stats.ground = (stats.ground || 0) + 1;
+        return false;
+      }
+      return true;
+    });
+  }
+  // Anything below GROUND_PITCH, or a big box a little below the horizon (a shop sign there
+  // is seldom more than a few degrees tall).
+  function onGround(k, b, H) {
+    if (!k) return false;
+    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H); // degrees per tile pixel
+    const pitch = 90 - (k.y * H + b.cy) * deg;
+    return pitch < GROUND_PITCH || (pitch < -8 && Math.min(b.w, b.h) * deg > 6);
+  }
+
+  function nadir(g, k, W, H) {
+    if (!k) return;
+    const rows = Math.max(1, 2 ** (k.z - 1));
+    // tile y where the mosaic starts
+    const top = Math.max(0, (((90 - NADIR_PITCH) / 180) * rows - k.y) * H);
+    if (top >= H) return;
+    const band = H - top;
+    const fade = Math.min(10, band);
+    const small = new OffscreenCanvas(Math.max(1, (W / 16) | 0), Math.max(1, (band / 16) | 0));
+    small.getContext('2d').drawImage(g.canvas, 0, top, W, band, 0, 0, small.width, small.height);
+    const layer = new OffscreenCanvas(W, band);
+    const l = layer.getContext('2d');
+    l.imageSmoothingQuality = 'high';
+    l.drawImage(small, 0, 0, W, band);
+    const grad = l.createLinearGradient(0, 0, 0, fade);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,1)');
+    l.globalCompositeOperation = 'destination-in';
+    l.fillStyle = grad;
+    l.fillRect(0, 0, W, fade);
+    l.fillStyle = '#000';
+    l.fillRect(0, fade, W, band - fade);
+    g.drawImage(layer, 0, top);
+    stats.nadir = (stats.nadir || 0) + 1;
+  }
+
+  // Replaces one line of text. Works in a frame rotated so the text runs level, cut to the
+  // tile, so a huge box inherited from a zoomed-out tile costs no more than its part on this
+  // tile. The old strokes are told apart from the sign by colour, grown a little to take their
+  // halo, and filled in from the sign around them, so the sign's colour and gradients stay.
+  // The new word goes on top at the old text's height and colour.
+  function replaceBox(g, raw, script, pick, rand, tileW) {
+    // Decisions made while the whole box is on the tile are kept on the sign for every zoom.
+    const sign = raw.sign;
+    if (sign.fit?.skip) return;
+    const fr = frameFor(raw, g.canvas.width, g.canvas.height);
+    if (!fr) return;
+    const { w, h } = fr;
+    const t = levelCopy(g, fr);
+    const img = t.getImageData(0, 0, w, h);
+    const d = img.data;
+
+    const grow = 1 + Math.round(raw.h * 0.04);
+    const s = strokes(d, w, h, fr.box, grow);
+    const skip = whySkip(s, sign.fit, raw, tileW);
+    // clouds, brickwork, foliage, Google's marks: not text to replace
+    if (skip) {
+      stats[skip] = (stats[skip] || 0) + 1;
+      if (fr.whole && !sign.fit) sign.fit = { skip };
+      return;
+    }
+    const surf = surface(d, w, h, s, grow + 1);
+    eraseStrokes(d, w, h, s, fr.box);
+    t.putImageData(img, 0, 0);
+    t.drawImage(wordLayer(raw, script, pick, rand, fitFor(raw, s, fr), fr, surf), 0, 0);
+
+    g.save();
+    g.translate(fr.ox, fr.oy);
+    g.rotate(fr.angle);
+    g.drawImage(t.canvas, fr.rx, fr.ry);
+    g.restore();
+  }
+
+  // The patch of the tile around the box, copied into the box's frame on a context of its own.
+  function levelCopy(g, fr) {
+    const t = new OffscreenCanvas(fr.w, fr.h).getContext('2d', { willReadFrequently: true });
+    t.translate(-fr.rx, -fr.ry);
+    t.rotate(-fr.angle);
+    t.translate(-fr.ox, -fr.oy);
+    t.drawImage(g.canvas, 0, 0); // outside the tile stays transparent
+    t.setTransform(1, 0, 0, 1, 0, 0);
+    return t;
+  }
+  // Fills the old strokes in from the sign around them and clears everything else, so only
+  // they are replaced when the patch goes back.
+  function eraseStrokes(d, w, h, s, box) {
+    const levels = pushPull(d, s.mask, w, h);
+    texture(d, s.mask, w, h, box, levels, s.grain);
+    for (let i = 0; i < w * h; i++) if (!s.mask[i]) d[i * 4 + 3] = 0;
+  }
+  // The frame a box is edited in: origin on the pixel nearest its centre, rotated by its
+  // angle, cut to the tile. (bu, bv) is the box centre in the frame, (rx, ry, w, h) the patch
+  // edited (the box, padding and some sign around it), `box` the detector's box in the patch.
+  // Null if too little of it is on the tile.
+  function frameFor(raw, W, H) {
+    // level text is copied, not resampled
+    const angle = Math.abs(raw.angle) < 0.01 ? 0 : raw.angle;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    const ox = Math.round(raw.cx);
+    const oy = Math.round(raw.cy);
+    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa;
+    const bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
+    // the box hugs the strokes, so give them room
+    const pad = raw.h * 0.12;
+    const hw = raw.w / 2 + pad;
+    const hh = raw.h / 2 + pad;
+    const ctx = Math.max(4, Math.round(raw.h * 0.3)); // sign around the box, for the fill
+    const [u0, u1, v0, v1] = tileExtent(W, H, ox, oy, ca, sa);
+    const rx = Math.floor(Math.max(bu - hw - ctx, u0));
+    const ry = Math.floor(Math.max(bv - hh - ctx, v0));
+    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx;
+    const h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
+    if (w < 4 || h < 4) return null;
+    // Strokes are looked for in the detector's own box. The padding is room to grow them into.
+    const box = [
+      Math.max(0, Math.round(bu - raw.w / 2 - rx)),
+      Math.max(0, Math.round(bv - raw.h / 2 - ry)),
+      Math.min(w, Math.round(bu + raw.w / 2 - rx)),
+      Math.min(h, Math.round(bv + raw.h / 2 - ry)),
+    ];
+    if (box[2] - box[0] < 3 || box[3] - box[1] < 3) return null;
+    // the box isn't cut by the tile edge
+    const whole = bu - hw - rx > 0 && bv - hh - ry > 0 && bu + hw - rx < w && bv + hh - ry < h;
+    return { angle, ox, oy, bu, bv, rx, ry, w, h, box, whole };
+  }
+  // The tile's extent in the frame: [u0, u1, v0, v1].
+  function tileExtent(W, H, ox, oy, ca, sa) {
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const [x, y] of [
+      [0, 0],
+      [W, 0],
+      [0, H],
+      [W, H],
+    ]) {
+      const u = (x - ox) * ca + (y - oy) * sa;
+      const v = -(x - ox) * sa + (y - oy) * ca;
+      u0 = Math.min(u0, u);
+      u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v);
+      v1 = Math.max(v1, v);
+    }
+    return [u0, u1, v0, v1];
+  }
+  // Why a box is left alone, if it is: no strokes stand out, or it's a Google watermark.
+  function whySkip(s, fit, raw, tileW) {
+    if (!s) return 'lowContrast';
+    if (!fit && watermark(raw, tileW, s.bg, s.fg)) return 'watermark';
+    return null;
+  }
+  // Letter height, position and colour are measured once the whole box is on the tile, then
+  // kept. Until then a box cut by the tile edge is sized from the detector.
+  function fitFor(raw, s, fr) {
+    const sign = raw.sign;
+    if (sign.fit) return sign.fit;
+    const measured = fr.whole && s.bottom > s.top;
+    const f = {
+      textH: measured ? Math.max(0.35, (s.bottom - s.top + 1) / raw.h) : TEXT_OF_BOX,
+      dy: measured ? ((s.top + s.bottom + 1) / 2 - (fr.bv - fr.ry)) / raw.h : 0,
+      fg: s.fg,
+    };
+    if (fr.whole) sign.fit = f;
+    return f;
+  }
+  // The new word on its own layer, kept to the sign's surface (`surf`).
+  function wordLayer(raw, script, pick, rand, f, fr, surf) {
+    const { w, h } = fr;
+    const textH = f.textH * raw.h;
+    const cx = fr.bu - fr.rx;
+    const cy = fr.bv - fr.ry + f.dy * raw.h;
+    const layer = new OffscreenCanvas(w, h);
+    const x = layer.getContext('2d', { willReadFrequently: true });
+    x.fillStyle = `rgb(${f.fg.join(',')})`;
+    if (script === GALACTIC_INDEX) {
+      const glyphH = textH / 0.72;
+      drawGalactic(x, { x: cx - raw.w / 2, y: cy - glyphH / 2, w: raw.w, h: glyphH }, rand);
+    } else {
+      const words = raw.sign.words;
+      const stacked = raw.vertical && !JOINED.has(script);
+      words[script] ||= chooseWord(textH / raw.h, raw.w / raw.h, pick, stacked);
+      writeWord(x, cx, cy, textH, raw.w, words[script]);
+    }
+    const ld = x.getImageData(0, 0, w, h);
+    for (let i = 0; i < w * h; i++) if (!surf[i]) ld.data[i * 4 + 3] = 0;
+    x.putImageData(ld, 0, 0);
+    return layer;
+  }
+
+  Object.assign(ls, { blurred, editSync });
+})();
+
+// ==================== src/scripts/lying-signs/detector.js =========================
+// Lying signs: the text detector. worker.js (PP-OCRv4 on onnxruntime-web) runs in a blob
+// worker, with its files fetched from ggs.extBase, and tiles wait in a queue that runs the
+// one nearest the view first. Shared on ggs.lyingSigns as loadDetector and detect.
+(() => {
+  const ggs = globalThis.__ggs;
+  const ls = ggs.lyingSigns;
+  const stats = ls.stats;
+  // Detector input size. 512-px tiles are upscaled so small text is found.
+  const DET_SIZE = 768;
+  const VENDOR = 'src/scripts/lying-signs/vendor/';
+
+  // ---- worker ----
   let worker = null;
   let workerReady = null;
   let nextId = 0;
   const waiting = new Map(); // id -> resolve
-  function detector() {
+
+  function loadDetector() {
     if (workerReady) return workerReady;
-    workerReady = (async () => {
-      if (!ggs.extBase) throw new Error('extension base URL not known yet');
-      const u = f => ggs.extBase + VENDOR + f;
-      const blobUrl = async (url, type) => {
-        const bytes = await (await fetch(url)).arrayBuffer();
-        return URL.createObjectURL(new Blob([bytes], { type }));
-      };
-      const [src, ort, mjs, wasm, model] = await Promise.all([
-        fetch(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
-        blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
-        blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
-        blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
-        fetch(u('ch_PP-OCRv4_det.onnx')).then(r => r.arrayBuffer()),
-      ]);
-      worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-      worker.onmessage = e => {
-        const m = e.data;
-        if (m.type === 'boxes') {
-          stats.detected++;
-          stats.detectMs += m.ms;
-          waiting.get(m.id)?.(m.boxes);
-          waiting.delete(m.id);
-        } else if (m.type === 'error') {
-          stats.failed++;
-          ggs.log('lying-signs: detector error', m.message);
-          waiting.get(m.id)?.(null);
-          waiting.delete(m.id);
-        }
-      };
-      const backend = await new Promise((res, rej) => {
-        const onmsg = e => {
-          if (e.data.type === 'ready') {
-            worker.removeEventListener('message', onmsg);
-            res(e.data.backend);
-          } else if (e.data.type === 'error') {
-            rej(new Error(e.data.message));
-          }
-        };
-        worker.addEventListener('message', onmsg);
-        worker.postMessage({ type: 'init', ort, mjs, wasm, model }, [model]);
-      });
-      stats.backend = backend;
-      ggs.debug(`lying-signs: text detector ready (${backend})`);
-    })();
+    workerReady = startWorker();
     workerReady.catch(err => {
       ggs.log('lying-signs: text detector failed to load', err);
       // Close the half-started worker so a retry doesn't leave it running.
@@ -6909,69 +8020,114 @@ section.flat .status:empty { display: none; }
     });
     return workerReady;
   }
-  // Detection queue, nearest tile to the view first. Tiles whose textures are gone, or whose
-  // panorama is no longer shown, are dropped unrun. The queue is capped so moving quickly
-  // never builds a backlog. A dropped tile is detected if it is uploaded again.
+  async function startWorker() {
+    if (!ggs.extBase) throw new Error('extension base URL not known yet');
+    const files = await fetchFiles();
+    worker = new Worker(URL.createObjectURL(new Blob([files.src], { type: 'text/javascript' })));
+    worker.onmessage = onResult;
+    const backend = await initWorker(files);
+    stats.backend = backend;
+    ggs.debug(`lying-signs: text detector ready (${backend})`);
+  }
+  // The worker's source, and the runtime as blob URLs (a page can't hand a worker
+  // chrome-extension:// URLs), and the model.
+  async function fetchFiles() {
+    const u = f => ggs.extBase + VENDOR + f;
+    const blobUrl = async (url, type) => {
+      const bytes = await (await fetch(url)).arrayBuffer();
+      return URL.createObjectURL(new Blob([bytes], { type }));
+    };
+    const [src, ort, mjs, wasm, model] = await Promise.all([
+      fetch(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
+      blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
+      blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
+      blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
+      fetch(u('ch_PP-OCRv4_det.onnx')).then(r => r.arrayBuffer()),
+    ]);
+    return { src, ort, mjs, wasm, model };
+  }
+  // Sends the files to the worker; resolves with the backend it got (webgpu or wasm).
+  function initWorker({ ort, mjs, wasm, model }) {
+    return new Promise((res, rej) => {
+      const onmsg = e => {
+        if (e.data.type === 'ready') {
+          worker.removeEventListener('message', onmsg);
+          res(e.data.backend);
+        } else if (e.data.type === 'error') {
+          rej(new Error(e.data.message));
+        }
+      };
+      worker.addEventListener('message', onmsg);
+      worker.postMessage({ type: 'init', ort, mjs, wasm, model }, [model]);
+    });
+  }
+  function onResult(e) {
+    const m = e.data;
+    if (m.type === 'boxes') {
+      stats.detected++;
+      stats.detectMs += m.ms;
+      settle(m.id, m.boxes);
+    } else if (m.type === 'error') {
+      stats.failed++;
+      ggs.log('lying-signs: detector error', m.message);
+      settle(m.id, null);
+    }
+  }
+  function settle(id, boxes) {
+    waiting.get(id)?.(boxes);
+    waiting.delete(id);
+  }
+  async function runDetector(img) {
+    const bitmap = await createImageBitmap(img);
+    return new Promise(r => {
+      const id = ++nextId;
+      waiting.set(id, r);
+      const msg = { type: 'detect', id, bitmap, size: DET_SIZE, thresh: 0.25, boxThresh: 0.45 };
+      worker.postMessage(msg, [bitmap]);
+    });
+  }
+
+  // ---- queue ----
+  // Nearest tile to the view first. Tiles whose textures are gone, or whose panorama is no
+  // longer shown, are dropped unrun. The queue is capped so moving quickly never builds a
+  // backlog. A dropped tile is detected if it is uploaded again.
   const queue = []; // [{ img, res, alive, url }]
   let inflight = 0;
   const MAX_INFLIGHT = 2;
   const MAX_QUEUE = 300;
-  ggs.lyingSigns.debug = () => ({
-    queue: queue.length,
-    inflight,
-    waiting: waiting.size,
-    tiles: tiles.size,
-    panos: signs.size,
-    stale: stale.size,
-  });
+
+  // Resolves with the tile's boxes, or null if it was dropped or detection failed.
   function detect(img, alive, url) {
     return new Promise(res => {
       queue.push({ img, res, alive, url });
-      while (queue.length > MAX_QUEUE) {
-        stats.skipped = (stats.skipped || 0) + 1;
-        queue.shift().res(null);
-      }
+      while (queue.length > MAX_QUEUE) drop(queue.shift());
       pump();
     });
   }
-  function pruneQueue() {
-    const shown = new Set();
-    for (const p of panos) {
-      try {
-        shown.add(p.getPano());
-      } catch {}
-    }
-    for (let i = queue.length - 1; i >= 0; i--) {
-      const id = ggs.tileKey(queue[i].url)?.pano;
-      if (id && !shown.has(id)) {
-        stats.skipped = (stats.skipped || 0) + 1;
-        queue.splice(i, 1)[0].res(null);
-      }
-    }
+  function drop(job) {
+    stats.skipped = (stats.skipped || 0) + 1;
+    job.res(null);
   }
-  function tileDistance(url) {
-    const k = ggs.tileKey(url);
-    if (!k) return null;
-    const { pano: id, x, y, z } = k;
-    for (const p of panos) {
-      let pov;
-      let centre;
-      try {
-        if (p.getPano() !== id) continue;
-        pov = p.getPov();
-        centre = p.getPhotographerPov?.()?.heading;
-      } catch {
-        continue;
+  async function pump() {
+    if (inflight >= MAX_INFLIGHT || !queue.length) return;
+    inflight++;
+    try {
+      await loadDetector();
+      const job = pickJob();
+      // another pump may have taken the last job while the detector loaded
+      if (!job) return;
+      if (!job.alive()) {
+        drop(job);
+        return;
       }
-      if (!pov || centre == null) return null;
-      const cols = 2 ** z;
-      const rows = Math.max(1, 2 ** (z - 1));
-      const heading = centre + ((+x + 0.5) / cols - 0.5) * 360;
-      const pitch = (0.5 - (+y + 0.5) / rows) * 180;
-      const dh = Math.abs(((((heading - pov.heading) % 360) + 540) % 360) - 180);
-      return Math.hypot(dh * Math.cos((pov.pitch * Math.PI) / 180), pitch - pov.pitch);
+      job.res(await runDetector(job.img));
+    } catch {
+      stats.failed++;
+      for (const j of queue.splice(0)) j.res(null);
+    } finally {
+      inflight--;
+      if (queue.length) pump();
     }
-    return null;
   }
   function pickJob() {
     let best = queue.length - 1;
@@ -6986,35 +8142,79 @@ section.flat .status:empty { display: none; }
     }
     return queue.splice(best, 1)[0];
   }
-  async function pump() {
-    if (inflight >= MAX_INFLIGHT || !queue.length) return;
-    inflight++;
+
+  // ---- which way you're looking, for the queue order ----
+  const panos = new Set();
+  ggs.maps.hook('StreetViewPanorama', p => {
+    panos.add(p);
     try {
-      await detector();
-      const job = pickJob();
-      // another pump may have taken the last job while the detector loaded
-      if (!job) return;
-      if (!job.alive()) {
-        stats.skipped = (stats.skipped || 0) + 1;
-        job.res(null);
-        return;
-      }
-      const bitmap = await createImageBitmap(job.img);
-      const boxes = await new Promise(r => {
-        const id = ++nextId;
-        waiting.set(id, r);
-        const msg = { type: 'detect', id, bitmap, size: DET_SIZE, thresh: 0.25, boxThresh: 0.45 };
-        worker.postMessage(msg, [bitmap]);
-      });
-      job.res(boxes);
-    } catch {
-      stats.failed++;
-      for (const j of queue.splice(0)) j.res(null);
-    } finally {
-      inflight--;
-      if (queue.length) pump();
+      p.addListener('pano_changed', pruneQueue);
+    } catch {}
+  });
+  function pruneQueue() {
+    const shown = new Set();
+    for (const p of panos) {
+      try {
+        shown.add(p.getPano());
+      } catch {}
+    }
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const id = ggs.tileKey(queue[i].url)?.pano;
+      if (id && !shown.has(id)) drop(queue.splice(i, 1)[0]);
     }
   }
+  // Degrees between the middle of a tile and the view, or null without view info.
+  function tileDistance(url) {
+    const k = ggs.tileKey(url);
+    if (!k) return null;
+    for (const p of panos) {
+      const view = viewOf(p, k.pano);
+      if (view === undefined) continue;
+      if (!view) return null;
+      return angleTo(k, view);
+    }
+    return null;
+  }
+  // The panorama's view if it shows `id`: { pov, centre }, null without view info, or
+  // undefined if it shows another panorama (or can't say).
+  function viewOf(p, id) {
+    try {
+      if (p.getPano() !== id) return undefined;
+      const pov = p.getPov();
+      const centre = p.getPhotographerPov?.()?.heading;
+      return pov && centre != null ? { pov, centre } : null;
+    } catch {
+      return undefined;
+    }
+  }
+  function angleTo({ x, y, z }, { pov, centre }) {
+    const cols = 2 ** z;
+    const rows = Math.max(1, 2 ** (z - 1));
+    const heading = centre + ((+x + 0.5) / cols - 0.5) * 360;
+    const pitch = (0.5 - (+y + 0.5) / rows) * 180;
+    const dh = Math.abs(((((heading - pov.heading) % 360) + 540) % 360) - 180);
+    return Math.hypot(dh * Math.cos((pov.pitch * Math.PI) / 180), pitch - pov.pitch);
+  }
+
+  // queue sizes, for ggs.lyingSigns.debug()
+  const queueState = () => ({ queue: queue.length, inflight, waiting: waiting.size });
+
+  Object.assign(ls, { loadDetector, detect, queueState });
+})();
+
+// ==================== src/scripts/lying-signs/main.js =============================
+// Lying signs: text on every Street View tile (via ggs.tiles, core/tiles.js) is found by a
+// detector in a worker (detector.js runs worker.js: PP-OCRv4 on onnxruntime-web, loaded from
+// ggs.extBase), painted over, and replaced with new text in another script, language or
+// Minecraft glyphs (edit.js, erase.js, text.js; word lists in words.js). A blurred tile shows
+// while the detector works, then the edit replaces it in the same texture. This file keeps
+// track of the signs found and the tiles on screen, and starts and stops the script.
+(() => {
+  const ggs = globalThis.__ggs;
+  const ls = ggs.lyingSigns;
+  const { stats, hash, blurred, editSync, loadDetector, detect } = ls;
+
+  let active = null; // cfg while the script is on
 
   // ---- signs ----
   // Every text box found in a panorama, at any zoom, in panorama units (1 = its width), with
@@ -7038,6 +8238,18 @@ section.flat .status:empty { display: none; }
       sign: sg,
     };
   }
+  function toPano(b, k, W) {
+    const u = W * 2 ** k.z;
+    return {
+      cx: (k.x * W + b.cx) / u,
+      cy: (k.y * W + b.cy) / u,
+      w: b.w / u,
+      h: b.h / u,
+      angle: b.angle,
+      vertical: b.vertical,
+      words: {},
+    };
+  }
   function touches(sg, k, W) {
     const b = toTile(sg, k, W);
     const r = Math.hypot(b.w, b.h) / 2;
@@ -7049,31 +8261,14 @@ section.flat .status:empty { display: none; }
   // Adds a tile's detections, biggest first. A known sign wins, as it may span tiles, unless a
   // new box is bigger and covers its middle (the other zoom only saw a sliver of it).
   function addSigns(k, W, found) {
-    if (!signs.has(k.pano)) {
-      signs.set(k.pano, []);
-      if (signs.size > MAX_PANOS) {
-        const old = signs.keys().next().value;
-        signs.delete(old);
-        for (const id of detectedTiles) if (id.startsWith(`${old}/`)) detectedTiles.delete(id);
-      }
-    }
-    const list = signs.get(k.pano);
-    const u = W * 2 ** k.z;
+    const list = panoSigns(k.pano);
     const added = [];
     const removed = [];
     for (const b of found.slice().sort((a, c) => c.w * c.h - a.w * a.h)) {
-      const sg = {
-        cx: (k.x * W + b.cx) / u,
-        cy: (k.y * W + b.cy) / u,
-        w: b.w / u,
-        h: b.h / u,
-        angle: b.angle,
-        vertical: b.vertical,
-        words: {},
-      };
-      const covered = list.filter(o => inside(o, sg) && sg.w * sg.h > o.w * o.h);
-      if (list.some(o => !covered.includes(o) && inside(sg, o))) continue;
-      for (const o of covered) {
+      const sg = toPano(b, k, W);
+      const smaller = list.filter(o => inside(o, sg) && sg.w * sg.h > o.w * o.h);
+      if (list.some(o => !smaller.includes(o) && inside(sg, o))) continue;
+      for (const o of smaller) {
         list.splice(list.indexOf(o), 1);
         removed.push(o);
       }
@@ -7082,6 +8277,18 @@ section.flat .status:empty { display: none; }
       added.push(sg);
     }
     return { added, removed };
+  }
+  // The panorama's sign list, made if new; the oldest panorama is forgotten past MAX_PANOS.
+  function panoSigns(pano) {
+    if (!signs.has(pano)) {
+      signs.set(pano, []);
+      if (signs.size > MAX_PANOS) forget(signs.keys().next().value);
+    }
+    return signs.get(pano);
+  }
+  function forget(pano) {
+    signs.delete(pano);
+    for (const id of detectedTiles) if (id.startsWith(`${pano}/`)) detectedTiles.delete(id);
   }
   // whether b's middle is inside box a
   function inside(b, a) {
@@ -7120,20 +8327,10 @@ section.flat .status:empty { display: none; }
   // the detector works. Tiles another script already swapped for a canvas are left alone.
   ggs.tiles.filter((rec, img) => {
     if (!active || !(img instanceof HTMLImageElement)) return img;
-    const url = rec.url;
-    const k = ggs.tileKey(url);
+    const k = ggs.tileKey(rec.url);
     if (!k) return img;
-    let t = tiles.get(url);
-    if (!t) {
-      t = { key: k, img, canvas: null, cfg: null, recs: [], drawn: new Set() };
-      tiles.set(url, t);
-      if (tiles.size > 800) tiles.delete(tiles.keys().next().value);
-      stats.seen++;
-    }
-    t.img = img;
-    t.recs = t.recs.filter(ggs.tiles.live);
-    t.recs.push(rec);
-    if (!detectedTiles.has(tileId(k)) && !t.queued) queueDetect(t, url);
+    const t = track(rec, img, k);
+    if (!detectedTiles.has(tileId(k)) && !t.queued) queueDetect(t, rec.url);
     if (t.canvas && t.cfg === active) return t.canvas;
     if (covered(k)) {
       editTile(t);
@@ -7142,6 +8339,21 @@ section.flat .status:empty { display: none; }
     t.canvas = null;
     return blurred(img);
   }, 1);
+
+  // The tile's record, made if new, with this upload added to it.
+  function track(rec, img, k) {
+    let t = tiles.get(rec.url);
+    if (!t) {
+      t = { key: k, img, canvas: null, cfg: null, recs: [], drawn: new Set() };
+      tiles.set(rec.url, t);
+      if (tiles.size > 800) tiles.delete(tiles.keys().next().value);
+      stats.seen++;
+    }
+    t.img = img;
+    t.recs = t.recs.filter(ggs.tiles.live);
+    t.recs.push(rec);
+    return t;
+  }
 
   function queueDetect(t, url) {
     const k = t.key;
@@ -7181,19 +8393,22 @@ section.flat .status:empty { display: none; }
   let draining = false;
   function refresh(pano, added, removed, now) {
     for (const t of tiles.values()) {
-      if (t.key.pano !== pano || !t.canvas || t.cfg !== active) continue;
-      const W = t.img.naturalWidth || t.img.width;
-      if (removed.some(sg => t.drawn.has(sg))) {
-        stale.set(t, 'all');
-        continue;
-      }
-      const mine = added.filter(sg => touches(sg, t.key, W) && !t.drawn.has(sg));
-      if (!mine.length || stale.get(t) === 'all') continue;
-      if (!stale.has(t)) stale.set(t, new Set());
-      for (const sg of mine) stale.get(t).add(sg);
+      if (t.key.pano === pano && t.canvas && t.cfg === active) markStale(t, added, removed);
     }
     if (stale.has(now)) redo(now);
     drain();
+  }
+  function markStale(t, added, removed) {
+    if (removed.some(sg => t.drawn.has(sg))) {
+      stale.set(t, 'all');
+      return;
+    }
+    if (stale.get(t) === 'all') return;
+    const W = t.img.naturalWidth || t.img.width;
+    const mine = added.filter(sg => touches(sg, t.key, W) && !t.drawn.has(sg));
+    if (!mine.length) return;
+    if (!stale.has(t)) stale.set(t, new Set());
+    for (const sg of mine) stale.get(t).add(sg);
   }
   function redo(t) {
     const job = stale.get(t);
@@ -7239,580 +8454,12 @@ section.flat .status:empty { display: none; }
     }
   }
 
-  // ---- the edits ----
-  // Placeholder while the detector works: the tile at 1/10 size, scaled back up.
-  function blurred(img) {
-    const W = img.naturalWidth || img.width;
-    const H = img.naturalHeight || img.height;
-    const small = new OffscreenCanvas(Math.max(1, (W / 10) | 0), Math.max(1, (H / 10) | 0));
-    small.getContext('2d').drawImage(img, 0, 0, small.width, small.height);
-    const c = new OffscreenCanvas(W, H);
-    const g = c.getContext('2d');
-    g.imageSmoothingQuality = 'high';
-    g.drawImage(small, 0, 0, W, H);
-    return c;
-  }
+  ls.debug = () => ({ ...ls.queueState(), tiles: tiles.size, panos: signs.size, stale: stale.size });
 
-  // Edits a tile with the detector's boxes and returns an OffscreenCanvas. With `onto`, an
-  // earlier edit of the same tile, only the given boxes are added to it.
-  function editSync(src, boxes, cfg, key, onto) {
-    const t0 = performance.now();
-    const W = src.naturalWidth || src.width;
-    const H = src.naturalHeight || src.height;
-    const c = onto || new OffscreenCanvas(W, H);
-    const g = c.getContext('2d', { willReadFrequently: true });
-    if (!onto) {
-      g.drawImage(src, 0, 0);
-      nadir(g, key, W, H);
-    }
-    for (const raw of usable(boxes, key, H)) {
-      const rand = rng(raw.sign.seed);
-      let script = cfg.script | 0;
-      if (!WORDS[script]) script = 0;
-      // random: one script per panorama
-      if (script === 0) script = 1 + (hash(`script:${key?.pano || ''}`) % (WORDS.length - 1));
-      const list = WORDS[script];
-      const pick = list === 'galactic' ? null : () => list[Math.floor(rand() * list.length)];
-      try {
-        replaceBox(g, raw, script, pick, rand, W);
-      } catch (err) {
-        stats.failed++;
-        if (stats.failed < 4) ggs.log('lying-signs: box failed', err);
-      }
-    }
-    const ms = performance.now() - t0;
-    stats.editMs += ms;
-    stats.editMax = Math.max(stats.editMax, ms);
-    return c;
-  }
-
-  // The boxes worth editing: big enough at this zoom, and not on the ground.
-  function usable(boxes, key, H) {
-    return boxes.filter(b => {
-      if (b.h < 4 || b.w < 4) return false;
-      if (onGround(key, b, H)) {
-        stats.ground = (stats.ground || 0) + 1;
-        return false;
-      }
-      return true;
-    });
-  }
-  // Road markings, tyres, drain covers: anything below GROUND_PITCH, or a big box a little
-  // below the horizon (a shop sign there is seldom more than a few degrees tall).
-  const GROUND_PITCH = -30;
-  function onGround(k, b, H) {
-    if (!k) return false;
-    const deg = 180 / (Math.max(1, 2 ** (k.z - 1)) * H); // degrees per tile pixel
-    const pitch = 90 - (k.y * H + b.cy) * deg;
-    return pitch < GROUND_PITCH || (pitch < -8 && Math.min(b.w, b.h) * deg > 6);
-  }
-
-  // The bottom of the panorama (the car) is stretched too much for the detector, so
-  // everything below NADIR_PITCH is smeared into a coarse mosaic instead.
-  const NADIR_PITCH = -68;
-  function nadir(g, k, W, H) {
-    if (!k) return;
-    const rows = Math.max(1, 2 ** (k.z - 1));
-    // tile y where the mosaic starts
-    const top = Math.max(0, (((90 - NADIR_PITCH) / 180) * rows - k.y) * H);
-    if (top >= H) return;
-    const band = H - top;
-    const fade = Math.min(10, band);
-    const small = new OffscreenCanvas(Math.max(1, (W / 16) | 0), Math.max(1, (band / 16) | 0));
-    small.getContext('2d').drawImage(g.canvas, 0, top, W, band, 0, 0, small.width, small.height);
-    const layer = new OffscreenCanvas(W, band);
-    const l = layer.getContext('2d');
-    l.imageSmoothingQuality = 'high';
-    l.drawImage(small, 0, 0, W, band);
-    const grad = l.createLinearGradient(0, 0, 0, fade);
-    grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(1, 'rgba(0,0,0,1)');
-    l.globalCompositeOperation = 'destination-in';
-    l.fillStyle = grad;
-    l.fillRect(0, 0, W, fade);
-    l.fillStyle = '#000';
-    l.fillRect(0, fade, W, band - fade);
-    g.drawImage(layer, 0, top);
-    stats.nadir = (stats.nadir || 0) + 1;
-  }
-
-  // Replaces one line of text. Works in a frame rotated so the text runs level, cut to the
-  // tile, so a huge box inherited from a zoomed-out tile costs no more than its part on this
-  // tile. The old strokes are told apart from the sign by colour, grown a little to take their
-  // halo, and filled in from the sign around them, so the sign's colour and gradients stay.
-  // The new word goes on top at the old text's height and colour.
-  function replaceBox(g, raw, script, pick, rand, tileW) {
-    const W = g.canvas.width;
-    const H = g.canvas.height;
-    // level text is copied, not resampled
-    const angle = Math.abs(raw.angle) < 0.01 ? 0 : raw.angle;
-    const ca = Math.cos(angle);
-    const sa = Math.sin(angle);
-    // the frame's origin, on a pixel
-    const ox = Math.round(raw.cx);
-    const oy = Math.round(raw.cy);
-    const bu = (raw.cx - ox) * ca + (raw.cy - oy) * sa;
-    const bv = -(raw.cx - ox) * sa + (raw.cy - oy) * ca;
-    // the box hugs the strokes, so give them room
-    const pad = raw.h * 0.12;
-    const hw = raw.w / 2 + pad;
-    const hh = raw.h / 2 + pad;
-    const ctx = Math.max(4, Math.round(raw.h * 0.3)); // sign around the box, for the fill
-    // the tile's extent in the frame
-    let u0 = Infinity;
-    let u1 = -Infinity;
-    let v0 = Infinity;
-    let v1 = -Infinity;
-    for (const [x, y] of [
-      [0, 0],
-      [W, 0],
-      [0, H],
-      [W, H],
-    ]) {
-      const u = (x - ox) * ca + (y - oy) * sa;
-      const v = -(x - ox) * sa + (y - oy) * ca;
-      u0 = Math.min(u0, u);
-      u1 = Math.max(u1, u);
-      v0 = Math.min(v0, v);
-      v1 = Math.max(v1, v);
-    }
-    const rx = Math.floor(Math.max(bu - hw - ctx, u0));
-    const ry = Math.floor(Math.max(bv - hh - ctx, v0));
-    const w = Math.ceil(Math.min(bu + hw + ctx, u1)) - rx;
-    const h = Math.ceil(Math.min(bv + hh + ctx, v1)) - ry;
-    if (w < 4 || h < 4) return;
-    // Strokes are looked for in the detector's own box. The padding is room to grow them into.
-    const box = [
-      Math.max(0, Math.round(bu - raw.w / 2 - rx)),
-      Math.max(0, Math.round(bv - raw.h / 2 - ry)),
-      Math.min(w, Math.round(bu + raw.w / 2 - rx)),
-      Math.min(h, Math.round(bv + raw.h / 2 - ry)),
-    ];
-    if (box[2] - box[0] < 3 || box[3] - box[1] < 3) return;
-    // the box isn't cut by the tile edge
-    const whole = bu - hw - rx > 0 && bv - hh - ry > 0 && bu + hw - rx < w && bv + hh - ry < h;
-
-    const temp = new OffscreenCanvas(w, h);
-    const t = temp.getContext('2d', { willReadFrequently: true });
-    t.translate(-rx, -ry);
-    t.rotate(-angle);
-    t.translate(-ox, -oy);
-    t.drawImage(g.canvas, 0, 0); // outside the tile stays transparent
-    t.setTransform(1, 0, 0, 1, 0, 0);
-    const img = t.getImageData(0, 0, w, h);
-    const d = img.data;
-
-    // Decisions made while the whole box is on the tile are kept on the sign for every zoom.
-    const sign = raw.sign;
-    const fit = sign.fit;
-    if (fit?.skip) return;
-    const grow = 1 + Math.round(raw.h * 0.04);
-    const s = strokes(d, w, h, box, grow);
-    const skip = !s ? 'lowContrast' : !fit && watermark(raw, tileW, s.bg, s.fg) ? 'watermark' : null;
-    // clouds, brickwork, foliage, Google's marks: not text to replace
-    if (skip) {
-      stats[skip] = (stats[skip] || 0) + 1;
-      if (whole && !fit) sign.fit = { skip };
-      return;
-    }
-    const surf = surface(d, w, h, s, grow + 1);
-    const levels = pushPull(d, s.mask, w, h);
-    texture(d, s.mask, w, h, box, levels, s.grain);
-    // only the old strokes are replaced
-    for (let i = 0; i < w * h; i++) if (!s.mask[i]) d[i * 4 + 3] = 0;
-    t.putImageData(img, 0, 0);
-
-    // Letter height, position and colour are measured once the whole box is on the tile, then
-    // kept. Until then a box cut by the tile edge is sized from the detector.
-    let f = fit;
-    if (!f) {
-      const measured = whole && s.bottom > s.top;
-      f = {
-        textH: measured ? Math.max(0.35, (s.bottom - s.top + 1) / raw.h) : TEXT_OF_BOX,
-        dy: measured ? ((s.top + s.bottom + 1) / 2 - (bv - ry)) / raw.h : 0,
-        fg: s.fg,
-      };
-      if (whole) sign.fit = f;
-    }
-    const textH = f.textH * raw.h;
-    const cy = bv - ry + f.dy * raw.h;
-    // the new word on its own layer, kept to the sign's surface
-    const layer = new OffscreenCanvas(w, h);
-    const x = layer.getContext('2d', { willReadFrequently: true });
-    x.fillStyle = `rgb(${f.fg.join(',')})`;
-    if (script === GALACTIC_INDEX) {
-      const glyphH = textH / 0.72;
-      drawGalactic(x, { x: bu - rx - raw.w / 2, y: cy - glyphH / 2, w: raw.w, h: glyphH }, rand);
-    } else {
-      const stacked = raw.vertical && !JOINED.has(script);
-      sign.words[script] ||= chooseWord(textH / raw.h, raw.w / raw.h, pick, stacked);
-      writeWord(x, bu - rx, cy, textH, raw.w, sign.words[script]);
-    }
-    const ld = x.getImageData(0, 0, w, h);
-    for (let i = 0; i < w * h; i++) if (!surf[i]) ld.data[i * 4 + 3] = 0;
-    x.putImageData(ld, 0, 0);
-    t.drawImage(layer, 0, 0);
-
-    g.save();
-    g.translate(ox, oy);
-    g.rotate(angle);
-    g.drawImage(temp, rx, ry);
-    g.restore();
-  }
-
-  // Of a few seeded words, the one that best fills a box of this shape (`aspect` = width /
-  // height) at this letter height (`textH`, a fraction of the box height). Chosen once per
-  // sign so every zoom writes the same word. `stacked` is for a vertical sign: the characters
-  // go one under another, upright.
-  function chooseWord(textH, aspect, pick, stacked) {
-    measurer.font = 'bold 100px sans-serif';
-    let best = null;
-    for (let k = 0; k < 6; k++) {
-      const word = pick();
-      let fill;
-      if (stacked) fill = (aspect * 0.92) / (graphemes(word).length * textH * 1.1);
-      else {
-        const m = measurer.measureText(word);
-        const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-        fill = (aspect * 0.92) / ((m.width * textH) / gh);
-      }
-      if (!best || Math.abs(Math.log(fill)) < Math.abs(Math.log(best.fill))) best = { word, fill };
-    }
-    return { word: best.word, stacked };
-  }
-  const measurer = new OffscreenCanvas(1, 1).getContext('2d');
-  // Writes a chosen word centred at (cx, cy) with letters textH px tall, stretched a little
-  // to fill boxW, shrunk if it still doesn't fit.
-  function writeWord(t, cx, cy, textH, boxW, { word, stacked }) {
-    if (stacked) {
-      const chars = graphemes(word);
-      const step = Math.min(textH * 1.1, (boxW * 0.92) / chars.length);
-      t.font = `bold ${step / 1.1}px sans-serif`;
-      t.textAlign = 'center';
-      t.textBaseline = 'middle';
-      chars.forEach((ch, i) => {
-        t.save();
-        t.translate(cx + (i - (chars.length - 1) / 2) * step, cy);
-        t.rotate(-Math.PI / 2);
-        t.fillText(ch, 0, 0);
-        t.restore();
-      });
-      return;
-    }
-    t.font = 'bold 100px sans-serif';
-    let m = t.measureText(word);
-    const gh = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent || 100;
-    const width = (m.width * textH) / gh;
-    const sx = Math.min(1.25, Math.max(0.75, (boxW * 0.92) / width));
-    let size = (100 * textH) / gh;
-    if (width * sx > boxW) size *= boxW / (width * sx);
-    t.font = `bold ${size}px sans-serif`;
-    m = t.measureText(word);
-    t.save();
-    t.translate(cx, cy);
-    t.scale(sx, 1);
-    t.fillText(word, -m.width / 2, (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
-    t.restore();
-  }
-
-  // The old text inside `box` ([x0, y0, x1, y1]). The sign colour is the commonest one and
-  // the strokes are what's far from it. Returns the strokes as a mask grown by `grow` px,
-  // their colour, the rows they span and how grainy the sign is, or null if nothing stands out.
-  function strokes(d, w, h, box, grow) {
-    const [x0, y0, x1, y1] = box;
-    const bins = new Float64Array(512 * 4); // 8-level colour cube: count, r, g, b
-    let n = 0;
-    for (let y = y0; y < y1; y++)
-      for (let x = x0; x < x1; x++) {
-        const i = (y * w + x) * 4;
-        if (d[i + 3] < 200) continue;
-        n++;
-        const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
-        bins[k]++;
-        bins[k + 1] += d[i];
-        bins[k + 2] += d[i + 1];
-        bins[k + 3] += d[i + 2];
-      }
-    let b = 0;
-    for (let k = 4; k < bins.length; k += 4) if (bins[k] > bins[b]) b = k;
-    if (!n) return null;
-    const bg = [bins[b + 1] / bins[b], bins[b + 2] / bins[b], bins[b + 3] / bins[b]];
-    const dist = i => Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]);
-    // typical stroke pixel: the median of the eighth furthest from the sign colour
-    const hist = new Uint32Array(766);
-    for (let y = y0; y < y1; y++)
-      for (let x = x0; x < x1; x++) {
-        const i = (y * w + x) * 4;
-        if (d[i + 3] >= 200) hist[dist(i) | 0]++;
-      }
-    let contrast = 765;
-    for (let v = 765, c = 0; v >= 0; v--) {
-      c += hist[v];
-      if (c >= n / 16) {
-        contrast = v;
-        break;
-      }
-    }
-    if (contrast < MIN_CONTRAST) return null;
-    const thr = Math.max(24, contrast * 0.45);
-    const strong = contrast * 0.8;
-    const core = new Uint8Array(w * h);
-    const ink = new Float64Array(512 * 4); // stroke colours, same cube
-    let top = h;
-    let bottom = -1;
-    let gsum = 0;
-    let gn = 0;
-    const rowMin = Math.max(2, (x1 - x0) * 0.03);
-    for (let y = y0; y < y1; y++) {
-      let row = 0;
-      for (let x = x0; x < x1; x++) {
-        const i = (y * w + x) * 4;
-        if (d[i + 3] < 200) continue;
-        const v = dist(i);
-        if (v > thr) {
-          core[y * w + x] = 1;
-          row++;
-        }
-        if (v > strong) {
-          const k = ((d[i] >> 5) * 64 + (d[i + 1] >> 5) * 8 + (d[i + 2] >> 5)) * 4;
-          ink[k]++;
-          ink[k + 1] += d[i];
-          ink[k + 2] += d[i + 1];
-          ink[k + 3] += d[i + 2];
-        } else if (v <= thr && x + 1 < x1 && dist(i + 4) <= thr) {
-          // grain: brightness change between neighbouring sign pixels
-          gsum += Math.abs(d[i] + d[i + 1] + d[i + 2] - d[i + 4] - d[i + 5] - d[i + 6]) / 3;
-          gn++;
-        }
-      }
-      if (row >= rowMin) {
-        if (y < top) top = y;
-        bottom = y;
-      }
-    }
-    // text colour: the commonest stroke colour, so an outline or shading doesn't grey the fill
-    let f = 0;
-    for (let k = 4; k < ink.length; k += 4) if (ink[k] > ink[f]) f = k;
-    if (!ink[f]) return null;
-    return {
-      mask: dilate(core, w, h, grow),
-      fg: [1, 2, 3].map(j => Math.round(ink[f + j] / ink[f])),
-      bg,
-      contrast,
-      top,
-      bottom,
-      grain: gn ? Math.min(6, (gsum / gn) * 0.5) : 0,
-    };
-  }
-  // Google's "© 2025 Google" marks: always the same small size and shape on a tile, grey and
-  // see-through. The background is lightened by about the same fraction in every channel.
-  // Real white or grey lettering is far more opaque.
-  function watermark(raw, tileW, bg, fg) {
-    const h = raw.h / tileW;
-    const aspect = raw.w / raw.h;
-    if (raw.vertical || h < 0.018 || h > 0.045 || aspect < 3.5 || aspect > 8) return false;
-    if (Math.max(...fg) - Math.min(...fg) > 30) return false; // coloured: not the grey mark
-    const a = [0, 1, 2].map(k => (fg[k] - bg[k]) / (256 - bg[k]));
-    return Math.min(...a) > 0.1 && Math.max(...a) < 0.55 && Math.max(...a) - Math.min(...a) < 0.1;
-  }
-  // Where the sign is: pixels of its colour or of the old text's colour. Anything else (a
-  // pole in front, the sky past the end of the sign, the side of a curved building) isn't,
-  // so the new word is cut off there as the old one was. Closed by r px so outlines and
-  // anti-aliasing between the two colours count as sign.
-  function surface(d, w, h, s, r) {
-    const near = (i, c, lim) =>
-      Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < lim;
-    const lim = Math.max(40, s.contrast * 0.45);
-    const m = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-      const j = i * 4;
-      if (d[j + 3] >= 200 && (near(j, s.bg, lim) || near(j, s.fg, lim))) m[i] = 1;
-    }
-    const grown = dilate(m, w, h, r);
-    for (let i = 0; i < w * h; i++) grown[i] = !grown[i];
-    const shrunk = dilate(grown, w, h, r);
-    for (let i = 0; i < w * h; i++) m[i] = !shrunk[i];
-    return m;
-  }
-  const segmenter = new Intl.Segmenter();
-  const graphemes = word => [...segmenter.segment(word)].map(g => g.segment).filter(g => g.trim());
-
-  // Grows a mask by r px in every direction (a square), with running counts along rows, then columns.
-  function dilate(m, w, h, r) {
-    const a = new Uint8Array(w * h);
-    const out = new Uint8Array(w * h);
-    for (let y = 0; y < h; y++) {
-      let c = 0;
-      for (let x = 0; x < Math.min(r, w); x++) c += m[y * w + x];
-      for (let x = 0; x < w; x++) {
-        if (x + r < w) c += m[y * w + x + r];
-        if (x - r - 1 >= 0) c -= m[y * w + x - r - 1];
-        a[y * w + x] = c > 0;
-      }
-    }
-    for (let x = 0; x < w; x++) {
-      let c = 0;
-      for (let y = 0; y < Math.min(r, h); y++) c += a[y * w + x];
-      for (let y = 0; y < h; y++) {
-        if (y + r < h) c += a[(y + r) * w + x];
-        if (y - r - 1 >= 0) c -= a[(y - r - 1) * w + x];
-        out[y * w + x] = c > 0;
-      }
-    }
-    return out;
-  }
-  // Fills the masked pixels of `d` from the rest (push-pull): halve the picture until every
-  // cell has something in it, averaging only known pixels, then on the way back up give each
-  // unknown pixel the smooth, bilinear value from the level above. Linear in the pixel count.
-  function pushPull(d, mask, w, h) {
-    const levels = [];
-    let c = new Float32Array(w * h * 3);
-    let wt = new Float32Array(w * h);
-    let lw = w;
-    let lh = h;
-    for (let i = 0; i < w * h; i++) {
-      if (mask[i] || d[i * 4 + 3] < 200) continue;
-      wt[i] = 1;
-      c[i * 3] = d[i * 4];
-      c[i * 3 + 1] = d[i * 4 + 1];
-      c[i * 3 + 2] = d[i * 4 + 2];
-    }
-    levels.push([c, wt, lw, lh]);
-    while (lw > 1 || lh > 1) {
-      const nw = Math.ceil(lw / 2);
-      const nh = Math.ceil(lh / 2);
-      const nc = new Float32Array(nw * nh * 3);
-      const nt = new Float32Array(nw * nh);
-      for (let y = 0; y < nh; y++)
-        for (let x = 0; x < nw; x++) {
-          let s0 = 0;
-          let s1 = 0;
-          let s2 = 0;
-          let ws = 0;
-          for (let dy = 0; dy < 2; dy++)
-            for (let dx = 0; dx < 2; dx++) {
-              const sx = 2 * x + dx;
-              const sy = 2 * y + dy;
-              if (sx >= lw || sy >= lh) continue;
-              const j = sy * lw + sx;
-              const q = wt[j];
-              s0 += c[j * 3] * q;
-              s1 += c[j * 3 + 1] * q;
-              s2 += c[j * 3 + 2] * q;
-              ws += q;
-            }
-          const j = y * nw + x;
-          if (ws) {
-            nc[j * 3] = s0 / ws;
-            nc[j * 3 + 1] = s1 / ws;
-            nc[j * 3 + 2] = s2 / ws;
-          }
-          nt[j] = Math.min(1, ws);
-        }
-      c = nc;
-      wt = nt;
-      lw = nw;
-      lh = nh;
-      levels.push([c, wt, lw, lh]);
-    }
-    for (let l = levels.length - 2; l >= 0; l--) {
-      const [c, wt, lw, lh] = levels[l];
-      const [pc, , pw, ph] = levels[l + 1];
-      for (let y = 0; y < lh; y++) {
-        const fy = Math.min(ph - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
-        const y0 = fy | 0;
-        const y1 = Math.min(ph - 1, y0 + 1);
-        const ty = fy - y0;
-        for (let x = 0; x < lw; x++) {
-          const j = y * lw + x;
-          const q = wt[j];
-          if (q >= 1) continue;
-          const fx = Math.min(pw - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
-          const x0 = fx | 0;
-          const x1 = Math.min(pw - 1, x0 + 1);
-          const tx = fx - x0;
-          for (let k = 0; k < 3; k++) {
-            const up =
-              (pc[(y0 * pw + x0) * 3 + k] * (1 - tx) + pc[(y0 * pw + x1) * 3 + k] * tx) * (1 - ty) +
-              (pc[(y1 * pw + x0) * 3 + k] * (1 - tx) + pc[(y1 * pw + x1) * 3 + k] * tx) * ty;
-            c[j * 3 + k] = c[j * 3 + k] * q + up * (1 - q);
-          }
-          wt[j] = 1;
-        }
-      }
-    }
-    const [c0] = levels[0];
-    for (let i = 0; i < w * h; i++) {
-      if (!mask[i]) continue;
-      d[i * 4] = c0[i * 3];
-      d[i * 4 + 1] = c0[i * 3 + 1];
-      d[i * 4 + 2] = c0[i * 3 + 2];
-    }
-    return levels;
-  }
-  // The push-pull fill is smooth, which shows on paving, brick or a grainy sign. Each filled
-  // pixel gets the fine detail (pixel minus its blurred value, clamped) of the pixel mirrored
-  // across the nearest box edge, so the texture outside carries on into the box. With nothing
-  // to mirror it gets plain grain.
-  function texture(d, mask, w, h, box, levels, grain) {
-    const [x0, y0, x1, y1] = box;
-    const L = levels[Math.min(2, levels.length - 1)];
-    const f = 2 ** Math.min(2, levels.length - 1);
-    const blurred = (x, y, k) => {
-      const [c, , lw, lh] = L;
-      const fx = Math.min(lw - 1, Math.max(0, (x + 0.5) / f - 0.5));
-      const fy = Math.min(lh - 1, Math.max(0, (y + 0.5) / f - 0.5));
-      const xa = fx | 0;
-      const ya = fy | 0;
-      const xb = Math.min(lw - 1, xa + 1);
-      const yb = Math.min(lh - 1, ya + 1);
-      const tx = fx - xa;
-      const ty = fy - ya;
-      return (
-        (c[(ya * lw + xa) * 3 + k] * (1 - tx) + c[(ya * lw + xb) * 3 + k] * tx) * (1 - ty) +
-        (c[(yb * lw + xa) * 3 + k] * (1 - tx) + c[(yb * lw + xb) * 3 + k] * tx) * ty
-      );
-    };
-    const known = (x, y) =>
-      x >= 0 && y >= 0 && x < w && y < h && !mask[y * w + x] && d[(y * w + x) * 4 + 3] >= 200;
-    for (let y = 0; y < h; y++)
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        if (!mask[i]) continue;
-        // mirror images across the four edges, nearest edge first
-        const m = [
-          [2 * x0 - x - 1, y, x - x0],
-          [2 * x1 - x - 1, y, x1 - x],
-          [x, 2 * y0 - y - 1, y - y0],
-          [x, 2 * y1 - y - 1, y1 - y],
-        ].sort((a, b) => a[2] - b[2]);
-        const src = m.find(([mx, my]) => known(mx, my));
-        if (src) {
-          const j = (src[1] * w + src[0]) * 4;
-          for (let k = 0; k < 3; k++) {
-            d[i * 4 + k] += Math.max(-30, Math.min(30, d[j + k] - blurred(src[0], src[1], k)));
-          }
-        } else {
-          const n = (Math.random() - 0.5) * 2 * grain;
-          d[i * 4] += n;
-          d[i * 4 + 1] += n;
-          d[i * 4 + 2] += n;
-        }
-      }
-  }
-
-  // which way you're looking, for the queue order
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => {
-    panos.add(p);
-    try {
-      p.addListener('pano_changed', pruneQueue);
-    } catch {}
-  });
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
-    detector();
+    loadDetector();
     ggs.tiles.replay();
     return {
       stop() {
@@ -7931,15 +8578,8 @@ section.flat .status:empty { display: none; }
     }
     return canvases.get(key);
   }
-  function melt(k, src, tiles) {
-    const w = src.width || src.naturalWidth || 512;
-    const h = src.height || src.naturalHeight || 512;
-    const n = cells(k.z, w);
-    const blur = Math.min(48, w / n / 3);
-    // grid scale, and the size of a tile in it
-    const f = 6 * n <= 1.5 * w ? 0.5 : 1;
-    const tw = Math.round(w * f);
-    const th = Math.round(h * f);
+  // the tile in the middle of a 3x3 grid of its neighbours, each tw x th
+  function fillGrid(k, src, tiles, tw, th) {
     const grid = canvas(3 * tw, 3 * th, 'grid');
     const g = grid.getContext('2d');
     g.clearRect(0, 0, grid.width, grid.height);
@@ -7948,17 +8588,20 @@ section.flat .status:empty { display: none; }
         const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
         const x = (dx + 1) * tw;
         const y = (dy + 1) * th;
-        if (nb) {
-          g.drawImage(nb.src, x, y, tw, th);
-          continue;
-        }
-        g.save();
-        g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
-        g.scale(dx ? -1 : 1, dy ? -1 : 1);
-        g.drawImage(src, 0, 0, tw, th);
-        g.restore();
+        if (nb) g.drawImage(nb.src, x, y, tw, th);
+        else drawMirrored(g, src, x, y, tw, th, dx, dy);
       }
-    // shrink in halves: one big step skips pixels and speckles the colours
+    return grid;
+  }
+  function drawMirrored(g, src, x, y, tw, th, dx, dy) {
+    g.save();
+    g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
+    g.scale(dx ? -1 : 1, dy ? -1 : 1);
+    g.drawImage(src, 0, 0, tw, th);
+    g.restore();
+  }
+  // shrink in halves: one big step skips pixels and speckles the colours
+  function shrink(grid, n) {
     let cur = grid;
     let cw = grid.width;
     let ch = grid.height;
@@ -7971,6 +8614,17 @@ section.flat .status:empty { display: none; }
     }
     const small = canvas(3 * n, 3 * n, 'small');
     small.getContext('2d').drawImage(cur, 0, 0, cw, ch, 0, 0, 3 * n, 3 * n);
+    return small;
+  }
+  function melt(k, src, tiles) {
+    const w = src.width || src.naturalWidth || 512;
+    const h = src.height || src.naturalHeight || 512;
+    const n = cells(k.z, w);
+    const blur = Math.min(48, w / n / 3);
+    // grid scale, and the size of a tile in it
+    const f = 6 * n <= 1.5 * w ? 0.5 : 1;
+    const grid = fillGrid(k, src, tiles, Math.round(w * f), Math.round(h * f));
+    const small = shrink(grid, n);
     const q = Math.min(1, 4 / blur);
     const bw = Math.round(3 * w * q);
     const bh = Math.round(3 * h * q);
@@ -8007,39 +8661,49 @@ section.flat .status:empty { display: none; }
   let redoing = false;
   const nextFrame = () =>
     new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  function reupload(k, t, tiles) {
+    try {
+      return ggs.tiles.upload(t.rec, melt(k, t.src, tiles));
+    } catch (err) {
+      ggs.log('gradient: re-upload failed', err);
+      return false;
+    }
+  }
+  // Redoes dirty tiles until PER_FRAME are done or SLICE ms pass. True if it stopped for that
+  // (more may be waiting), false once nothing is dirty.
+  function redoSome(pass) {
+    const t0 = performance.now();
+    let done = 0;
+    while (active && dirty.size) {
+      const [id, { k, tiles }] = dirty.entries().next().value;
+      dirty.delete(id);
+      const t = tiles.get(tileId(k));
+      if (!t || !ggs.tiles.live(t.rec)) continue;
+      if (reupload(k, t, tiles)) pass.pano = k.pano;
+      if (++done >= PER_FRAME || performance.now() - t0 >= SLICE) return true;
+    }
+    return false;
+  }
+  function repaintIfDue(pass) {
+    if (!pass.pano || performance.now() - pass.painted <= 150) return;
+    pass.painted = performance.now();
+    ggs.tiles.repaint(pass.pano);
+    pass.pano = null;
+  }
   async function redo() {
     timer = null;
     if (redoing) return;
     redoing = true;
-    let pano = null;
-    let done = 0;
-    let t0 = performance.now();
-    let painted = t0;
+    const pass = { pano: null, painted: performance.now() };
     try {
-      while (active && dirty.size) {
-        const [id, { k, tiles }] = dirty.entries().next().value;
-        dirty.delete(id);
-        const t = tiles.get(tileId(k));
-        if (!t || !ggs.tiles.live(t.rec)) continue;
-        try {
-          if (ggs.tiles.upload(t.rec, melt(k, t.src, tiles))) pano = k.pano;
-        } catch (err) {
-          ggs.log('gradient: re-upload failed', err);
-        }
-        if (++done < PER_FRAME && performance.now() - t0 < SLICE) continue;
-        if (pano && performance.now() - painted > 150) {
-          painted = performance.now();
-          ggs.tiles.repaint(pano);
-          pano = null;
-        }
+      while (redoSome(pass)) {
+        repaintIfDue(pass);
         await nextFrame();
-        done = 0;
-        t0 = performance.now();
       }
     } finally {
       redoing = false;
     }
-    if (pano) ggs.tiles.repaint(pano);
+    if (pass.pano) ggs.tiles.repaint(pass.pano);
   }
 
   ggs.tiles.filter((rec, source) => {
@@ -8123,6 +8787,18 @@ section.flat .status:empty { display: none; }
     return t * t * (3 - 2 * t);
   };
 
+  // How much of a pixel's colour to keep: 1 near the hue, fading to 0 (grey) away from it
+  function amount(r, g, b, [centre, half]) {
+    const max = Math.max(r, g, b);
+    const c = max - Math.min(r, g, b);
+    if (c <= 20) return 0;
+    let hue = max === r ? ((g - b) / c) % 6 : max === g ? (b - r) / c + 2 : (r - g) / c + 4;
+    hue = (hue * 60 + 360) % 360;
+    const off = Math.abs(((hue - centre + 540) % 360) - 180);
+    // close to the hue, saturated enough, and not too dark
+    return (1 - smooth(half, half + FEATHER, off)) * smooth(0.18, 0.4, c / max) * smooth(25, 60, max);
+  }
+
   function draw(source, hue = keep) {
     const w = source.width || source.naturalWidth || 512;
     const h = source.height || source.naturalHeight || 512;
@@ -8132,23 +8808,12 @@ section.flat .status:empty { display: none; }
     g.drawImage(source, 0, 0, w, h);
     const img = g.getImageData(0, 0, w, h);
     const d = img.data;
-    const [centre, half] = hue;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i];
       const gr = d[i + 1];
       const b = d[i + 2];
-      const max = Math.max(r, gr, b);
-      const min = Math.min(r, gr, b);
       const grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
-      let k = 0;
-      if (max - min > 20) {
-        const c = max - min;
-        let hue = max === r ? ((gr - b) / c) % 6 : max === gr ? (b - r) / c + 2 : (r - gr) / c + 4;
-        hue = (hue * 60 + 360) % 360;
-        const off = Math.abs(((hue - centre + 540) % 360) - 180);
-        // close to the hue, saturated enough, and not too dark
-        k = (1 - smooth(half, half + FEATHER, off)) * smooth(0.18, 0.4, c / max) * smooth(25, 60, max);
-      }
+      const k = amount(r, gr, b, hue);
       d[i] = grey + (r - grey) * k;
       d[i + 1] = grey + (gr - grey) * k;
       d[i + 2] = grey + (b - grey) * k;
@@ -8575,32 +9240,40 @@ section.flat .status:empty { display: none; }
       return now < round.until ? 'show' : 'done';
     }
 
+    // a new round starts loading; switched on with Street View already up: straight to "Get ready"
+    function syncRound(now) {
+      const key = ggs.game.roundKey();
+      if (round?.key === key) return;
+      round = first && ggs.view.lastTile() > 0 ? { key, since: now, ready: now } : { key, since: now };
+      first = false;
+    }
+
+    function showCard(r, now) {
+      word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
+      meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
+      fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
+      Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
+      card.style.display = 'flex'; // not `hidden`: the inline display would beat it
+    }
+
+    function showBar(r, now) {
+      const width = (r.width * (round.until - now)) / ms;
+      Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
+      bar.hidden = false;
+    }
+
     let step = 'loading';
     function tick() {
       bar.hidden = true;
       card.style.display = 'none';
       if (!ggs.maps.guessMapElement()) return;
-      const key = ggs.game.roundKey();
       const now = performance.now();
-      if (round?.key !== key) {
-        // switched on with Street View already up: straight to "Get ready"
-        round = first && ggs.view.lastTile() > 0 ? { key, since: now, ready: now } : { key, since: now };
-        first = false;
-      }
+      syncRound(now);
       step = stepOf(now);
       const r = ggs.view.panoElement()?.getBoundingClientRect();
       if (!r) return;
-      if (step === 'loading' || step === 'ready') {
-        word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
-        meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
-        fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
-        Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
-        card.style.display = 'flex'; // not `hidden`: the inline display would beat it
-      } else if (step === 'show') {
-        const width = (r.width * (round.until - now)) / ms;
-        Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
-        bar.hidden = false;
-      }
+      if (step === 'loading' || step === 'ready') showCard(r, now);
+      else if (step === 'show') showBar(r, now);
     }
 
     const covered = () => !round || round.key !== ggs.game.roundKey() || step !== 'show';
@@ -8691,6 +9364,13 @@ section.flat .status:empty { display: none; }
     return a;
   }
 
+  // RAMP index for the pixel at i, by its brightness
+  function charIndex(px, i, paper) {
+    let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+    if (paper) light = 1 - light; // black on white: dark cells get the dense characters
+    return Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+  }
+
   const small = new OffscreenCanvas(1, 1);
   function draw(source, z, look = active.look) {
     const w = source.width || source.naturalWidth || 512;
@@ -8714,10 +9394,7 @@ section.flat .status:empty { display: none; }
     const sw = Math.ceil(cw);
     for (let y = 0; y < ny; y++)
       for (let x = 0; x < nx; x++) {
-        const i = (y * nx + x) * 4;
-        let light = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
-        if (paper) light = 1 - light; // black on white: dark cells get the dense characters
-        const c = Math.min(RAMP.length - 1, Math.round(light ** 0.8 * (RAMP.length - 1)));
+        const c = charIndex(px, (y * nx + x) * 4, paper);
         if (c) g.drawImage(strip, c * sw, 0, sw, strip.height, x * cw, y * ch, cw, ch);
       }
     g.globalCompositeOperation = 'source-in';
@@ -8906,27 +9583,17 @@ section.flat .status:empty { display: none; }
       open = want > open ? open + (want - open) * 0.3 : Math.max(want, open - SHUT_STEP);
     }
 
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        });
-      } catch (err) {
-        mask.stop();
-        if (stopped) return;
-        // refused: it switches itself off rather than stay on doing nothing
-        if (err?.name === 'NotAllowedError') {
-          ggs.saveSetting('eye', { enabled: false });
-          status('Microphone blocked, so it was switched off');
-        } else {
-          status('No microphone, so the eye stays open');
-        }
-        return;
+    // refused: it switches itself off rather than stay on doing nothing
+    function micFailed(err) {
+      if (err?.name === 'NotAllowedError') {
+        ggs.saveSetting('eye', { enabled: false });
+        status('Microphone blocked, so it was switched off');
+      } else {
+        status('No microphone, so the eye stays open');
       }
-      if (stopped) {
-        for (const t of stream.getTracks()) t.stop();
-        return;
-      }
+    }
+
+    function listen() {
       audio = new AudioContext();
       const a = audio.createAnalyser();
       a.fftSize = buf.length;
@@ -8935,6 +9602,23 @@ section.flat .status:empty { display: none; }
       audio.addEventListener('statechange', onState);
       onState();
       frame();
+    }
+
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+      } catch (err) {
+        mask.stop();
+        if (!stopped) micFailed(err);
+        return;
+      }
+      if (stopped) {
+        for (const t of stream.getTracks()) t.stop();
+        return;
+      }
+      listen();
     })();
 
     return {
@@ -8969,156 +9653,16 @@ section.flat .status:empty { display: none; }
   });
 })();
 
-// ==================== src/scripts/lag/main.js =====================================
-// Fake lag: the game acts as if the connection is bad. At random gaps (shorter at higher levels)
-// an episode is picked from EFFECTS by weight: spinners, loading bars, chunky or blurry Street
-// View, a ping readout. Higher levels also get in the way: held or late input, snapping back to
-// the last panorama, slow guesses, late or misplaced pins, a stuttering view.
-// Every episode ends on its own timer. It all happens only during a round, leaving the round ends
-// every episode, and held input is always sent, never lost.
+// ==================== src/scripts/lag/looks.js ====================================
+// Fake lag's looks: the overlay's styles, the spinners, loading-bar behaviours and labels, and
+// the random helpers they use.
 (() => {
   const ggs = globalThis.__ggs;
-  const INPUT = [
-    'pointerdown',
-    'pointermove',
-    'pointerup',
-    'pointercancel',
-    'mousedown',
-    'mousemove',
-    'mouseup',
-    'click',
-    'dblclick',
-    'contextmenu',
-    'wheel',
-    'keydown',
-    'keyup',
-  ];
-  // Street View's own keys (as core/lock.js)
-  const KEYS = [
-    'ArrowUp',
-    'ArrowDown',
-    'ArrowLeft',
-    'ArrowRight',
-    'w',
-    'a',
-    's',
-    'd',
-    'W',
-    'A',
-    'S',
-    'D',
-    '+',
-    '-',
-    '=',
-    '_',
-    'z',
-    'x',
-    'Z',
-    'X',
-    'Backspace',
-  ];
-  // Input events kept during one freeze. Mouse moves past this are dropped.
-  const MAX_HELD = 500;
   const between = (lo, hi) => lo + Math.random() * (hi - lo);
   const lerp = (a, b, t) => a + (b - a) * t;
   const pick = list => list[Math.floor(Math.random() * list.length)];
   const roll = p => Math.random() < p;
-  const inRound = () => !!ggs.maps.guessMapElement() && !!ggs.view.panoElement();
-  const panoRect = () => ggs.view.panoElement()?.getBoundingClientRect() ?? null;
 
-  // How bad, from the level (1-10). s runs 0..1 over the slider. hard is 0 below 5, then rises as
-  // a square: 5 is mildly annoying, 10 barely playable.
-  // Gaps between episodes: about 45-90 s at 1, 16-32 s at 5, 7-14 s at 7, 1.5-3 s at 10.
-  function knobs(level) {
-    const s = (level - 1) / 9;
-    const hard = level >= 5 ? ((level - 4) / 6) ** 2 : 0;
-    const gap = 45 * (1 / 30) ** (s ** 1.5);
-    return { level, s, hard, gap: [gap, 2 * gap], len: 1 + s * s, double: hard * 0.7 };
-  }
-
-  // ---- chunky tiles (core/tiles.js) ----
-  // While `chunk` is set, each tile is drawn from a copy `chunk` times smaller, and a few are left
-  // grey or blurred as if still loading.
-  // A whole-texture upload gets the small copy itself, sized to a power of two (so WebGL 1 can
-  // still mipmap and wrap it) and magnified NEAREST. That is next to free, where a full-size copy
-  // of every tile stalled the game for up to a second. LINEAR (the default, and what Street View
-  // uses) comes back with the full tile. It isn't read back with gl.getTexParameter, which waits
-  // for the GPU process.
-  // Partial uploads (texSubImage2D, or a mip level) must keep their size, so they get a full-size
-  // copy.
-  let chunk = 0;
-  let greyShare = 0;
-  const GREY = '#8e9094';
-  const pot = n => 2 ** Math.max(0, Math.round(Math.log2(n)));
-  const sharp = new WeakSet(); // textures drawn NEAREST
-  function nearest(rec, on) {
-    const { gl, tex, target } = rec;
-    if (on === sharp.has(tex)) return;
-    const prev = gl.getParameter(ggs.glBinding(gl, target)[1]);
-    gl.bindTexture(target, tex);
-    gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, on ? gl.NEAREST : gl.LINEAR);
-    gl.bindTexture(target, prev);
-    if (on) sharp.add(tex);
-    else sharp.delete(tex);
-  }
-  // One canvas per size, reused. A whole-texture upload copies it before the filter runs again,
-  // and nothing after this filter keeps it, so hundreds of tiles don't leave hundreds of canvases.
-  const scratches = new Map();
-  function scratch(w, h) {
-    const key = `${w}x${h}`;
-    if (!scratches.has(key)) {
-      const c = new OffscreenCanvas(w, h);
-      c.getContext('2d').globalCompositeOperation = 'copy'; // each tile replaces the last
-      scratches.set(key, c);
-    }
-    return scratches.get(key);
-  }
-  function lowRes(rec, source) {
-    const w = source.naturalWidth || source.width || 512;
-    const h = source.naturalHeight || source.height || 512;
-    const whole = rec.name === 'texImage2D' && rec.args[1] === 0;
-    const r = Math.random();
-    const grey = r < greyShare;
-    const blurry = !grey && r < 2 * greyShare;
-    const k = blurry ? 48 : chunk;
-    const size = n => (grey ? 1 : whole ? pot(n / k) : Math.max(1, Math.round(n / k)));
-    const small = whole ? scratch(size(w), size(h)) : new OffscreenCanvas(size(w), size(h));
-    const g = small.getContext('2d');
-    if (grey) {
-      g.fillStyle = GREY;
-      g.fillRect(0, 0, 1, 1);
-    } else {
-      g.drawImage(source, 0, 0, small.width, small.height);
-    }
-    if (whole) {
-      nearest(rec, !grey && !blurry);
-      return small;
-    }
-    const out = new OffscreenCanvas(w, h);
-    const o = out.getContext('2d');
-    o.imageSmoothingEnabled = blurry;
-    o.drawImage(small, 0, 0, w, h);
-    return out;
-  }
-  ggs.tiles.filter((rec, source) => {
-    if (chunk) return lowRes(rec, source);
-    if (sharp.has(rec.tex)) nearest(rec, false);
-    return source;
-  }, 5); // after greyscale (4)
-
-  // ---- panoramas, for rubber-banding and stutter ----
-  const panos = new Map(); // StreetViewPanorama -> its element
-  let onMove = null; // the running script's pano_changed handler
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    panos.set(p, args[0]);
-    window.google.maps.event.addListener(p, 'pano_changed', () => onMove?.(p));
-  });
-  function pano() {
-    const el = ggs.view.panoElement();
-    return el && [...panos].reverse().find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
-  }
-
-  // ---- looks ----
   const CSS = `
     :host { all: initial; position: fixed; inset: 0; z-index: 2147481000; pointer-events: none;
             font: 600 13px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -9249,20 +9793,272 @@ section.flat .status:empty { display: none; }
   };
   const LABELS = ['Loading panorama…', 'Downloading tiles…', 'Syncing round…', 'Buffering…'];
 
-  function start(cfg) {
-    let level = Number(cfg.level) || 4;
-    let timer = 0;
-    let snapUntil = 0;
+  ggs.lag ??= {};
+  Object.assign(ggs.lag, { between, lerp, pick, roll, CSS, SPINNERS, FREEZE_SPINNERS, BARS, LABELS });
+})();
+
+// ==================== src/scripts/lag/view.js =====================================
+// Fake lag's hold on Street View itself: whether a round is on, where the panorama is, chunky
+// or grey tiles while loading is faked, and the panorama object (for rubber-banding and stutter).
+(() => {
+  const ggs = globalThis.__ggs;
+  const inRound = () => !!ggs.maps.guessMapElement() && !!ggs.view.panoElement();
+  const panoRect = () => ggs.view.panoElement()?.getBoundingClientRect() ?? null;
+
+  // ---- chunky tiles (core/tiles.js) ----
+  // While `chunk` is set, each tile is drawn from a copy `chunk` times smaller, and a few are left
+  // grey or blurred as if still loading.
+  // A whole-texture upload gets the small copy itself, sized to a power of two (so WebGL 1 can
+  // still mipmap and wrap it) and magnified NEAREST. That is next to free, where a full-size copy
+  // of every tile stalled the game for up to a second. LINEAR (the default, and what Street View
+  // uses) comes back with the full tile. It isn't read back with gl.getTexParameter, which waits
+  // for the GPU process.
+  // Partial uploads (texSubImage2D, or a mip level) must keep their size, so they get a full-size
+  // copy.
+  let chunk = 0;
+  let greyShare = 0;
+  const GREY = '#8e9094';
+  const pot = n => 2 ** Math.max(0, Math.round(Math.log2(n)));
+  const sharp = new WeakSet(); // textures drawn NEAREST
+  function nearest(rec, on) {
+    const { gl, tex, target } = rec;
+    if (on === sharp.has(tex)) return;
+    const prev = gl.getParameter(ggs.glBinding(gl, target)[1]);
+    gl.bindTexture(target, tex);
+    gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, on ? gl.NEAREST : gl.LINEAR);
+    gl.bindTexture(target, prev);
+    if (on) sharp.add(tex);
+    else sharp.delete(tex);
+  }
+  // One canvas per size, reused. A whole-texture upload copies it before the filter runs again,
+  // and nothing after this filter keeps it, so hundreds of tiles don't leave hundreds of canvases.
+  const scratches = new Map();
+  function scratch(w, h) {
+    const key = `${w}x${h}`;
+    if (!scratches.has(key)) {
+      const c = new OffscreenCanvas(w, h);
+      c.getContext('2d').globalCompositeOperation = 'copy'; // each tile replaces the last
+      scratches.set(key, c);
+    }
+    return scratches.get(key);
+  }
+  function lowRes(rec, source) {
+    const w = source.naturalWidth || source.width || 512;
+    const h = source.naturalHeight || source.height || 512;
+    const whole = rec.name === 'texImage2D' && rec.args[1] === 0;
+    const r = Math.random();
+    const grey = r < greyShare;
+    const blurry = !grey && r < 2 * greyShare;
+    const k = blurry ? 48 : chunk;
+    const size = n => (grey ? 1 : whole ? pot(n / k) : Math.max(1, Math.round(n / k)));
+    const small = whole ? scratch(size(w), size(h)) : new OffscreenCanvas(size(w), size(h));
+    const g = small.getContext('2d');
+    if (grey) {
+      g.fillStyle = GREY;
+      g.fillRect(0, 0, 1, 1);
+    } else {
+      g.drawImage(source, 0, 0, small.width, small.height);
+    }
+    if (whole) {
+      nearest(rec, !grey && !blurry);
+      return small;
+    }
+    const out = new OffscreenCanvas(w, h);
+    const o = out.getContext('2d');
+    o.imageSmoothingEnabled = blurry;
+    o.drawImage(small, 0, 0, w, h);
+    return out;
+  }
+  ggs.tiles.filter((rec, source) => {
+    if (chunk) return lowRes(rec, source);
+    if (sharp.has(rec.tex)) nearest(rec, false);
+    return source;
+  }, 5); // after greyscale (4)
+
+  // Sets the tiles' coarseness (`chunk` times smaller, 0 for normal) and how many are left grey
+  // or blurred, then redraws the tiles already on screen.
+  function setChunky(size, grey = greyShare) {
+    chunk = size;
+    greyShare = grey;
+    ggs.tiles.replay();
+  }
+  const chunky = {
+    start: setChunky,
+    // halves the coarseness, like tiles coming in at a better resolution
+    sharpen: grey => setChunky(Math.max(2, chunk >> 1), grey),
+    end: () => setChunky(0, 0),
+  };
+
+  // ---- panoramas, for rubber-banding and stutter ----
+  const panos = new Map(); // StreetViewPanorama -> its element
+  ggs.lag ??= {};
+  ggs.lag.onMove = null; // the running script's pano_changed handler
+  ggs.maps.hook('StreetViewPanorama', (p, args) => {
+    panos.set(p, args[0]);
+    window.google.maps.event.addListener(p, 'pano_changed', () => ggs.lag.onMove?.(p));
+  });
+  function pano() {
+    const el = ggs.view.panoElement();
+    return el && [...panos].reverse().find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
+  }
+
+  Object.assign(ggs.lag, { inRound, panoRect, chunky, pano });
+})();
+
+// ==================== src/scripts/lag/input.js ====================================
+// Fake lag's Street View input queue: real input to the panorama is held during a freeze, or
+// sent `delay` ms late. Held input is always sent, never lost: all at once when the freeze ends,
+// and anything left when the script stops.
+(() => {
+  const ggs = globalThis.__ggs;
+  const INPUT = [
+    'pointerdown',
+    'pointermove',
+    'pointerup',
+    'pointercancel',
+    'mousedown',
+    'mousemove',
+    'mouseup',
+    'click',
+    'dblclick',
+    'contextmenu',
+    'wheel',
+    'keydown',
+    'keyup',
+  ];
+  // Street View's own keys (as core/lock.js)
+  const KEYS = [
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'w',
+    'a',
+    's',
+    'd',
+    'W',
+    'A',
+    'S',
+    'D',
+    '+',
+    '-',
+    '=',
+    '_',
+    'z',
+    'x',
+    'Z',
+    'X',
+    'Backspace',
+  ];
+  // Input events kept during one freeze. Mouse moves past this are dropped.
+  const MAX_HELD = 500;
+
+  // Starts listening; freezes nest (each freeze() needs its own thaw()).
+  function heldInput() {
+    let freezes = 0;
+    let delay = 0;
+    // Real (trusted) events only, so the copies sent below, and other scripts' copies, pass.
+    const queue = []; // { e: a copy, target, at, due }, in order
+    let pump = 0;
+    let pressed = false;
+    function wanted(e) {
+      if (!e.isTrusted || !ggs.lag.inRound()) return false;
+      if (e.type.startsWith('key')) return wantedKey(e);
+      const t = e.target;
+      if (pressed) return true;
+      return !!ggs.view.panoElement()?.contains(t) && !t.closest?.('[data-ggs-view], [data-ggs-ui]');
+    }
+    const wantedKey = e =>
+      KEYS.includes(e.key) &&
+      !ggs.isTyping(e) &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !ggs.maps.guessMapElement()?.contains(e.target);
+    // a held press: its drag and release are held too, wherever they go
+    function trackPress(e, take) {
+      if (!e.isTrusted) return;
+      if (e.type === 'pointerdown' || e.type === 'mousedown') pressed = !!take;
+      // The release ends it, after the rest of its sequence (mouseup, click) in this task. On
+      // pointerup too, since a held pointerdown means the browser sends no mouseup at all.
+      if (/^(pointerup|mouseup|pointercancel)$/.test(e.type)) {
+        setTimeout(() => {
+          pressed = false;
+        });
+      }
+    }
+    function hold(e) {
+      const take = (freezes || delay || queue.length) && wanted(e);
+      trackPress(e, take);
+      if (!take) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (queue.length > MAX_HELD && e.type.endsWith('move')) return;
+      const now = performance.now();
+      const due = freezes ? Infinity : Math.max(now + delay, queue.at(-1)?.due ?? 0);
+      queue.push({ e: ggs.view.copyEvent(e), target: e.target, at: now, due });
+      run();
+    }
+    const send = q => {
+      if (q.target.isConnected) q.target.dispatchEvent(q.e);
+    };
+    function run() {
+      clearTimeout(pump);
+      const now = performance.now();
+      while (queue.length && queue[0].due <= now) send(queue.shift());
+      if (queue.length && queue[0].due < Infinity) pump = setTimeout(run, queue[0].due - now);
+    }
+    // A freeze ended: everything held happens at once, squeezed into under half a second.
+    function release() {
+      const held = queue.filter(q => q.due === Infinity);
+      const now = performance.now();
+      const t0 = held[0]?.at;
+      const span = (held.at(-1)?.at ?? 0) - t0;
+      for (const q of held) q.due = now + (q.at - t0) * Math.min(0.15, 400 / (span || 1));
+      run();
+    }
+    const opts = { capture: true, passive: false };
+    for (const t of INPUT) window.addEventListener(t, hold, opts);
+
+    return {
+      freeze() {
+        freezes++;
+      },
+      thaw() {
+        freezes--;
+        if (!freezes) release();
+      },
+      setDelay(ms) {
+        delay = ms;
+      },
+      stop() {
+        for (const t of INPUT) window.removeEventListener(t, hold, opts);
+        clearTimeout(pump);
+        queue.splice(0).forEach(send); // anything still held goes now, in order
+      },
+    };
+  }
+
+  ggs.lag ??= {};
+  ggs.lag.heldInput = heldInput;
+})();
+
+// ==================== src/scripts/lag/effects.js ==================================
+// Fake lag's episodes: each one shows its spinners, bars or readouts, or gets in the way, and
+// undoes all of it when it ends on its own timer. EFFECTS lists what an episode can be.
+(() => {
+  const ggs = globalThis.__ggs;
+  const L = ggs.lag;
+  const { between, lerp, pick, roll, SPINNERS, FREEZE_SPINNERS, BARS, LABELS } = L;
+
+  // Episodes drawn into `root` (the overlay's shadow root); freezes and input delay go to `input`
+  // (input.js).
+  function effects(root, input) {
     const running = new Set();
-    const host = document.createElement('div');
-    host.setAttribute('data-ggs-ui', ''); // keys on the fake dialog's buttons stay away from GeoGuessr
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style>`;
-    document.body.append(host);
 
     // A random spot over the panorama, away from its edges and outside the guess map's area.
     function spot() {
-      const r = panoRect();
+      const r = L.panoRect();
       const g = ggs.view.guessArea();
       if (!r || r.width < 200) return null;
       for (let i = 0; i < 12; i++) {
@@ -9292,21 +10088,27 @@ section.flat .status:empty { display: none; }
       ep.end = () => {
         if (!running.delete(ep)) return;
         ep.timers.forEach(clearTimeout); // clears intervals too
-        for (const el of ep.els) {
-          el.classList.add('out');
-          setTimeout(() => el.remove(), 260);
-        }
-        for (const fn of ep.undo) {
-          try {
-            fn();
-          } catch (err) {
-            ggs.log('lag: undo failed', err);
-          }
-        }
+        fadeOut(ep.els);
+        undo(ep.undo);
       };
       running.add(ep);
       ep.after(ms, ep.end);
       return ep;
+    }
+    function fadeOut(els) {
+      for (const el of els) {
+        el.classList.add('out');
+        setTimeout(() => el.remove(), 260);
+      }
+    }
+    function undo(steps) {
+      for (const fn of steps) {
+        try {
+          fn();
+        } catch (err) {
+          ggs.log('lag: undo failed', err);
+        }
+      }
     }
     const busy = id => [...running].some(ep => ep.id === id);
     const endAll = () => {
@@ -9320,7 +10122,7 @@ section.flat .status:empty { display: none; }
       s.live?.(el, ep);
     }
     function showPing(ep, ms = between(400, 1500)) {
-      const r = panoRect();
+      const r = L.panoRect();
       if (!r) return;
       const html =
         '<div class="lag dark ping">' + 'PING <b>0</b> ms · LOSS <b>0</b>% · FPS <b class="ok">0</b></div>';
@@ -9345,7 +10147,7 @@ section.flat .status:empty { display: none; }
     }
     function loadingBar(ep) {
       const step = BARS[pick(Object.keys(BARS))];
-      const r = panoRect();
+      const r = L.panoRect();
       let el;
       let at;
       let label = null;
@@ -9378,29 +10180,16 @@ section.flat .status:empty { display: none; }
         else if (label && p > 30) label.textContent = label.dataset.text;
       });
     }
+    // sharpens in steps, like tiles coming in at better resolutions
     function blocky(ep, k, ms) {
-      chunk = Math.round(lerp(10, 40, k.s * k.s));
-      greyShare = lerp(0.04, 0.25, k.s * k.s);
-      ggs.tiles.replay();
-      // sharpens in steps, like tiles coming in at better resolutions
-      ep.after(ms * 0.55, () => {
-        chunk = Math.max(2, chunk >> 1);
-        greyShare = 0;
-        ggs.tiles.replay();
-      });
-      ep.after(ms * 0.8, () => {
-        chunk = Math.max(2, chunk >> 1);
-        ggs.tiles.replay();
-      });
-      ep.finally(() => {
-        chunk = 0;
-        greyShare = 0;
-        ggs.tiles.replay();
-      });
+      L.chunky.start(Math.round(lerp(10, 40, k.s * k.s)), lerp(0.04, 0.25, k.s * k.s));
+      ep.after(ms * 0.55, () => L.chunky.sharpen(0));
+      ep.after(ms * 0.8, () => L.chunky.sharpen());
+      ep.finally(L.chunky.end);
       if (roll(0.5)) spinner(ep, pick(['ring', 'percent', 'tube']));
     }
     function lowQuality(ep, k, ms) {
-      const r = panoRect();
+      const r = L.panoRect();
       const badge =
         r &&
         ep.show('<div class="lag dark badge">Quality: Auto <b>144p</b></div>', [r.right - 120, r.top + 70]);
@@ -9417,27 +10206,20 @@ section.flat .status:empty { display: none; }
       });
       ep.finally(() => ggs.view.effect('lag-quality', null));
     }
-    // Shared with the Street View input queue below.
-    let freezes = 0;
-    let delay = 0;
     function freeze(ep) {
-      freezes++;
-      ep.finally(() => {
-        freezes--;
-        if (!freezes) thaw();
-      });
+      input.freeze();
+      ep.finally(input.thaw);
       ep.after(between(300, 800), () => spinner(ep, pick(FREEZE_SPINNERS)));
     }
     function inputDelay(ep, k) {
-      delay = Math.round(lerp(150, 900, k.hard));
-      ep.finally(() => {
-        delay = 0;
-      });
+      const delay = Math.round(lerp(150, 900, k.hard));
+      input.setDelay(delay);
+      ep.finally(() => input.setDelay(0));
       showPing(ep, delay);
     }
     // the view and the guess map jump back to where they were half a second ago
     function stutter(ep) {
-      const p = pano();
+      const p = L.pano();
       const map = ggs.maps.findGuessMap();
       const past = [];
       ep.every(100, () => {
@@ -9447,19 +10229,22 @@ section.flat .status:empty { display: none; }
       ep.every(between(300, 550), () => {
         const old = past[0];
         if (!old || roll(0.3)) return;
-        try {
-          if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch });
-        } catch {}
-        try {
-          if (old.centre) map.setCenter(old.centre);
-        } catch {}
+        jumpBack(p, map, old);
         past.length = 0;
       });
       showPing(ep);
     }
+    function jumpBack(p, map, old) {
+      try {
+        if (old.pov) p.setPov({ heading: old.pov.heading, pitch: old.pov.pitch });
+      } catch {}
+      try {
+        if (old.centre) map.setCenter(old.centre);
+      } catch {}
+    }
     // a washed-out panorama with a browser-style "Page Unresponsive" box; either button closes it
     function hang(ep) {
-      const r = panoRect();
+      const r = L.panoRect();
       if (!r) return;
       ep.show('<div class="fog"></div>', [r.left, r.top], { width: `${r.width}px`, height: `${r.height}px` });
       const box = ep.show(
@@ -9489,7 +10274,8 @@ section.flat .status:empty { display: none; }
       { id: 'stutter', from: 6, weight: 2, ms: [3000, 6000], run: stutter, grows: true },
       { id: 'hang', from: 7, weight: 1, ms: [4000, 7000], run: hang },
     ];
-    function launch(k) {
+    // One episode, picked by weight from those allowed at `level` and not already running.
+    function launch(k, level) {
       const list = EFFECTS.filter(e => level >= e.from && !busy(e.id)).map(e => [
         e,
         e.weight * (e.grows ? 1 + 3 * k.hard : 1),
@@ -9509,28 +10295,73 @@ section.flat .status:empty { display: none; }
         ep.end();
       }
     }
+
+    return { episode, busy, endAll, spinner, spot, launch, active: () => running.size > 0 };
+  }
+
+  L.effects = effects;
+})();
+
+// ==================== src/scripts/lag/main.js =====================================
+// Fake lag: the game acts as if the connection is bad. At random gaps (shorter at higher levels)
+// an episode is picked from EFFECTS (effects.js) by weight: spinners, loading bars, chunky or
+// blurry Street View, a ping readout. Higher levels also get in the way: held or late input,
+// snapping back to the last panorama, slow guesses, late or misplaced pins, a stuttering view.
+// Every episode ends on its own timer. It all happens only during a round, leaving the round ends
+// every episode, and held input is always sent, never lost. This file schedules the episodes and
+// does the rubber-banding and the guess map's part.
+(() => {
+  const ggs = globalThis.__ggs;
+  const L = ggs.lag;
+  const { between, pick, roll, inRound } = L;
+
+  // How bad, from the level (1-10). s runs 0..1 over the slider. hard is 0 below 5, then rises as
+  // a square: 5 is mildly annoying, 10 barely playable.
+  // Gaps between episodes: about 45-90 s at 1, 16-32 s at 5, 7-14 s at 7, 1.5-3 s at 10.
+  function knobs(level) {
+    const s = (level - 1) / 9;
+    const hard = level >= 5 ? ((level - 4) / 6) ** 2 : 0;
+    const gap = 45 * (1 / 30) ** (s ** 1.5);
+    return { level, s, hard, gap: [gap, 2 * gap], len: 1 + s * s, double: hard * 0.7 };
+  }
+
+  function start(cfg) {
+    let level = Number(cfg.level) || 4;
+    let timer = 0;
+    let snapUntil = 0;
+    const host = document.createElement('div');
+    host.setAttribute('data-ggs-ui', ''); // keys on the fake dialog's buttons stay away from GeoGuessr
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = `<style>${L.CSS}</style>`;
+    document.body.append(host);
+    const input = L.heldInput();
+    const fx = L.effects(root, input);
+
     // The first episode comes at once on switching on, and soon in a new round: 1-3 s, plus up to
     // 8 s more at level 1.
     function next(first, now) {
       const k = knobs(level);
       clearTimeout(timer);
-      const wait = now
-        ? 100
-        : first
-          ? between(1000, 3000) + (1 - k.s) * between(0, 8000)
-          : between(...k.gap) * 1000;
-      timer = setTimeout(() => {
-        if (inRound()) {
-          launch(k);
-          if (roll(k.double)) launch(k);
-        }
-        next(false);
-      }, wait);
+      timer = setTimeout(
+        () => {
+          if (inRound()) {
+            fx.launch(k, level);
+            if (roll(k.double)) fx.launch(k, level);
+          }
+          next(false);
+        },
+        waitFor(k, first, now),
+      );
+    }
+    function waitFor(k, first, now) {
+      if (now) return 100;
+      if (first) return between(1000, 3000) + (1 - k.s) * between(0, 8000);
+      return between(...k.gap) * 1000;
     }
     next(true, true);
     let roundSeen = ggs.game.roundKey();
     const watch = setInterval(() => {
-      if (!inRound() && running.size) endAll();
+      if (!inRound() && fx.active()) fx.endAll();
       const now = ggs.game.roundKey();
       if (inRound() && now !== roundSeen) {
         roundSeen = now;
@@ -9538,85 +10369,23 @@ section.flat .status:empty { display: none; }
       }
     }, 300);
 
-    // ---- Street View input: held during a freeze, or sent `delay` ms late ----
-    // Real (trusted) events only, so the copies sent below, and other scripts' copies, pass.
-    const queue = []; // { e: a copy, target, at, due }, in order
-    let pump = 0;
-    let pressed = false;
-    function wanted(e) {
-      if (!e.isTrusted || !inRound()) return false;
-      if (e.type.startsWith('key')) {
-        return (
-          KEYS.includes(e.key) &&
-          !ggs.isTyping(e) &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !ggs.maps.guessMapElement()?.contains(e.target)
-        );
-      }
-      const t = e.target;
-      if (pressed) return true;
-      return !!ggs.view.panoElement()?.contains(t) && !t.closest?.('[data-ggs-view], [data-ggs-ui]');
-    }
-    function hold(e) {
-      const take = (freezes || delay || queue.length) && wanted(e);
-      // a held press: its drag and release are held too, wherever they go
-      if (e.isTrusted && (e.type === 'pointerdown' || e.type === 'mousedown')) pressed = !!take;
-      // The release ends it, after the rest of its sequence (mouseup, click) in this task. On
-      // pointerup too, since a held pointerdown means the browser sends no mouseup at all.
-      if (e.isTrusted && /^(pointerup|mouseup|pointercancel)$/.test(e.type)) {
-        setTimeout(() => {
-          pressed = false;
-        });
-      }
-      if (!take) return;
-      e.stopImmediatePropagation();
-      e.preventDefault();
-      if (queue.length > MAX_HELD && e.type.endsWith('move')) return;
-      const now = performance.now();
-      const due = freezes ? Infinity : Math.max(now + delay, queue.at(-1)?.due ?? 0);
-      queue.push({ e: ggs.view.copyEvent(e), target: e.target, at: now, due });
-      run();
-    }
-    const send = q => {
-      if (q.target.isConnected) q.target.dispatchEvent(q.e);
-    };
-    function run() {
-      clearTimeout(pump);
-      const now = performance.now();
-      while (queue.length && queue[0].due <= now) send(queue.shift());
-      if (queue.length && queue[0].due < Infinity) pump = setTimeout(run, queue[0].due - now);
-    }
-    // A freeze ended: everything held happens at once, squeezed into under half a second.
-    function thaw() {
-      const held = queue.filter(q => q.due === Infinity);
-      const now = performance.now();
-      const t0 = held[0]?.at;
-      const span = (held.at(-1)?.at ?? 0) - t0;
-      for (const q of held) q.due = now + (q.at - t0) * Math.min(0.15, 400 / (span || 1));
-      run();
-    }
-    const opts = { capture: true, passive: false };
-    for (const t of INPUT) window.addEventListener(t, hold, opts);
-
     // ---- rubber-banding: a move sometimes snaps back to the last panorama for a moment ----
-    const last = new WeakMap(); // panorama -> { id, round }
-    onMove = p => {
+    const lastPano = new WeakMap(); // panorama -> { id, round }
+    L.onMove = p => {
       if (performance.now() < snapUntil) return;
       const id = p.getPano();
       const round = ggs.game.roundKey();
-      const was = last.get(p);
+      const was = lastPano.get(p);
       const k = knobs(level);
-      last.set(p, { id, round });
+      lastPano.set(p, { id, round });
       if (!was || was.round !== round || was.id === id || !inRound()) return;
-      if (busy('rubber') || !roll(k.hard * 0.6)) return;
-      const ep = episode('rubber', between(250, 600) + between(600, 1500) * k.len);
+      if (fx.busy('rubber') || !roll(k.hard * 0.6)) return;
+      const ep = fx.episode('rubber', between(250, 600) + between(600, 1500) * k.len);
       snapUntil = Infinity;
       ep.after(between(250, 600), () => {
         if (p.getPano() !== id) return;
         p.setPano(was.id);
-        spinner(ep, pick(['reconnect', 'server', 'ring']));
+        fx.spinner(ep, pick(['reconnect', 'server', 'ring']));
       });
       ep.finally(() => {
         if (p.getPano() === was.id && ggs.game.roundKey() === round) p.setPano(id);
@@ -9627,6 +10396,92 @@ section.flat .status:empty { display: none; }
     // ---- the guess map: slow guesses, late or misplaced pins (core/aid.js) ----
     let sending = false;
     let pinTimer = 0;
+    // The guess is held for a few seconds behind a "Sending guess…" pill, then sent.
+    function slowGuess(k) {
+      const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
+      const ep = fx.episode('guess', ms + 50);
+      const btn = ggs.maps.guessButton()?.getBoundingClientRect();
+      sending = true;
+      ep.finally(() => {
+        sending = false;
+      });
+      const el = ep.show(
+        '<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
+        btn ? [btn.left + btn.width / 2, btn.top - 26] : fx.spot(),
+      );
+      if (k.level >= 8) {
+        const say = text => {
+          el.querySelector('span').textContent = text;
+        };
+        ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
+        ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
+      }
+      ep.after(ms, sendGuess);
+    }
+    function sendGuess() {
+      if (!ggs.maps.guessMapElement()) return;
+      sending = 'pass';
+      try {
+        if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
+      } finally {
+        sending = true;
+      }
+    }
+    // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
+    // you clicked or not (from level 3, more often higher up).
+    function desync(ctx) {
+      let prev = null;
+      let last = null;
+      const ev = ctx.gm.event;
+      const a = ev.addListener(ctx.map, 'mousemove', e => {
+        prev = last;
+        last = e.latLng;
+      });
+      const b = ev.addListener(ctx.map, 'mouseout', () => {
+        const k = knobs(level);
+        const bounds = ctx.map.getBounds();
+        if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
+        const { lat, lng } = pastEdge(prev ?? ctx.map.getCenter(), last, bounds.toSpan());
+        clearTimeout(pinTimer);
+        pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
+      });
+      return () => {
+        a.remove();
+        b.remove();
+      };
+    }
+    // a point further along the move from `from` to `last`, 15-50% of the map's span beyond it
+    function pastEdge(from, last, span) {
+      const dy = last.lat() - from.lat();
+      const dx = last.lng() - from.lng();
+      const len = Math.hypot(dx, dy) || 1;
+      const far = between(0.15, 0.5);
+      const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
+      const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
+      return { lat, lng };
+    }
+    function misplace(latLng, ctx) {
+      const k = knobs(level);
+      clearTimeout(pinTimer);
+      if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
+      let lat = latLng.lat();
+      let lng = latLng.lng();
+      if (roll(0.5)) {
+        // late: the pin goes, then shows up a moment later
+        setTimeout(() => {
+          try {
+            ggs.maps.clearGuess();
+          } catch {}
+        });
+        pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
+      } else {
+        // off: it lands, then slides a few dozen pixels away
+        const px = between(15, 40) * (1 + k.hard);
+        const mPerPx = (156543 * Math.cos((lat * Math.PI) / 180)) / 2 ** (ctx.map?.getZoom() ?? 2);
+        ({ lat, lng } = ggs.aid.destination({ lat, lng }, (px * mPerPx) / 1000, between(0, 2 * Math.PI)));
+        pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
+      }
+    }
     const aid = ggs
       .aid('lag', {
         usesLocation: false,
@@ -9635,87 +10490,11 @@ section.flat .status:empty { display: none; }
           if (sending === 'pass') return null;
           if (sending) return false;
           if (!k.hard || !roll(0.15 + 0.8 * k.hard)) return null;
-          const ms = between(1500, 2500) * (1 + 1.5 * k.hard);
-          const ep = episode('guess', ms + 50);
-          const btn = ggs.maps.guessButton()?.getBoundingClientRect();
-          sending = true;
-          ep.finally(() => {
-            sending = false;
-          });
-          const el = ep.show(
-            '<div class="lag dark pill"><i></i><span>Sending guess…</span></div>',
-            btn ? [btn.left + btn.width / 2, btn.top - 26] : spot(),
-          );
-          if (k.level >= 8) {
-            const say = text => {
-              el.querySelector('span').textContent = text;
-            };
-            ep.after(ms * 0.4, () => say('Connection lost. Retrying (1/3)…'));
-            ep.after(ms * 0.7, () => say('Retrying (2/3)…'));
-          }
-          ep.after(ms, () => {
-            if (!ggs.maps.guessMapElement()) return;
-            sending = 'pass';
-            try {
-              if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
-            } finally {
-              sending = true;
-            }
-          });
+          slowGuess(k);
           return false;
         },
-        // Cursor desync: leaving the guess map sometimes drags the pin past the map's edge, whether
-        // you clicked or not (from level 3, more often higher up).
-        attach(ctx) {
-          let prev = null;
-          let last = null;
-          const ev = ctx.gm.event;
-          const a = ev.addListener(ctx.map, 'mousemove', e => {
-            prev = last;
-            last = e.latLng;
-          });
-          const b = ev.addListener(ctx.map, 'mouseout', () => {
-            const k = knobs(level);
-            const bounds = ctx.map.getBounds();
-            if (level < 3 || !last || !bounds || !roll(0.1 + 0.5 * k.s)) return;
-            const from = prev ?? ctx.map.getCenter();
-            const span = bounds.toSpan();
-            const dy = last.lat() - from.lat();
-            const dx = last.lng() - from.lng();
-            const len = Math.hypot(dx, dy) || 1;
-            const far = between(0.15, 0.5);
-            const lat = Math.max(-80, Math.min(80, last.lat() + (dy / len) * span.lat() * far));
-            const lng = ((last.lng() + (dx / len) * span.lng() * far + 540) % 360) - 180;
-            clearTimeout(pinTimer);
-            pinTimer = setTimeout(() => place(lat, lng), between(150, 600));
-          });
-          return () => {
-            a.remove();
-            b.remove();
-          };
-        },
-        click(latLng, ctx) {
-          const k = knobs(level);
-          clearTimeout(pinTimer);
-          if (!k.hard || !roll(0.1 + 0.7 * k.hard)) return;
-          let lat = latLng.lat();
-          let lng = latLng.lng();
-          if (roll(0.5)) {
-            // late: the pin goes, then shows up a moment later
-            setTimeout(() => {
-              try {
-                ggs.maps.clearGuess();
-              } catch {}
-            });
-            pinTimer = setTimeout(() => place(lat, lng), between(400, 1200) * (1 + k.hard));
-          } else {
-            // off: it lands, then slides a few dozen pixels away
-            const px = between(15, 40) * (1 + k.hard);
-            const mPerPx = (156543 * Math.cos((lat * Math.PI) / 180)) / 2 ** (ctx.map?.getZoom() ?? 2);
-            ({ lat, lng } = ggs.aid.destination({ lat, lng }, (px * mPerPx) / 1000, between(0, 2 * Math.PI)));
-            pinTimer = setTimeout(() => place(lat, lng), between(120, 350));
-          }
-        },
+        attach: desync,
+        click: misplace,
       })
       .start(cfg);
     const place = (lat, lng) => {
@@ -9730,11 +10509,9 @@ section.flat .status:empty { display: none; }
         clearTimeout(timer);
         clearInterval(watch);
         clearTimeout(pinTimer);
-        onMove = null;
-        endAll();
-        for (const t of INPUT) window.removeEventListener(t, hold, opts);
-        clearTimeout(pump);
-        queue.splice(0).forEach(send); // anything still held goes now, in order
+        L.onMove = null;
+        fx.endAll();
+        input.stop();
         aid.stop();
         host.remove();
       },
@@ -9973,6 +10750,22 @@ section.flat .status:empty { display: none; }
       if (pano) Object.assign(pano.style, saved);
       pano = null;
     }
+    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
+    function pin(el) {
+      unpin();
+      el.append(host);
+      pano = el;
+      saved = { isolation: el.style.isolation, position: el.style.position };
+      el.style.isolation = 'isolate';
+      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+    }
+    const resized = () => {
+      const dpr = devicePixelRatio || 1;
+      return (
+        canvas.width !== Math.round(host.clientWidth * dpr) ||
+        canvas.height !== Math.round(host.clientHeight * dpr)
+      );
+    };
     function tick() {
       const el = ggs.maps.guessMapElement() ? ggs.view.panoElement() : null;
       if (!el) {
@@ -9982,20 +10775,8 @@ section.flat .status:empty { display: none; }
       }
       const key = ggs.game.roundKey();
       if (round?.key !== key) newRound(key);
-      if (host.parentElement !== el) {
-        unpin();
-        el.append(host);
-        // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
-        pano = el;
-        saved = { isolation: el.style.isolation, position: el.style.position };
-        el.style.isolation = 'isolate';
-        if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
-      }
-      if (
-        canvas.width !== Math.round(host.clientWidth * (devicePixelRatio || 1)) ||
-        canvas.height !== Math.round(host.clientHeight * (devicePixelRatio || 1))
-      )
-        redraw();
+      if (host.parentElement !== el) pin(el);
+      if (resized()) redraw();
     }
     const timer = setInterval(tick, 150);
     tick();
@@ -10192,6 +10973,16 @@ section.flat .status:empty { display: none; }
       status(running ? '' : 'Click the page to start');
     };
 
+    // refused: it switches itself off rather than stay on doing nothing
+    function micFailed(err) {
+      if (err?.name === 'NotAllowedError') {
+        ggs.saveSetting('jammer', { enabled: false });
+        status('Microphone blocked, so it was switched off');
+      } else {
+        status('No microphone');
+      }
+    }
+
     (async () => {
       try {
         // the browser's voice clean-up would cut the delayed copy out, so it's off
@@ -10199,14 +10990,7 @@ section.flat .status:empty { display: none; }
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
       } catch (err) {
-        if (stopped) return;
-        // refused: it switches itself off rather than stay on doing nothing
-        if (err?.name === 'NotAllowedError') {
-          ggs.saveSetting('jammer', { enabled: false });
-          status('Microphone blocked, so it was switched off');
-        } else {
-          status('No microphone');
-        }
+        if (!stopped) micFailed(err);
         return;
       }
       if (stopped) {
@@ -10359,21 +11143,20 @@ section.flat .status:empty { display: none; }
   };
 
   const pick = list => list[Math.floor(Math.random() * list.length)];
+  // a real choice, never "Random", so the panel can name it
+  const randomChoice = o => pick(o.choices.filter(c => !/^random/i.test(c.label))).value;
+  const RANDOM = {
+    slider: o => o.min + Math.floor(Math.random() * (o.max - o.min + 1)),
+    buttons: randomChoice,
+    select: randomChoice,
+    checkbox: () => Math.random() < 0.5,
+  };
   // Random settings: any slider stop, any choice, a coin per checkbox. A script with only
   // checkboxes gets at least one on.
   function randomCfg(meta, stored) {
     const cfg = ggs.config(meta, stored);
     const free = meta.options.filter(o => !KEEP[meta.id]?.includes(o.key) && o.type !== 'text');
-    for (const o of free) {
-      if (o.type === 'slider') {
-        cfg[o.key] = o.min + Math.floor(Math.random() * (o.max - o.min + 1));
-      } else if (o.type === 'buttons' || o.type === 'select') {
-        // a real choice, never "Random", so the panel can name it
-        cfg[o.key] = pick(o.choices.filter(c => !/^random/i.test(c.label))).value;
-      } else if (o.type === 'checkbox') {
-        cfg[o.key] = Math.random() < 0.5;
-      }
-    }
+    for (const o of free) if (RANDOM[o.type]) cfg[o.key] = RANDOM[o.type](o);
     const boxes = free.filter(o => o.type === 'checkbox');
     const onlyBoxes = boxes.length && boxes.length === meta.options.length;
     if (onlyBoxes && !boxes.some(o => cfg[o.key])) cfg[pick(boxes).key] = true;
@@ -10564,8 +11347,9 @@ section.flat .status:empty { display: none; }
     };
     // Slot time: the queued effect goes if it still fits and is ready. If it's still getting
     // ready, a quick one goes now and it waits for the next slot.
+    const stale = q => !(enabled(q.key) && fits(q.key)) || q.prep?.failed?.();
     function slot() {
-      if (queued && (!(enabled(queued.key) && fits(queued.key)) || queued.prep?.failed?.())) unqueue();
+      if (queued && stale(queued)) unqueue();
       let e = queued;
       if (e?.prep && !e.prep.ready()) e = choose(0, true);
       else queued = null;
@@ -10578,6 +11362,42 @@ section.flat .status:empty { display: none; }
     }
     queue(next);
 
+    // A new round starts clean, with the first effect FIRST_MS in. True if effects were on.
+    function resetRound(round) {
+      lastRound = round;
+      const gone = active.size > 0;
+      active.clear();
+      next = span = FIRST_MS;
+      unqueue();
+      queue(next);
+      return gone;
+    }
+    // Ran out, its round is over, or switched off meanwhile.
+    function ended(key, e, inRound, over, round) {
+      const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
+      return expired || (key in LOCKS ? userLock(key) : !enabled(key));
+    }
+    // A tile filter about to end fetches the real tiles again, so they come back at once.
+    function preloadIfDue(key, e) {
+      if (!TILES.includes(key) || e.round || e.left > PRELOAD_MS || e.preloaded) return;
+      e.preloaded = true;
+      ggs.tiles.preload();
+    }
+    // Counts the effects down and drops those that ended. True if any did.
+    function age(dt, inRound, over, round) {
+      let gone = false;
+      for (const [key, e] of active) {
+        if (inRound && !e.round) e.left -= dt;
+        if (ended(key, e, inRound, over, round)) {
+          active.delete(key);
+          gone = true;
+        } else {
+          preloadIfDue(key, e);
+        }
+      }
+      return gone;
+    }
+
     const tick = setInterval(() => {
       const now = performance.now();
       const dt = now - last;
@@ -10587,32 +11407,9 @@ section.flat .status:empty { display: none; }
       if (inRound) awaySince = 0;
       else awaySince ||= now;
       const over = !inRound && now - awaySince > AWAY_MS;
-      let gone = false;
-      if (round !== lastRound) {
-        lastRound = round;
-        gone = active.size > 0;
-        active.clear();
-        next = span = FIRST_MS;
-        unqueue();
-        queue(next);
-      }
-      for (const [key, e] of active) {
-        if (inRound && !e.round) e.left -= dt;
-        const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
-        if (expired) {
-          active.delete(key);
-          gone = true;
-        } else if (key in LOCKS ? userLock(key) : !enabled(key)) {
-          // switched off meanwhile
-          active.delete(key);
-          gone = true;
-        } else if (TILES.includes(key) && !e.round && e.left <= PRELOAD_MS && !e.preloaded) {
-          // fetch the real tiles again so they come back at once
-          e.preloaded = true;
-          ggs.tiles.preload();
-        }
-      }
-      if (gone) changed();
+      const reset = round !== lastRound && resetRound(round);
+      const gone = age(dt, inRound, over, round);
+      if (reset || gone) changed();
       if (inRound) next -= dt;
       if (inRound && next <= 0) {
         next = span = EVERY[cfg.every] * 1000;
@@ -10709,8 +11506,16 @@ section.flat .status:empty { display: none; }
   // The "316 playing" count: the leaf holding it, or its parent when the number and the word are
   // split across two leaves.
   const PLAYING = /^[\d,.]+\s*k?\s+playing$/i;
-  function markScores() {
-    const leaves = [...document.querySelectorAll('div, span, p')].filter(e => e.children.length === 0);
+  // The smallest ancestor of a label whose text has both "Round" and "Total"
+  function scoresPanel(label) {
+    for (let e = label.parentElement; e && e !== document.body; e = e.parentElement) {
+      const t = e.textContent;
+      if (/\bRound\b/i.test(t) && /\bTotal\b/i.test(t)) return e;
+    }
+    return null;
+  }
+
+  function markPlaying(leaves) {
     const playing = leaves.filter(e => {
       const t = e.textContent.trim();
       return /^playing$/i.test(t) || PLAYING.test(t);
@@ -10719,15 +11524,14 @@ section.flat .status:empty { display: none; }
       const p = l.parentElement;
       (p && p !== document.body && PLAYING.test(p.textContent.trim()) ? p : l).setAttribute(HIDDEN, '');
     }
-    const labels = leaves.filter(e => LABEL.test(e.textContent.trim()));
-    for (const l of labels) {
-      for (let e = l.parentElement; e && e !== document.body; e = e.parentElement) {
-        const t = e.textContent;
-        if (/\bRound\b/i.test(t) && /\bTotal\b/i.test(t)) {
-          if (e.getBoundingClientRect().width <= 600) e.setAttribute(HIDDEN, '');
-          break;
-        }
-      }
+  }
+
+  function markScores() {
+    const leaves = [...document.querySelectorAll('div, span, p')].filter(e => e.children.length === 0);
+    markPlaying(leaves);
+    for (const l of leaves.filter(e => LABEL.test(e.textContent.trim()))) {
+      const panel = scoresPanel(l);
+      if (panel && panel.getBoundingClientRect().width <= 600) panel.setAttribute(HIDDEN, '');
     }
   }
 
@@ -10776,45 +11580,52 @@ section.flat .status:empty { display: none; }
   let path = null;
   let check = 0;
 
+  function chaosOn() {
+    if (blocked || !ggs.chaos) return false;
+    const meta = ggs.registry.find(m => m.id === 'chaos');
+    return ggs.config(meta, settings).enabled;
+  }
+
+  // Brings one script in line with whether it's wanted: start, stop or pass on new settings.
+  function sync(meta, impl, cfg, wanted) {
+    const inst = running.get(meta.id);
+    try {
+      if (wanted && !inst) {
+        running.set(meta.id, impl.start(cfg));
+        ggs.debug(`started ${meta.id}`);
+      } else if (!wanted && inst) {
+        inst.stop();
+        running.delete(meta.id);
+        ggs.debug(`stopped ${meta.id}`);
+      } else if (inst) {
+        inst.update?.(cfg);
+      }
+    } catch (err) {
+      ggs.log(`${meta.id} failed`, err);
+    }
+  }
+
+  function implFor(meta) {
+    if (meta.ui) return null; // a settings-only entry, no script behind it
+    const impl = ggs.scripts[meta.id];
+    if (!impl) ggs.log(`no implementation loaded for "${meta.id}"`);
+    return impl;
+  }
+
+  const clashes = (meta, others) =>
+    [...others].some(m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id));
+
   function apply() {
     if (!settings) return;
-    const chaos =
-      !blocked &&
-      ggs.chaos &&
-      ggs.config(
-        ggs.registry.find(m => m.id === 'chaos'),
-        settings,
-      ).enabled;
-    const live = chaos ? ggs.chaos.mix(settings) : settings;
+    const live = chaosOn() ? ggs.chaos.mix(settings) : settings;
     const on = new Map(); // id -> meta, for scripts switched on in this pass
     for (const meta of ggs.registry) {
-      if (meta.ui) continue; // a settings-only entry, no script behind it
-      const impl = ggs.scripts[meta.id];
-      if (!impl) {
-        ggs.log(`no implementation loaded for "${meta.id}"`);
-        continue;
-      }
+      const impl = implFor(meta);
+      if (!impl) continue;
       const cfg = ggs.config(meta, live);
-      const clash = [...on.values()].some(
-        m => m.excludes?.includes(meta.id) || meta.excludes?.includes(m.id),
-      );
-      const wanted = cfg.enabled && !blocked && !clash;
+      const wanted = cfg.enabled && !blocked && !clashes(meta, on.values());
       if (wanted) on.set(meta.id, meta);
-      const inst = running.get(meta.id);
-      try {
-        if (wanted && !inst) {
-          running.set(meta.id, impl.start(cfg));
-          ggs.debug(`started ${meta.id}`);
-        } else if (!wanted && inst) {
-          inst.stop();
-          running.delete(meta.id);
-          ggs.debug(`stopped ${meta.id}`);
-        } else if (inst) {
-          inst.update?.(cfg);
-        }
-      } catch (err) {
-        ggs.log(`${meta.id} failed`, err);
-      }
+      sync(meta, impl, cfg, wanted);
     }
   }
 

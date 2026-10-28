@@ -133,44 +133,55 @@
   async function lookupRound(key) {
     const ctx = context();
     if (!ctx) return noRound('not in a game');
-    if (ctx.mode === 'standard') {
-      const j = await fetchGame(ctx);
-      const n = j?.round ?? j?.rounds?.length;
-      const cur = j?.rounds?.[n - 1];
-      if (!(n > 0)) return noRound('standard game data has no current round');
-      return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
-    }
+    if (ctx.mode === 'standard') return standardRound(ctx);
     if (ctx.mode !== 'duels') return noRound(`${ctx.mode} games aren't supported`);
     if ((await competitive()).competitive) return noRound('competitive game');
-    // The new round can reach the game data a few seconds after the guess map appears.
-    // Until then currentRoundNumber still names the round just played. So a round that has
-    // ended, or was already handed out for an earlier round, is waited on. After DUEL_TRIES
-    // it's taken anyway, since the roundKey can move on without a new round (e.g. a reload).
-    let last = null;
+    return duelRound(ctx, key);
+  }
+
+  async function standardRound(ctx) {
+    const j = await fetchGame(ctx);
+    const n = j?.round ?? j?.rounds?.length;
+    const cur = j?.rounds?.[n - 1];
+    if (!(n > 0)) return noRound('standard game data has no current round');
+    return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+  }
+
+  // The new round can reach the game data a few seconds after the guess map appears.
+  // Until then currentRoundNumber still names the round just played. So a round that has
+  // ended, or was already handed out for an earlier round, is waited on. After DUEL_TRIES
+  // it's taken anyway, since the roundKey can move on without a new round (e.g. a reload).
+  async function duelRound(ctx, key) {
+    let found = { why: 'no duel data' };
     for (let tries = 0; tries < DUEL_TRIES; tries++) {
       if (tries) await new Promise(r => setTimeout(r, 1000));
       if (roundKey() !== key) return noRound('moved on while waiting');
-      const j = await fetchGame(ctx);
-      const n = j?.currentRoundNumber;
-      const cur = j?.rounds?.find(r => r.roundNumber === n);
-      const p = cur?.panorama ?? cur;
-      if (!(n > 0) || typeof p?.lat !== 'number') {
-        last = `duel data has no location for round ${n}`;
-        continue;
-      }
-      const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
-      const seen = duelRounds.get(ctx.token);
-      last = { n, total: null, lat: p.lat, lng: p.lng };
-      if (ended || (seen && seen.n >= n && seen.key !== key)) {
-        if (tries === DUEL_TRIES - 1) ggs.log(`duel round ${n} still looks old, using it anyway`);
-        continue;
-      }
-      break;
+      found = duelRoundIn(await fetchGame(ctx), ctx.token, key);
+      if (found.round && !found.stale) break;
     }
-    if (typeof last === 'string' || !last) return noRound(last ?? 'no duel data');
-    duelRounds.set(ctx.token, { n: last.n, key });
-    return last;
+    return handOut(found, ctx.token, key);
   }
+
+  function handOut({ round, why, stale }, token, key) {
+    if (!round) return noRound(why);
+    if (stale) ggs.log(`duel round ${round.n} still looks old, using it anyway`);
+    duelRounds.set(token, { n: round.n, key });
+    return round;
+  }
+
+  // The duel's current round in its game data: { round, stale } or { why } when it has no
+  // location. stale means it has ended or was handed out for an earlier roundKey.
+  function duelRoundIn(j, token, key) {
+    const n = j?.currentRoundNumber;
+    const cur = j?.rounds?.find(r => r.roundNumber === n);
+    const p = cur?.panorama ?? cur;
+    if (!(n > 0) || typeof p?.lat !== 'number') return { why: `duel data has no location for round ${n}` };
+    const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
+    const seen = duelRounds.get(token);
+    const stale = ended || (seen && seen.n >= n && seen.key !== key);
+    return { round: { n, total: null, lat: p.lat, lng: p.lng }, stale };
+  }
+
   const roundLocation = () =>
     round().then(r => (typeof r?.lat === 'number' ? { lat: r.lat, lng: r.lng } : null));
 
@@ -190,6 +201,37 @@
     } catch {}
   }
 
+  function readLobby() {
+    try {
+      return sessionStorage.getItem(LOBBY_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  // The rated and party signs in the game data, wherever GeoGuessr has put them.
+  function gameSigns(j) {
+    const o = j?.options ?? {};
+    const types = [j?.gameContext?.type, o.gameContext?.type];
+    const flags = [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked];
+    const ids = [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId];
+    return {
+      rated: flags.some(v => v === true) || types.some(t => /rank|competitive|matchmak/i.test(t ?? '')),
+      party: ids.some(Boolean) || types.some(t => /party|private|friend/i.test(t ?? '')),
+    };
+  }
+
+  async function checkGame(ctx) {
+    const lobby = readLobby();
+    const j = await fetchGame(ctx).catch(() => null);
+    const { rated, party } = gameSigns(j);
+    const why =
+      `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
+      (j ? '' : ' (no game data)');
+    if (rated) return { competitive: true, why };
+    return { competitive: !(party || lobby === 'party'), why };
+  }
+
   // token -> Promise<{ competitive, why }>
   const guardCache = new Map();
   function competitive() {
@@ -201,31 +243,7 @@
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token))
-      guardCache.set(
-        ctx.token,
-        (async () => {
-          let lobby = null;
-          try {
-            lobby = sessionStorage.getItem(LOBBY_KEY);
-          } catch {}
-          const j = await fetchGame(ctx).catch(() => null);
-          const o = j?.options ?? {};
-          const types = [j?.gameContext?.type, o.gameContext?.type];
-          const rated =
-            [j?.isRated, o.isRated, j?.competitive, o.competitive, j?.isRanked, o.isRanked].some(
-              v => v === true,
-            ) || types.some(t => /rank|competitive|matchmak/i.test(t ?? ''));
-          const party =
-            [j?.partyId, o.partyId, j?.party, j?.lobbyId, o.lobbyId, j?.gameContext?.partyId].some(Boolean) ||
-            types.some(t => /party|private|friend/i.test(t ?? ''));
-          const why =
-            `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
-            (j ? '' : ' (no game data)');
-          if (rated) return { competitive: true, why };
-          return { competitive: !(party || lobby === 'party'), why };
-        })(),
-      );
+    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, checkGame(ctx));
     return guardCache.get(ctx.token);
   }
 

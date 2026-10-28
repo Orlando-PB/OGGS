@@ -82,21 +82,20 @@
   };
 
   const pick = list => list[Math.floor(Math.random() * list.length)];
+  // a real choice, never "Random", so the panel can name it
+  const randomChoice = o => pick(o.choices.filter(c => !/^random/i.test(c.label))).value;
+  const RANDOM = {
+    slider: o => o.min + Math.floor(Math.random() * (o.max - o.min + 1)),
+    buttons: randomChoice,
+    select: randomChoice,
+    checkbox: () => Math.random() < 0.5,
+  };
   // Random settings: any slider stop, any choice, a coin per checkbox. A script with only
   // checkboxes gets at least one on.
   function randomCfg(meta, stored) {
     const cfg = ggs.config(meta, stored);
     const free = meta.options.filter(o => !KEEP[meta.id]?.includes(o.key) && o.type !== 'text');
-    for (const o of free) {
-      if (o.type === 'slider') {
-        cfg[o.key] = o.min + Math.floor(Math.random() * (o.max - o.min + 1));
-      } else if (o.type === 'buttons' || o.type === 'select') {
-        // a real choice, never "Random", so the panel can name it
-        cfg[o.key] = pick(o.choices.filter(c => !/^random/i.test(c.label))).value;
-      } else if (o.type === 'checkbox') {
-        cfg[o.key] = Math.random() < 0.5;
-      }
-    }
+    for (const o of free) if (RANDOM[o.type]) cfg[o.key] = RANDOM[o.type](o);
     const boxes = free.filter(o => o.type === 'checkbox');
     const onlyBoxes = boxes.length && boxes.length === meta.options.length;
     if (onlyBoxes && !boxes.some(o => cfg[o.key])) cfg[pick(boxes).key] = true;
@@ -287,8 +286,9 @@
     };
     // Slot time: the queued effect goes if it still fits and is ready. If it's still getting
     // ready, a quick one goes now and it waits for the next slot.
+    const stale = q => !(enabled(q.key) && fits(q.key)) || q.prep?.failed?.();
     function slot() {
-      if (queued && (!(enabled(queued.key) && fits(queued.key)) || queued.prep?.failed?.())) unqueue();
+      if (queued && stale(queued)) unqueue();
       let e = queued;
       if (e?.prep && !e.prep.ready()) e = choose(0, true);
       else queued = null;
@@ -301,6 +301,42 @@
     }
     queue(next);
 
+    // A new round starts clean, with the first effect FIRST_MS in. True if effects were on.
+    function resetRound(round) {
+      lastRound = round;
+      const gone = active.size > 0;
+      active.clear();
+      next = span = FIRST_MS;
+      unqueue();
+      queue(next);
+      return gone;
+    }
+    // Ran out, its round is over, or switched off meanwhile.
+    function ended(key, e, inRound, over, round) {
+      const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
+      return expired || (key in LOCKS ? userLock(key) : !enabled(key));
+    }
+    // A tile filter about to end fetches the real tiles again, so they come back at once.
+    function preloadIfDue(key, e) {
+      if (!TILES.includes(key) || e.round || e.left > PRELOAD_MS || e.preloaded) return;
+      e.preloaded = true;
+      ggs.tiles.preload();
+    }
+    // Counts the effects down and drops those that ended. True if any did.
+    function age(dt, inRound, over, round) {
+      let gone = false;
+      for (const [key, e] of active) {
+        if (inRound && !e.round) e.left -= dt;
+        if (ended(key, e, inRound, over, round)) {
+          active.delete(key);
+          gone = true;
+        } else {
+          preloadIfDue(key, e);
+        }
+      }
+      return gone;
+    }
+
     const tick = setInterval(() => {
       const now = performance.now();
       const dt = now - last;
@@ -310,32 +346,9 @@
       if (inRound) awaySince = 0;
       else awaySince ||= now;
       const over = !inRound && now - awaySince > AWAY_MS;
-      let gone = false;
-      if (round !== lastRound) {
-        lastRound = round;
-        gone = active.size > 0;
-        active.clear();
-        next = span = FIRST_MS;
-        unqueue();
-        queue(next);
-      }
-      for (const [key, e] of active) {
-        if (inRound && !e.round) e.left -= dt;
-        const expired = e.round ? over || e.round !== round : inRound && e.left <= 0;
-        if (expired) {
-          active.delete(key);
-          gone = true;
-        } else if (key in LOCKS ? userLock(key) : !enabled(key)) {
-          // switched off meanwhile
-          active.delete(key);
-          gone = true;
-        } else if (TILES.includes(key) && !e.round && e.left <= PRELOAD_MS && !e.preloaded) {
-          // fetch the real tiles again so they come back at once
-          e.preloaded = true;
-          ggs.tiles.preload();
-        }
-      }
-      if (gone) changed();
+      const reset = round !== lastRound && resetRound(round);
+      const gone = age(dt, inRound, over, round);
+      if (reset || gone) changed();
       if (inRound) next -= dt;
       if (inRound && next <= 0) {
         next = span = EVERY[cfg.every] * 1000;

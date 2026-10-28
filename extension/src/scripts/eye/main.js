@@ -60,27 +60,17 @@
       open = want > open ? open + (want - open) * 0.3 : Math.max(want, open - SHUT_STEP);
     }
 
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        });
-      } catch (err) {
-        mask.stop();
-        if (stopped) return;
-        // refused: it switches itself off rather than stay on doing nothing
-        if (err?.name === 'NotAllowedError') {
-          ggs.saveSetting('eye', { enabled: false });
-          status('Microphone blocked, so it was switched off');
-        } else {
-          status('No microphone, so the eye stays open');
-        }
-        return;
+    // refused: it switches itself off rather than stay on doing nothing
+    function micFailed(err) {
+      if (err?.name === 'NotAllowedError') {
+        ggs.saveSetting('eye', { enabled: false });
+        status('Microphone blocked, so it was switched off');
+      } else {
+        status('No microphone, so the eye stays open');
       }
-      if (stopped) {
-        for (const t of stream.getTracks()) t.stop();
-        return;
-      }
+    }
+
+    function listen() {
       audio = new AudioContext();
       const a = audio.createAnalyser();
       a.fftSize = buf.length;
@@ -89,6 +79,23 @@
       audio.addEventListener('statechange', onState);
       onState();
       frame();
+    }
+
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+      } catch (err) {
+        mask.stop();
+        if (!stopped) micFailed(err);
+        return;
+      }
+      if (stopped) {
+        for (const t of stream.getTracks()) t.stop();
+        return;
+      }
+      listen();
     })();
 
     return {

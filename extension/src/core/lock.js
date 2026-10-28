@@ -97,21 +97,24 @@
     }
     st.raw(back);
   }
+  function hold(p, st, kind) {
+    try {
+      st.held[kind] = locks[kind](p, st);
+    } catch (err) {
+      ggs.log(`lock ${kind} failed`, err);
+    }
+  }
+  function release(st, kind) {
+    try {
+      st.held[kind]();
+    } catch {}
+    delete st.held[kind];
+  }
   function apply(p) {
     const st = panos.get(p);
     for (const kind of Object.keys(locks)) {
-      if (on(kind) && !st.held[kind]) {
-        try {
-          st.held[kind] = locks[kind](p, st);
-        } catch (err) {
-          ggs.log(`lock ${kind} failed`, err);
-        }
-      } else if (!on(kind) && st.held[kind]) {
-        try {
-          st.held[kind]();
-        } catch {}
-        delete st.held[kind];
-      }
+      if (on(kind) && !st.held[kind]) hold(p, st, kind);
+      else if (!on(kind) && st.held[kind]) release(st, kind);
     }
   }
 

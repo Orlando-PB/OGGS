@@ -175,43 +175,49 @@
       };
 
       const { bars, tape } = CAR;
-      bars.ys.forEach((y, i) => {
-        for (const side of [-1, 1]) {
-          const x0 = side * bars.inner;
-          const x1 = side * bars.outer;
-          const hw = bars.w;
-          if (!rect(x0, x1, y - hw, y + hw, bars.z)) continue;
-
-          ctx.save();
-          ctx.filter = 'blur(3px)';
-          const shadow = rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01);
-          fill(shadow, 'rgba(0,0,0,.28)');
-          ctx.restore();
-
-          const metal = ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384'];
-          shade(x0, x1, y, hw, bars.z, metal);
-          fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
-          fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
-          fill(cap(x1, y, hw, side, bars.z), '#b9babb');
-          fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
-
-          if (i === tape.bar && side === tape.side) {
-            const tx0 = side * (bars.outer - tape.len);
-            const tx1 = x1 + side * 0.015;
-            const tw = tape.w;
-            const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
-            shade(tx0, tx1, y, tw, bars.z + 0.002, black);
-            fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
-            for (const k of [0.3, 0.62]) {
-              const x = side * (bars.outer - tape.len * k);
-              fill(rect(x, x + side * 0.006, y - tw, y + tw, bars.z + 0.003), 'rgba(255,255,255,.07)');
-            }
-          }
-
-          fade(x0, side * (bars.inner + (bars.outer - bars.inner) * 0.35), y, hw * 1.6, bars.z);
+      // black tape wrapped round the tip of a bar
+      const drawTape = (x1, y, side) => {
+        const tx0 = side * (bars.outer - tape.len);
+        const tx1 = x1 + side * 0.015;
+        const tw = tape.w;
+        const black = ['#161616', '#2a2a2a', '#383838', '#2c2c2c', '#1b1b1b', '#111'];
+        shade(tx0, tx1, y, tw, bars.z + 0.002, black);
+        fill(cap(tx1, y, tw, side, bars.z + 0.002), '#1f1f1f');
+        for (const k of [0.3, 0.62]) {
+          const x = side * (bars.outer - tape.len * k);
+          fill(rect(x, x + side * 0.006, y - tw, y + tw, bars.z + 0.003), 'rgba(255,255,255,.07)');
         }
+      };
+      const drawBarEnd = (y, side, taped) => {
+        const x0 = side * bars.inner;
+        const x1 = side * bars.outer;
+        const hw = bars.w;
+        if (!rect(x0, x1, y - hw, y + hw, bars.z)) return;
+
+        ctx.save();
+        ctx.filter = 'blur(3px)';
+        const shadow = rect(x0, x1 + side * 0.03, y - hw * 0.6 + 0.05, y + hw * 1.4 + 0.05, bars.z - 0.01);
+        fill(shadow, 'rgba(0,0,0,.28)');
+        ctx.restore();
+
+        const metal = ['#8e8f90', '#c9cacb', '#e9eaea', '#f4f4f4', '#dcdddd', '#b5b6b7', '#828384'];
+        shade(x0, x1, y, hw, bars.z, metal);
+        fill(rect(x0, x1, y - hw * 0.12, y + hw * 0.12, bars.z + 0.001), '#5a5b5c');
+        fill(rect(x0, x1, y + hw * 0.12, y + hw * 0.2, bars.z + 0.001), 'rgba(255,255,255,.35)');
+        fill(cap(x1, y, hw, side, bars.z), '#b9babb');
+        fill(cap(x1, y, hw * 0.55, side, bars.z + 0.001), '#8a8b8c');
+        if (taped) drawTape(x1, y, side);
+
+        fade(x0, side * (bars.inner + (bars.outer - bars.inner) * 0.35), y, hw * 1.6, bars.z);
+      };
+      bars.ys.forEach((y, i) => {
+        for (const side of [-1, 1]) drawBarEnd(y, side, i === tape.bar && side === tape.side);
       });
     }
+
+    // the tape goes on Gen 4 panoramas in Ghana, or on every one with cfg.everywhere
+    const wanted = (pos, id) => pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]));
+    const fits = t => t && (cfg.everywhere || t.width >= GEN4_WIDTH);
 
     async function refresh(pano) {
       const st = attached.get(pano);
@@ -219,10 +225,10 @@
       st.info = null;
       const pos = pano.getPosition();
       const id = pano.getPano();
-      if (pos && id && (cfg.everywhere || inGhana([pos.lng(), pos.lat()]))) {
+      if (wanted(pos, id)) {
         const t = await tiles(id);
         if (attached.get(pano) !== st || pano.getPano() !== id) return;
-        if (t && (cfg.everywhere || t.width >= GEN4_WIDTH)) st.info = t;
+        if (fits(t)) st.info = t;
       }
       draw(pano);
     }

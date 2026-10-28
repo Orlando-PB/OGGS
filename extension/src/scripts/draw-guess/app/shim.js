@@ -44,26 +44,35 @@
     const p = [lng, lat];
     const k = Math.cos((lat * Math.PI) / 180);
     const dist2 = ([x, y]) => ((x - lng) * k) ** 2 + (y - lat) ** 2;
+    return tinyAt(p, dist2) ?? containingOrNearest(p, dist2);
+  }
+
+  function tinyAt(p, dist2) {
     for (const code of meta.dataOnly ?? []) {
-      for (const [outer] of geo[code] ?? []) {
-        if (inside(p, outer) || outer.some(v => dist2(v) < TINY)) return code;
-      }
+      const polys = geo[code] ?? [];
+      if (polys.some(([outer]) => inside(p, outer) || outer.some(v => dist2(v) < TINY))) return code;
     }
+    return null;
+  }
+
+  function containingOrNearest(p, dist2) {
     let near = null;
     let nearD = 1.5 ** 2;
     for (const [code, polys] of Object.entries(geo)) {
-      for (const [outer, ...holes] of polys) {
-        if (inside(p, outer) && !holes.some(h => inside(p, h))) return code;
-        for (const v of outer) {
-          const d = dist2(v);
-          if (d < nearD) {
-            nearD = d;
-            near = code;
-          }
-        }
+      if (polys.some(([outer, ...holes]) => inside(p, outer) && !holes.some(h => inside(p, h)))) return code;
+      const d = closestVertex(polys, dist2);
+      if (d < nearD) {
+        nearD = d;
+        near = code;
       }
     }
     return near;
+  }
+
+  function closestVertex(polys, dist2) {
+    let best = Infinity;
+    for (const [outer] of polys) for (const v of outer) best = Math.min(best, dist2(v));
+    return best;
   }
 
   window.fetch = async (url, opts) => {
@@ -231,21 +240,33 @@
   window.addEventListener('message', e => {
     if (e.source !== parent) return;
     const d = e.data ?? {};
-    if (d.ggs === 'reset') window.backToDraw?.(true);
-    else if (d.ggs === 'map' && d.name) selectMap(d.name);
-    else if (d.ggs === 'hard') {
-      hard = !!d.on;
-      applyPool();
-    } else if (d.ggs === 'answer') {
-      // this round's location, or null while it's being fetched
-      answerCode = null;
-      answerLL = typeof d.lat === 'number' ? { lat: d.lat, lng: d.lng } : null;
-      if (answerLL)
-        matcher.then(() => {
-          answerCode = countryAt(d.lat, d.lng);
-        });
+    switch (d.ggs) {
+      case 'reset':
+        window.backToDraw?.(true);
+        break;
+      case 'map':
+        if (d.name) selectMap(d.name);
+        break;
+      case 'hard':
+        hard = !!d.on;
+        applyPool();
+        break;
+      case 'answer':
+        setAnswer(d);
+        break;
     }
   });
+
+  // this round's location, or null while it's being fetched
+  function setAnswer({ lat, lng }) {
+    answerCode = null;
+    answerLL = typeof lat === 'number' ? { lat, lng } : null;
+    if (!answerLL) return;
+    matcher.then(() => {
+      answerCode = countryAt(lat, lng);
+    });
+  }
+
   window.addEventListener('load', () => {
     oneStep();
     toParent({ ggs: 'ready' });
@@ -272,14 +293,16 @@
     if (v === 'rgba(31,42,68,.28)') return `rgba(${LINE},.4)`;
     if (v === 'rgba(217,72,15,.10)' || v === 'rgba(217,72,15,.16)') return `rgba(${LAND},.55)`;
     const m = v.match(/^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/);
-    if (!m) return v;
+    return m ? recolorMorph(v, m) : v;
+  }
+
+  // The morph's fades: ink->blue outline (rgb) and orange->blue fill (rgba).
+  function recolorMorph(v, m) {
     const [r, , b] = m.slice(1, 4).map(Number);
     const a = m[4];
-    // morph outline
     if (a === undefined && r <= INK[0] && r >= BLUE[0]) {
       return `rgb(${mixRgb(LINE, BLUE, (b - INK[2]) / (BLUE[2] - INK[2]))})`;
     }
-    // morph fill
     if (a !== undefined && r <= ORANGE[0] && r >= BLUE[0] && b >= ORANGE[2]) {
       const t = (b - ORANGE[2]) / (BLUE[2] - ORANGE[2]);
       return `rgba(${mixRgb(LAND, BLUE, t)},${(0.55 + (0.16 - 0.55) * t).toFixed(3)})`;
@@ -310,45 +333,60 @@
     tip.hidden = true;
     tip.textContent = 'Click where you think you are';
 
-    // The pin can go anywhere, on land or in the sea. It belongs to the loop it's in, or in the
-    // sea to the nearest loop (the morph needs one to follow).
-    const nearestLoop = (p, loops) => {
-      let best = 0;
-      let bestD = Infinity;
-      loops.forEach((r, i) => {
-        const q = nearestOnRing(p, r);
-        const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          best = i;
-        }
-      });
-      return best;
-    };
-    const pinLoop = p => {
-      const s = shapes();
-      const i = s.findIndex(r => inside(p, r));
-      return i >= 0 ? i : nearestLoop(p, s);
-    };
+    keepPin(btn, tip);
+    pointerTweaks();
+    const layers = revealLayers();
+    runnersCard(layers.real);
+    revealExtras(layers);
+    reportHeight();
 
-    // Keep the pin through undo/clear/new strokes; drop it only when nothing is drawn.
+    islandColors();
+    // re-apply toolbar visibility with the new data-for values
+    setStage(stage);
+    redraw();
+  }
+
+  // The pin can go anywhere, on land or in the sea. It belongs to the loop it's in, or in the
+  // sea to the nearest loop (the morph needs one to follow).
+  function pinLoop(p) {
+    const s = shapes();
+    const i = s.findIndex(r => inside(p, r));
+    return i >= 0 ? i : nearestLoop(p, s);
+  }
+
+  function nearestLoop(p, loops) {
+    let best = 0;
+    let bestD = Infinity;
+    loops.forEach((r, i) => {
+      const q = nearestOnRing(p, r);
+      const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  // Keep the pin through undo/clear/new strokes; drop it only when nothing is drawn.
+  function keepPin(btn, tip) {
     const baseRedraw = redraw;
     redraw = () => {
       baseRedraw();
       if (stage !== 'draw') return;
-      if (pinXY) {
-        if (!shapes().length) pinXY = null;
-        else {
-          pinShape = pinLoop(pinXY);
-          drawPin(pinXY);
-        }
+      if (pinXY && !shapes().length) pinXY = null;
+      else if (pinXY) {
+        pinShape = pinLoop(pinXY);
+        drawPin(pinXY);
       }
       btn.disabled = !pinXY;
       tip.hidden = !!pinXY || !!current || !shapes().length;
     };
     // app.js registered the unwrapped redraw
     window.addEventListener('resize', () => redraw());
+  }
 
+  function pointerTweaks() {
     // Only the main button draws. A right/middle click does nothing: no stroke, no pin, no menu.
     window.addEventListener(
       'pointerdown',
@@ -362,23 +400,7 @@
     );
     window.addEventListener('contextmenu', e => e.preventDefault());
 
-    const stageEl = document.getElementById('stage');
-    stageEl.addEventListener(
-      'pointerup',
-      e => {
-        if (stage !== 'draw' || !current) return;
-        const [x0, y0, x1, y1] = bbox([current]);
-        if (Math.max(x1 - x0, y1 - y0) >= CLICK) return;
-        // a click, not a stroke: the app's own handler then draws nothing
-        current = null;
-        const p = pos(e);
-        if (shapes().length) {
-          pinXY = p;
-          pinShape = pinLoop(p);
-        }
-      },
-      true,
-    );
+    document.getElementById('stage').addEventListener('pointerup', clickToPin, true);
 
     // A button released outside the iframe never sends pointerup here, so a move with no button
     // held ends the stroke instead of carrying on drawing.
@@ -403,8 +425,47 @@
       },
       true,
     );
+  }
 
-    // Result card: runners-up (with how close they came) in place of the guess coordinates.
+  // A click, not a stroke, drops the pin; the app's own handler then draws nothing.
+  function clickToPin(e) {
+    if (stage !== 'draw' || !current) return;
+    const [x0, y0, x1, y1] = bbox([current]);
+    if (Math.max(x1 - x0, y1 - y0) >= CLICK) return;
+    current = null;
+    const p = pos(e);
+    if (shapes().length) {
+      pinXY = p;
+      pinShape = pinLoop(p);
+    }
+  }
+
+  // answer: the correct spot, shown as the reveal zooms out to the map, a flag and a dashed line
+  // from the pin. By then the guess is on GeoGuessr's (hidden) map and can't change.
+  // real: when the drawing snapped to the wrong country, the round's real country is outlined in
+  // green next to the matched (blue) one, on top of it where they overlap.
+  // drawn: the drawing itself stays on the map as a dashed outline, where the morph started from.
+  function revealLayers() {
+    const svg = () => document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const answer = svg();
+    answer.setAttribute('visibility', 'hidden');
+    answer.innerHTML = marks.answerSvg;
+    document.getElementById('map').append(answer);
+    const real = svg();
+    real.id = 'realHl';
+    const drawn = svg();
+    drawn.id = 'drawnHl';
+    document.getElementById('zoomLayer').append(real, drawn);
+    const clear = () => {
+      answer.setAttribute('visibility', 'hidden');
+      drawn.innerHTML = '';
+      real.innerHTML = '';
+    };
+    return { answer, real, drawn, clear };
+  }
+
+  // Result card: runners-up (with how close they came) in place of the guess coordinates.
+  function runnersCard(realLayer) {
     const coord = document.querySelector('.stats .coord');
     coord.className = 'runners';
     // app.js still writes rCoord
@@ -414,13 +475,9 @@
       baseShowCard(top, g);
       // Right or wrong, instead of "Your guess is in..." (the guess is locked in by now).
       const kicker = document.querySelector('#reveal .kicker');
-      const t = matchData.target;
-      kicker.className = `kicker${t ? (t.code === top.code ? ' ok' : ' bad') : ''}`;
-      kicker.innerHTML = !t
-        ? 'Your guess is in…'
-        : t.code === top.code
-          ? '✓ Correct country'
-          : `✗ Not quite. It was <b>${esc(t.name)}</b>`;
+      const [cls, html] = verdict(matchData.target, top);
+      kicker.className = `kicker${cls}`;
+      kicker.innerHTML = html;
       realLayer.querySelector('path')?.classList.add('pulse');
       // a single-country map has nothing to compare against
       coord.hidden = matchData.results.length < 2;
@@ -432,50 +489,32 @@
         )
         .join('');
     };
+  }
 
+  function verdict(target, top) {
+    if (!target) return ['', 'Your guess is in…'];
+    if (target.code === top.code) return [' ok', '✓ Correct country'];
+    return [' bad', `✗ Not quite. It was <b>${esc(target.name)}</b>`];
+  }
+
+  function revealExtras(layers) {
     // reveal() works out the guess before its first await, so send it right away. The pin is
     // then on GeoGuessr's map even if the round runs out during the animation.
     const baseReveal = reveal;
     reveal = () => {
-      answerLayer.setAttribute('visibility', 'hidden');
-      realLayer.innerHTML = drawnLayer.innerHTML = '';
+      layers.clear();
       const run = baseReveal();
       if (guess) toParent({ ggs: 'guess', guess });
       return run;
     };
 
-    // The correct spot, shown as the reveal zooms out to the map: a flag and a dashed line
-    // from the pin. By then the guess is on GeoGuessr's (hidden) map and can't change.
-    const answerLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    answerLayer.setAttribute('visibility', 'hidden');
-    answerLayer.innerHTML = marks.answerSvg;
-    document.getElementById('map').append(answerLayer);
     const toScreen = ({ lat, lng }) => T.apply(projection([lng, lat]));
     const placeAnswer = () => {
-      if (!answerLL || !guess || answerLayer.getAttribute('visibility') === 'hidden') return;
-      marks.setAnswer(answerLayer, toScreen(guess), toScreen(answerLL));
+      if (!answerLL || !guess || layers.answer.getAttribute('visibility') === 'hidden') return;
+      marks.setAnswer(layers.answer, toScreen(guess), toScreen(answerLL));
     };
     // app.js's own 'zoom' listener updates T first
     zoom.on('zoom.answer', placeAnswer);
-
-    // When the drawing snapped to the wrong country, the round's real country is outlined in
-    // green next to the matched (blue) one, on top of it where they overlap.
-    const realLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    realLayer.id = 'realHl';
-    // The drawing itself stays on the map as a dashed outline, where the morph started from.
-    const drawnLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    drawnLayer.id = 'drawnHl';
-    document.getElementById('zoomLayer').append(realLayer, drawnLayer);
-    const showReal = () => {
-      const t = matchData?.target;
-      const polys = t && t.code !== matchData.results[0].code && geo[t.code];
-      if (!polys) return null;
-      // copied, as fixWinding reverses rings in place
-      const coordinates = polys.map(p => p.map(r => r.slice()));
-      const feat = fixWinding({ type: 'MultiPolygon', coordinates });
-      d3.select(realLayer).append('path').datum(feat).attr('d', geoPath);
-      return geoPath.bounds(feat);
-    };
 
     // reveal() calls fitBox() once, for the zoom-out to the matched country. Widen that box to
     // take in the correct spot (and the real country's outline, if different), and show the flag
@@ -483,59 +522,81 @@
     const baseFitBox = fitBox;
     fitBox = (box, screen, maxK) => {
       if (stage === 'reveal' && answerLL && guess) {
-        const [px, py] = projection([answerLL.lng, answerLL.lat]);
-        const m = Math.max(8, 0.1 * Math.max(box[2] - box[0], box[3] - box[1]));
-        const grow = ([x0, y0], [x1, y1]) => [
-          Math.min(box[0], x0),
-          Math.min(box[1], y0),
-          Math.max(box[2], x1),
-          Math.max(box[3], y1),
-        ];
-        box = grow([px - m, py - m], [px + m, py + m]);
-        const real = showReal();
-        if (real) box = grow(real[0], real[1]);
+        box = widenForAnswer(box, layers.real);
         // keep everything above the result card, which covers roughly the bottom 36%
         if (screen) screen = [screen[0], screen[1], screen[2], Math.min(screen[3], W * 0.58)];
-        answerLayer.setAttribute('visibility', 'visible');
+        layers.answer.setAttribute('visibility', 'visible');
         placeAnswer();
       }
       return baseFitBox(box, screen, maxK);
     };
-    // A pin in the sea stays where it was put relative to the drawing (app.js would pull it onto
-    // the nearest coast). The reveal lines the matched country up with the drawing before
-    // morphing, so that spot becomes the guess: draw the US, click off its south-west coast, and
-    // you're guessing Hawaii.
+
     const baseStartMorph = startMorph;
     startMorph = targets => {
-      // reveal() has just zoomed the map so the matched country sits on the drawing, so T.invert
-      // takes the drawing from canvas to map coordinates.
-      const d = shapes()
-        .map(r => `M${r.map(p => T.invert(p).join(',')).join('L')}Z`)
-        .join('');
-      drawnLayer.innerHTML = `<path d="${d}"/>`;
+      showDrawn(layers.drawn);
       const end = baseStartMorph(targets);
-      if (!morph?.pin || inside(pinXY, shapes()[pinShape])) return end;
-      const raw = blend(morph.pin.w, morph.pin.pair.b);
-      morph.pin.corr = [pinXY[0] - raw[0], pinXY[1] - raw[1]];
-      morph.pin.end = pinXY.slice();
-      return pinXY.slice();
+      return keepSeaPin() ?? end;
     };
 
     const baseBackToDraw = backToDraw;
     backToDraw = (...args) => {
-      answerLayer.setAttribute('visibility', 'hidden');
-      realLayer.innerHTML = drawnLayer.innerHTML = '';
+      layers.clear();
       return baseBackToDraw(...args);
     };
-    // Tell the page how tall the board is (plus .wrap's 10px padding top and bottom), so the
-    // frame fits it exactly.
+  }
+
+  function widenForAnswer(box, realLayer) {
+    const [px, py] = projection([answerLL.lng, answerLL.lat]);
+    const m = Math.max(8, 0.1 * Math.max(box[2] - box[0], box[3] - box[1]));
+    const grow = ([x0, y0], [x1, y1]) => [
+      Math.min(box[0], x0),
+      Math.min(box[1], y0),
+      Math.max(box[2], x1),
+      Math.max(box[3], y1),
+    ];
+    box = grow([px - m, py - m], [px + m, py + m]);
+    const real = showReal(realLayer);
+    return real ? grow(real[0], real[1]) : box;
+  }
+
+  // Outlines the round's real country when the match was wrong; returns its bounds, or null.
+  function showReal(realLayer) {
+    const t = matchData?.target;
+    const polys = t && t.code !== matchData.results[0].code && geo[t.code];
+    if (!polys) return null;
+    // copied, as fixWinding reverses rings in place
+    const coordinates = polys.map(p => p.map(r => r.slice()));
+    const feat = fixWinding({ type: 'MultiPolygon', coordinates });
+    d3.select(realLayer).append('path').datum(feat).attr('d', geoPath);
+    return geoPath.bounds(feat);
+  }
+
+  // reveal() has just zoomed the map so the matched country sits on the drawing, so T.invert
+  // takes the drawing from canvas to map coordinates.
+  function showDrawn(drawnLayer) {
+    const d = shapes()
+      .map(r => `M${r.map(p => T.invert(p).join(',')).join('L')}Z`)
+      .join('');
+    drawnLayer.innerHTML = `<path d="${d}"/>`;
+  }
+
+  // A pin in the sea stays where it was put relative to the drawing (app.js would pull it onto
+  // the nearest coast). The reveal lines the matched country up with the drawing before
+  // morphing, so that spot becomes the guess: draw the US, click off its south-west coast, and
+  // you're guessing Hawaii. Returns the morph's new end, or null to keep app.js's.
+  function keepSeaPin() {
+    if (!morph?.pin || inside(pinXY, shapes()[pinShape])) return null;
+    const raw = blend(morph.pin.w, morph.pin.pair.b);
+    morph.pin.corr = [pinXY[0] - raw[0], pinXY[1] - raw[1]];
+    morph.pin.end = pinXY.slice();
+    return pinXY.slice();
+  }
+
+  // Tell the page how tall the board is (plus .wrap's 10px padding top and bottom), so the
+  // frame fits it exactly.
+  function reportHeight() {
     const board = document.querySelector('.board');
     const height = () => Math.ceil(board.getBoundingClientRect().height) + 20;
     new ResizeObserver(() => toParent({ ggs: 'height', h: height() })).observe(board);
-
-    islandColors();
-    // re-apply toolbar visibility with the new data-for values
-    setStage(stage);
-    redraw();
   }
 })();

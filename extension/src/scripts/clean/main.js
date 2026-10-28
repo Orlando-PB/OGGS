@@ -42,8 +42,16 @@
   // The "316 playing" count: the leaf holding it, or its parent when the number and the word are
   // split across two leaves.
   const PLAYING = /^[\d,.]+\s*k?\s+playing$/i;
-  function markScores() {
-    const leaves = [...document.querySelectorAll('div, span, p')].filter(e => e.children.length === 0);
+  // The smallest ancestor of a label whose text has both "Round" and "Total"
+  function scoresPanel(label) {
+    for (let e = label.parentElement; e && e !== document.body; e = e.parentElement) {
+      const t = e.textContent;
+      if (/\bRound\b/i.test(t) && /\bTotal\b/i.test(t)) return e;
+    }
+    return null;
+  }
+
+  function markPlaying(leaves) {
     const playing = leaves.filter(e => {
       const t = e.textContent.trim();
       return /^playing$/i.test(t) || PLAYING.test(t);
@@ -52,15 +60,14 @@
       const p = l.parentElement;
       (p && p !== document.body && PLAYING.test(p.textContent.trim()) ? p : l).setAttribute(HIDDEN, '');
     }
-    const labels = leaves.filter(e => LABEL.test(e.textContent.trim()));
-    for (const l of labels) {
-      for (let e = l.parentElement; e && e !== document.body; e = e.parentElement) {
-        const t = e.textContent;
-        if (/\bRound\b/i.test(t) && /\bTotal\b/i.test(t)) {
-          if (e.getBoundingClientRect().width <= 600) e.setAttribute(HIDDEN, '');
-          break;
-        }
-      }
+  }
+
+  function markScores() {
+    const leaves = [...document.querySelectorAll('div, span, p')].filter(e => e.children.length === 0);
+    markPlaying(leaves);
+    for (const l of leaves.filter(e => LABEL.test(e.textContent.trim()))) {
+      const panel = scoresPanel(l);
+      if (panel && panel.getBoundingClientRect().width <= 600) panel.setAttribute(HIDDEN, '');
     }
   }
 

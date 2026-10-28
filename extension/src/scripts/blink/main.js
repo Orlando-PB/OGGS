@@ -58,32 +58,40 @@
       return now < round.until ? 'show' : 'done';
     }
 
+    // a new round starts loading; switched on with Street View already up: straight to "Get ready"
+    function syncRound(now) {
+      const key = ggs.game.roundKey();
+      if (round?.key === key) return;
+      round = first && ggs.view.lastTile() > 0 ? { key, since: now, ready: now } : { key, since: now };
+      first = false;
+    }
+
+    function showCard(r, now) {
+      word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
+      meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
+      fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
+      Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
+      card.style.display = 'flex'; // not `hidden`: the inline display would beat it
+    }
+
+    function showBar(r, now) {
+      const width = (r.width * (round.until - now)) / ms;
+      Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
+      bar.hidden = false;
+    }
+
     let step = 'loading';
     function tick() {
       bar.hidden = true;
       card.style.display = 'none';
       if (!ggs.maps.guessMapElement()) return;
-      const key = ggs.game.roundKey();
       const now = performance.now();
-      if (round?.key !== key) {
-        // switched on with Street View already up: straight to "Get ready"
-        round = first && ggs.view.lastTile() > 0 ? { key, since: now, ready: now } : { key, since: now };
-        first = false;
-      }
+      syncRound(now);
       step = stepOf(now);
       const r = ggs.view.panoElement()?.getBoundingClientRect();
       if (!r) return;
-      if (step === 'loading' || step === 'ready') {
-        word.textContent = step === 'loading' ? 'Loading…' : 'Get ready';
-        meter.style.visibility = step === 'ready' ? 'visible' : 'hidden';
-        fill.style.width = `${Math.min(100, ((now - round.ready) / READY_MS) * 100) || 0}%`;
-        Object.assign(card.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px` });
-        card.style.display = 'flex'; // not `hidden`: the inline display would beat it
-      } else if (step === 'show') {
-        const width = (r.width * (round.until - now)) / ms;
-        Object.assign(bar.style, { left: `${r.left}px`, top: `${r.bottom - 4}px`, width: `${width}px` });
-        bar.hidden = false;
-      }
+      if (step === 'loading' || step === 'ready') showCard(r, now);
+      else if (step === 'show') showBar(r, now);
     }
 
     const covered = () => !round || round.key !== ggs.game.roundKey() || step !== 'show';

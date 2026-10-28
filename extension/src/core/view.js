@@ -9,9 +9,7 @@
 //     a sheet over the panorama (inside its element, so the HUD stays on top) or the whole
 //     window. It has holes where cut() returns SVG path data, and null hides it. The painted
 //     part swallows clicks, wheel and drags. The holes let them through.
-//   ggs.view.mirror(owner, { move, turn, zoom, dragX, dragY, flipX, flipY } | null): Street View
-//     input sent the other way (see below). Owners cancel out, so two owners flipping the same
-//     thing leave it as normal.
+//   ggs.view.mirror(owner, flips | null) and ggs.view.copyEvent(e, change): see core/mirror.js.
 //   ggs.view.shape.rect / circle / poly build that path data.
 //   guessArea() is the guess map's rect with its Guess button (null outside a round).
 //   lastTile() is when the last Street View tile reached the screen (performance.now()).
@@ -24,12 +22,9 @@
   // ---- finding the panorama ----
   // Container elements of the last few StreetViewPanoramas, newest last.
   let hooked = [];
-  // container element -> its StreetViewPanorama
-  const panoOf = new WeakMap();
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
+  ggs.maps.hook('StreetViewPanorama', (_p, args) => {
     if (!(args[0] instanceof Element)) return;
     hooked = [...hooked.filter(e => e.isConnected), args[0]].slice(-5);
-    panoOf.set(args[0], p);
   });
 
   // The Street View element on screen. Never one holding the guess map, so nothing done to
@@ -116,11 +111,16 @@
     const scene = pano && sceneOf(pano);
     if (applied && applied.scene !== scene) release();
     if (!scene) return;
-    if (!applied) {
-      const keep = (el, keys) => Object.fromEntries(keys.map(k => [k, el.style[k]]));
-      applied = { scene, pano, saved: { scene: keep(scene, PROPS.scene), pano: keep(pano, PROPS.pano) } };
-    }
+    applied ??= { scene, pano, saved: { scene: keep(scene, PROPS.scene), pano: keep(pano, PROPS.pano) } };
     const { width: w, height: h } = pano.getBoundingClientRect();
+    const { filter, transform } = combined(now, w, h);
+    if (scene.style.filter !== filter) scene.style.filter = filter || applied.saved.scene.filter;
+    if (applied.transform !== transform) setTransform(transform);
+  }
+  const keep = (el, keys) => Object.fromEntries(keys.map(k => [k, el.style[k]]));
+
+  // Every owner's effect together, as one filter and one transform.
+  function combined(now, w, h) {
     const all = [...effects.values()];
     const filter = all
       .map(e => e.filter)
@@ -130,14 +130,16 @@
       .map(e => (typeof e.transform === 'function' ? e.transform(now, w, h) : e.transform))
       .filter(Boolean)
       .join(' ');
-    if (scene.style.filter !== filter) scene.style.filter = filter || applied.saved.scene.filter;
-    if (applied.transform !== transform) {
-      applied.transform = transform;
-      scene.style.transform = transform || applied.saved.scene.transform;
-      scene.style.willChange = transform ? 'transform' : applied.saved.scene.willChange;
-      // A transformed picture is clipped to the panorama's box, so a scaled-up one can't spill out.
-      pano.style.overflow = transform ? 'hidden' : applied.saved.pano.overflow;
-    }
+    return { filter, transform };
+  }
+
+  function setTransform(transform) {
+    const { scene, pano, saved } = applied;
+    applied.transform = transform;
+    scene.style.transform = transform || saved.scene.transform;
+    scene.style.willChange = transform ? 'transform' : saved.scene.willChange;
+    // A transformed picture is clipped to the panorama's box, so a scaled-up one can't spill out.
+    pano.style.overflow = transform ? 'hidden' : saved.pano.overflow;
   }
 
   function effect(owner, e) {
@@ -221,26 +223,23 @@
       m.pano = null;
     }
 
-    m.draw = () => {
-      const parent = screen ? document.body : panoElement();
-      if (!parent) {
-        host.remove();
-        unpin();
-        return;
-      }
-      if (host.parentElement !== parent) {
-        unpin();
-        parent.append(host);
-        m.last = null;
-        // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
-        // and GeoGuessr's HUD keeps drawing above it.
-        if (!screen) {
-          m.pano = parent;
-          m.saved = { isolation: parent.style.isolation, position: parent.style.position };
-          parent.style.isolation = 'isolate';
-          if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-        }
-      }
+    // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
+    // and GeoGuessr's HUD keeps drawing above it.
+    function pin(pano) {
+      m.pano = pano;
+      m.saved = { isolation: pano.style.isolation, position: pano.style.position };
+      pano.style.isolation = 'isolate';
+      if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
+    }
+
+    function moveInto(parent) {
+      unpin();
+      parent.append(host);
+      m.last = null;
+      if (!screen) pin(parent);
+    }
+
+    function drawHoles() {
       const w = host.clientWidth;
       const h = host.clientHeight;
       const holes = cut(w, h);
@@ -250,6 +249,17 @@
       if (d === m.last) return;
       m.last = d;
       for (const p of root.querySelectorAll('path')) p.setAttribute('d', d);
+    }
+
+    m.draw = () => {
+      const parent = screen ? document.body : panoElement();
+      if (!parent) {
+        host.remove();
+        unpin();
+        return;
+      }
+      if (host.parentElement !== parent) moveInto(parent);
+      drawHoles();
     };
 
     masks.add(m);
@@ -281,245 +291,5 @@
     raf = requestAnimationFrame(frame);
   }
 
-  // ---- mirrored input ----
-  // Street View input is caught at the window in the capture phase and swallowed. A changed copy
-  // goes to the same target, so the Maps API sees it the other way round:
-  //   move/turn/zoom swap their keys (and zoom the wheel).
-  //   dragX/Y mirror drags around where the press was.
-  //   flipX/Y mirror every mouse position around the panorama's centre. A flipped picture then
-  //   follows the cursor, and click-to-move goes where you clicked.
-  // Copies are marked and pass untouched. These listeners are added after core/lock.js's, so a
-  // No move/pan/zoom lock still swallows the original.
-  const key = (k, code, keyCode) => ({ key: k, code, keyCode });
-  const SWAP = {
-    move: {
-      ArrowUp: key('ArrowDown', 'ArrowDown', 40),
-      ArrowDown: key('ArrowUp', 'ArrowUp', 38),
-      w: key('s', 'KeyS', 83),
-      s: key('w', 'KeyW', 87),
-      W: key('S', 'KeyS', 83),
-      S: key('W', 'KeyW', 87),
-    },
-    turn: {
-      ArrowLeft: key('ArrowRight', 'ArrowRight', 39),
-      ArrowRight: key('ArrowLeft', 'ArrowLeft', 37),
-      a: key('d', 'KeyD', 68),
-      d: key('a', 'KeyA', 65),
-      A: key('D', 'KeyD', 68),
-      D: key('A', 'KeyA', 65),
-    },
-    zoom: {
-      '+': key('-', 'Minus', 189),
-      '=': key('-', 'Minus', 189),
-      '-': key('=', 'Equal', 187),
-      _: key('=', 'Equal', 187),
-    },
-  };
-  // Every event field the copies need. The constructor ignores the ones its type lacks.
-  const FIELDS = [
-    'bubbles',
-    'cancelable',
-    'composed',
-    'view',
-    'detail',
-    'ctrlKey',
-    'shiftKey',
-    'altKey',
-    'metaKey',
-    'key',
-    'code',
-    'location',
-    'repeat',
-    'keyCode',
-    'which',
-    'charCode',
-    'screenX',
-    'screenY',
-    'clientX',
-    'clientY',
-    'movementX',
-    'movementY',
-    'button',
-    'buttons',
-    'relatedTarget',
-    'pointerId',
-    'pointerType',
-    'isPrimary',
-    'width',
-    'height',
-    'pressure',
-    'tiltX',
-    'tiltY',
-    'twist',
-    'deltaX',
-    'deltaY',
-    'deltaZ',
-    'deltaMode',
-  ];
-  const POINTER = [
-    'pointerdown',
-    'mousedown',
-    'pointermove',
-    'mousemove',
-    'pointerup',
-    'mouseup',
-    'pointercancel',
-    'click',
-    'dblclick',
-  ];
-  // owner -> wanted flips
-  const mirrors = new Map();
-  const want = k => [...mirrors.values()].filter(m => m[k]).length % 2 === 1;
-  const ours = new WeakSet();
-  // The panorama's picture, not our own sheets over it (scratch card, masks).
-  const onPano = t => !!panoElement()?.contains(t) && !t.closest?.(`[${HOST}]`);
-
-  // An untrusted copy of an input event, with `change` applied. scripts/lag uses it too.
-  function copyEvent(e, change = {}) {
-    const init = {};
-    for (const f of FIELDS) if (f in e) init[f] = e[f];
-    Object.assign(init, change);
-    const copy = new e.constructor(e.type, init);
-    // Some engines ignore keyCode/which in the init, so pin them on the copy.
-    for (const f of ['keyCode', 'which']) {
-      if (f in init && copy[f] !== init[f]) Object.defineProperty(copy, f, { value: init[f] });
-    }
-    return copy;
-  }
-  function resend(e, change) {
-    const copy = copyEvent(e, change);
-    ours.add(copy);
-    e.stopImmediatePropagation();
-    e.target.dispatchEvent(copy);
-    if (copy.defaultPrevented || e.type.endsWith('move')) e.preventDefault();
-  }
-
-  // e.code held down -> the swap sent for it, so its keyup matches.
-  const sent = new Map();
-  function onKey(e) {
-    if (!mirrors.size || ours.has(e) || ggs.isTyping(e)) return;
-    if (e.ctrlKey || e.metaKey || e.altKey || ggs.maps.guessMapElement()?.contains(e.target)) return;
-    const id = e.code || e.key;
-    let to = sent.get(id);
-    if (e.type === 'keydown') {
-      to = ['move', 'turn', 'zoom'].map(kind => want(kind) && SWAP[kind][e.key]).find(Boolean);
-      if (to) sent.set(id, to);
-    } else {
-      sent.delete(id);
-    }
-    if (to) resend(e, { ...to, which: to.keyCode });
-  }
-  function onWheel(e) {
-    if (mirrors.size && !ours.has(e) && want('zoom') && onPano(e.target)) {
-      resend(e, { deltaX: -e.deltaX, deltaY: -e.deltaY, deltaZ: -e.deltaZ });
-    }
-  }
-  // Click-to-move with `move` flipped. Google's own is off (clickToGo), and a click that wasn't
-  // a drag walks to the link pointing furthest from where you clicked.
-  // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
-  let pressAt = null;
-  let noClickTo = null;
-  function clickToGo() {
-    const p = panoOf.get(panoElement());
-    const off = want('move') ? p : null;
-    if (off === noClickTo) return;
-    noClickTo?.setOptions({ clickToGo: true });
-    off?.setOptions({ clickToGo: false });
-    noClickTo = off;
-  }
-  function walkBack(x) {
-    const el = panoElement();
-    const p = panoOf.get(el);
-    const links = p?.getLinks?.();
-    if (!links?.length) return;
-    const r = el.getBoundingClientRect();
-    const pov = p.getPov();
-    const fov = 180 / 2 ** (p.getZoom?.() ?? 1);
-    const away = pov.heading + ((x - r.left) / r.width - 0.5) * fov + 180;
-    const off = l => Math.abs(((((l.heading - away) % 360) + 540) % 360) - 180);
-    p.setPano(links.reduce((a, b) => (off(b) < off(a) ? b : a)).pano);
-  }
-
-  // A mouse position is first mirrored round the centre (flip), then round the press (drag).
-  let from = null;
-  function onPointer(e) {
-    if (ours.has(e) || !mirrors.size) return;
-    if (e.type === 'pointerdown' || e.type === 'mousedown') pressAt = { x: e.clientX, y: e.clientY };
-    if (e.type === 'click' && want('move') && onPano(e.target)) {
-      const still = pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5;
-      e.stopImmediatePropagation();
-      const r = panoElement()?.getBoundingClientRect();
-      if (still && r && !ggs.lock.held('move')) {
-        walkBack(want('flipX') ? 2 * (r.left + r.width / 2) - e.clientX : e.clientX);
-      }
-      return;
-    }
-    const r = panoElement()?.getBoundingClientRect();
-    const down = e.type === 'pointerdown' || e.type === 'mousedown';
-    if (down) from = e.button === 0 && onPano(e.target) ? { x: e.clientX, y: e.clientY } : null;
-    // A move with no button held means the press ended out of sight.
-    if (e.type.endsWith('move') && e.buttons === 0) from = null;
-    const flip = (v, c, on) => (on ? 2 * c - v : v);
-    const inPano = onPano(e.target) || from;
-    if (!r || !inPano) return;
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    let x = flip(e.clientX, cx, want('flipX'));
-    let y = flip(e.clientY, cy, want('flipY'));
-    if (from && !down) {
-      const fx = flip(from.x, cx, want('flipX'));
-      const fy = flip(from.y, cy, want('flipY'));
-      x = flip(x, fx, want('dragX'));
-      y = flip(y, fy, want('dragY'));
-    }
-    // Cleared a tick later, so the click after a release still mirrors.
-    if (/up|cancel/.test(e.type)) {
-      setTimeout(() => {
-        from = null;
-      });
-    }
-    const dx = x - e.clientX;
-    const dy = y - e.clientY;
-    if (!dx && !dy) return;
-    const sx = want('flipX') !== (!!from && want('dragX')) ? -1 : 1;
-    const sy = want('flipY') !== (!!from && want('dragY')) ? -1 : 1;
-    resend(e, {
-      clientX: x,
-      clientY: y,
-      screenX: e.screenX + dx,
-      screenY: e.screenY + dy,
-      movementX: sx * e.movementX,
-      movementY: sy * e.movementY,
-    });
-  }
-  const onBlur = e => {
-    if (e.target !== window) return;
-    from = null;
-    sent.clear();
-  };
-  const LISTENERS = [
-    ['keydown', onKey],
-    ['keyup', onKey],
-    ['wheel', onWheel],
-    ['blur', onBlur],
-    ...POINTER.map(t => [t, onPointer]),
-  ];
-  // Added once, at document_start, so they run before GeoGuessr's and the Maps API's own
-  // window listeners. They do nothing while no owner wants anything.
-  for (const [t, fn] of LISTENERS) addEventListener(t, fn, { capture: true, passive: false });
-  let checking = null;
-  function mirror(owner, m) {
-    if (m) mirrors.set(owner, m);
-    else mirrors.delete(owner);
-    if (!mirrors.size) {
-      from = null;
-      sent.clear();
-    }
-    clickToGo();
-    // GeoGuessr makes a new panorama now and then. Keep its clickToGo in step while any owner is on.
-    clearInterval(checking);
-    checking = mirrors.size ? setInterval(clickToGo, 500) : null;
-  }
-
-  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, mirror, shape, copyEvent };
+  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, shape, ...ggs.viewMirror };
 })();

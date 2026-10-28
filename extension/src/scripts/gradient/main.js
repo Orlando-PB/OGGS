@@ -43,15 +43,8 @@
     }
     return canvases.get(key);
   }
-  function melt(k, src, tiles) {
-    const w = src.width || src.naturalWidth || 512;
-    const h = src.height || src.naturalHeight || 512;
-    const n = cells(k.z, w);
-    const blur = Math.min(48, w / n / 3);
-    // grid scale, and the size of a tile in it
-    const f = 6 * n <= 1.5 * w ? 0.5 : 1;
-    const tw = Math.round(w * f);
-    const th = Math.round(h * f);
+  // the tile in the middle of a 3x3 grid of its neighbours, each tw x th
+  function fillGrid(k, src, tiles, tw, th) {
     const grid = canvas(3 * tw, 3 * th, 'grid');
     const g = grid.getContext('2d');
     g.clearRect(0, 0, grid.width, grid.height);
@@ -60,17 +53,20 @@
         const nb = dx || dy ? tiles.get(`${k.z}/${k.x + dx}/${k.y + dy}`) : null;
         const x = (dx + 1) * tw;
         const y = (dy + 1) * th;
-        if (nb) {
-          g.drawImage(nb.src, x, y, tw, th);
-          continue;
-        }
-        g.save();
-        g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
-        g.scale(dx ? -1 : 1, dy ? -1 : 1);
-        g.drawImage(src, 0, 0, tw, th);
-        g.restore();
+        if (nb) g.drawImage(nb.src, x, y, tw, th);
+        else drawMirrored(g, src, x, y, tw, th, dx, dy);
       }
-    // shrink in halves: one big step skips pixels and speckles the colours
+    return grid;
+  }
+  function drawMirrored(g, src, x, y, tw, th, dx, dy) {
+    g.save();
+    g.translate(x + (dx ? tw : 0), y + (dy ? th : 0));
+    g.scale(dx ? -1 : 1, dy ? -1 : 1);
+    g.drawImage(src, 0, 0, tw, th);
+    g.restore();
+  }
+  // shrink in halves: one big step skips pixels and speckles the colours
+  function shrink(grid, n) {
     let cur = grid;
     let cw = grid.width;
     let ch = grid.height;
@@ -83,6 +79,17 @@
     }
     const small = canvas(3 * n, 3 * n, 'small');
     small.getContext('2d').drawImage(cur, 0, 0, cw, ch, 0, 0, 3 * n, 3 * n);
+    return small;
+  }
+  function melt(k, src, tiles) {
+    const w = src.width || src.naturalWidth || 512;
+    const h = src.height || src.naturalHeight || 512;
+    const n = cells(k.z, w);
+    const blur = Math.min(48, w / n / 3);
+    // grid scale, and the size of a tile in it
+    const f = 6 * n <= 1.5 * w ? 0.5 : 1;
+    const grid = fillGrid(k, src, tiles, Math.round(w * f), Math.round(h * f));
+    const small = shrink(grid, n);
     const q = Math.min(1, 4 / blur);
     const bw = Math.round(3 * w * q);
     const bh = Math.round(3 * h * q);
@@ -119,39 +126,49 @@
   let redoing = false;
   const nextFrame = () =>
     new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
+  function reupload(k, t, tiles) {
+    try {
+      return ggs.tiles.upload(t.rec, melt(k, t.src, tiles));
+    } catch (err) {
+      ggs.log('gradient: re-upload failed', err);
+      return false;
+    }
+  }
+  // Redoes dirty tiles until PER_FRAME are done or SLICE ms pass. True if it stopped for that
+  // (more may be waiting), false once nothing is dirty.
+  function redoSome(pass) {
+    const t0 = performance.now();
+    let done = 0;
+    while (active && dirty.size) {
+      const [id, { k, tiles }] = dirty.entries().next().value;
+      dirty.delete(id);
+      const t = tiles.get(tileId(k));
+      if (!t || !ggs.tiles.live(t.rec)) continue;
+      if (reupload(k, t, tiles)) pass.pano = k.pano;
+      if (++done >= PER_FRAME || performance.now() - t0 >= SLICE) return true;
+    }
+    return false;
+  }
+  function repaintIfDue(pass) {
+    if (!pass.pano || performance.now() - pass.painted <= 150) return;
+    pass.painted = performance.now();
+    ggs.tiles.repaint(pass.pano);
+    pass.pano = null;
+  }
   async function redo() {
     timer = null;
     if (redoing) return;
     redoing = true;
-    let pano = null;
-    let done = 0;
-    let t0 = performance.now();
-    let painted = t0;
+    const pass = { pano: null, painted: performance.now() };
     try {
-      while (active && dirty.size) {
-        const [id, { k, tiles }] = dirty.entries().next().value;
-        dirty.delete(id);
-        const t = tiles.get(tileId(k));
-        if (!t || !ggs.tiles.live(t.rec)) continue;
-        try {
-          if (ggs.tiles.upload(t.rec, melt(k, t.src, tiles))) pano = k.pano;
-        } catch (err) {
-          ggs.log('gradient: re-upload failed', err);
-        }
-        if (++done < PER_FRAME && performance.now() - t0 < SLICE) continue;
-        if (pano && performance.now() - painted > 150) {
-          painted = performance.now();
-          ggs.tiles.repaint(pano);
-          pano = null;
-        }
+      while (redoSome(pass)) {
+        repaintIfDue(pass);
         await nextFrame();
-        done = 0;
-        t0 = performance.now();
       }
     } finally {
       redoing = false;
     }
-    if (pano) ggs.tiles.repaint(pano);
+    if (pass.pano) ggs.tiles.repaint(pass.pano);
   }
 
   ggs.tiles.filter((rec, source) => {

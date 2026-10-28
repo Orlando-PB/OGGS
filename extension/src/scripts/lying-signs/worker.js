@@ -77,116 +77,120 @@ function boxes(prob, w, h, thresh, boxThresh, unclip = 1.6, minSize = 3) {
   for (let i = 0; i < w * h; i++) bin[i] = prob[i] > thresh ? 1 : 0;
   const seen = new Uint8Array(w * h);
   const out = [];
-  const stack = [];
-  const px = [];
   for (let i = 0; i < w * h; i++) {
     if (!bin[i] || seen[i]) continue;
-    let x0 = w;
-    let y0 = h;
-    let x1 = 0;
-    let y1 = 0;
-    let n = 0;
-    let sum = 0;
-    let sx = 0;
-    let sy = 0;
-    let sxx = 0;
-    let syy = 0;
-    let sxy = 0;
-    px.length = 0;
-    stack.push(i);
-    seen[i] = 1;
-    while (stack.length) {
-      const j = stack.pop();
-      const x = j % w;
-      const y = (j / w) | 0;
-      n++;
-      sum += prob[j];
-      px.push(j);
-      sx += x;
-      sy += y;
-      sxx += x * x;
-      syy += y * y;
-      sxy += x * y;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-      if (x > 0 && bin[j - 1] && !seen[j - 1]) {
-        seen[j - 1] = 1;
-        stack.push(j - 1);
-      }
-      if (x < w - 1 && bin[j + 1] && !seen[j + 1]) {
-        seen[j + 1] = 1;
-        stack.push(j + 1);
-      }
-      if (y > 0 && bin[j - w] && !seen[j - w]) {
-        seen[j - w] = 1;
-        stack.push(j - w);
-      }
-      if (y < h - 1 && bin[j + w] && !seen[j + w]) {
-        seen[j + w] = 1;
-        stack.push(j + w);
-      }
-    }
-    const bw = x1 - x0 + 1;
-    const bh = y1 - y0 + 1;
-    const score = sum / n;
-    if (Math.min(bw, bh) < minSize || score < boxThresh) continue;
-    // principal axis
-    const mx = sx / n;
-    const my = sy / n;
-    const cxx = sxx / n - mx * mx;
-    const cyy = syy / n - my * my;
-    const cxy = sxy / n - mx * my;
-    let angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
-    if (angle > Math.PI / 4)
-      angle -= Math.PI / 2; // keep the long side "horizontal"
-    else if (angle < -Math.PI / 4) angle += Math.PI / 2;
-    // extents along that axis
-    const ca = Math.cos(angle);
-    const sa = Math.sin(angle);
-    let u0 = Infinity;
-    let u1 = -Infinity;
-    let v0 = Infinity;
-    let v1 = -Infinity;
-    for (const j of px) {
-      const x = j % w;
-      const y = (j / w) | 0;
-      const u = x * ca + y * sa;
-      const v = -x * sa + y * ca;
-      if (u < u0) u0 = u;
-      if (u > u1) u1 = u;
-      if (v < v0) v0 = v;
-      if (v > v1) v1 = v;
-    }
-    let rw = u1 - u0 + 1;
-    let rh = v1 - v0 + 1;
-    // Shape check: a text line is thin (at most about a quarter of the tile), long (a
-    // two-letter word is about square) and fairly solid. Shirts, railings and clouds fail one
-    // of these. A vertical line is turned a quarter so its length lies along the box's width,
-    // and marked. A blob touching the tile's edge may be a word cut there, so it can be squarer.
-    const um = (u0 + u1) / 2;
-    const vm = (v0 + v1) / 2;
-    const atEdge = x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2;
-    let vertical = false;
-    if (rh > rw * 1.4) {
-      vertical = true;
-      [rw, rh] = [rh, rw];
-      angle += Math.PI / 2;
-    }
-    if (rh > h * 0.25) continue;
-    if (rw / rh < (atEdge ? 0.5 : rh < h * 0.06 ? 1.0 : 1.4)) continue;
-    if (n / (rw * rh) < 0.3) continue;
-    const dist = (rw * rh * unclip) / (2 * (rw + rh));
-    out.push({
-      cx: um * ca - vm * sa,
-      cy: um * sa + vm * ca,
-      w: rw + 2 * dist,
-      h: rh + 2 * dist,
-      angle,
-      score,
-      vertical,
-    });
+    const box = blobBox(flood(i, bin, seen, prob, w, h), w, h, boxThresh, unclip, minSize);
+    if (box) out.push(box);
   }
   return out;
+}
+
+// The blob of set pixels connected to `start`: its bounds, size, summed probability, the sums
+// for its principal axis, and its pixels.
+function flood(start, bin, seen, prob, w, h) {
+  const b = { x0: w, y0: h, x1: 0, y1: 0, n: 0, sum: 0, sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0, px: [] };
+  const stack = [start];
+  seen[start] = 1;
+  const visit = j => {
+    if (!bin[j] || seen[j]) return;
+    seen[j] = 1;
+    stack.push(j);
+  };
+  while (stack.length) {
+    const j = stack.pop();
+    const x = j % w;
+    const y = (j / w) | 0;
+    addPixel(b, j, x, y, prob[j]);
+    if (x > 0) visit(j - 1);
+    if (x < w - 1) visit(j + 1);
+    if (y > 0) visit(j - w);
+    if (y < h - 1) visit(j + w);
+  }
+  return b;
+}
+function addPixel(b, j, x, y, p) {
+  b.n++;
+  b.sum += p;
+  b.px.push(j);
+  b.sx += x;
+  b.sy += y;
+  b.sxx += x * x;
+  b.syy += y * y;
+  b.sxy += x * y;
+  if (x < b.x0) b.x0 = x;
+  if (x > b.x1) b.x1 = x;
+  if (y < b.y0) b.y0 = y;
+  if (y > b.y1) b.y1 = y;
+}
+
+// A blob's rotated text box, or null if it is too small, too faint or not shaped like text.
+function blobBox(b, w, h, boxThresh, unclip, minSize) {
+  const score = b.sum / b.n;
+  if (Math.min(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1) < minSize || score < boxThresh) return null;
+  let angle = principalAxis(b);
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  const [u0, u1, v0, v1] = extents(b.px, w, ca, sa);
+  let rw = u1 - u0 + 1;
+  let rh = v1 - v0 + 1;
+  const um = (u0 + u1) / 2;
+  const vm = (v0 + v1) / 2;
+  // A vertical line is turned a quarter so its length lies along the box's width, and marked.
+  let vertical = false;
+  if (rh > rw * 1.4) {
+    vertical = true;
+    [rw, rh] = [rh, rw];
+    angle += Math.PI / 2;
+  }
+  const atEdge = b.x0 <= 1 || b.y0 <= 1 || b.x1 >= w - 2 || b.y1 >= h - 2;
+  if (!textShaped(rw, rh, b.n, h, atEdge)) return null;
+  const dist = (rw * rh * unclip) / (2 * (rw + rh));
+  return {
+    cx: um * ca - vm * sa,
+    cy: um * sa + vm * ca,
+    w: rw + 2 * dist,
+    h: rh + 2 * dist,
+    angle,
+    score,
+    vertical,
+  };
+}
+function principalAxis(b) {
+  const mx = b.sx / b.n;
+  const my = b.sy / b.n;
+  const cxx = b.sxx / b.n - mx * mx;
+  const cyy = b.syy / b.n - my * my;
+  const cxy = b.sxy / b.n - mx * my;
+  const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+  // keep the long side "horizontal"
+  if (angle > Math.PI / 4) return angle - Math.PI / 2;
+  if (angle < -Math.PI / 4) return angle + Math.PI / 2;
+  return angle;
+}
+// The pixels' extents along the axis (u) and across it (v): [u0, u1, v0, v1].
+function extents(px, w, ca, sa) {
+  let u0 = Infinity;
+  let u1 = -Infinity;
+  let v0 = Infinity;
+  let v1 = -Infinity;
+  for (const j of px) {
+    const x = j % w;
+    const y = (j / w) | 0;
+    const u = x * ca + y * sa;
+    const v = -x * sa + y * ca;
+    if (u < u0) u0 = u;
+    if (u > u1) u1 = u;
+    if (v < v0) v0 = v;
+    if (v > v1) v1 = v;
+  }
+  return [u0, u1, v0, v1];
+}
+// Shape check: a text line is thin (at most about a quarter of the tile), long (a two-letter
+// word is about square) and fairly solid. Shirts, railings and clouds fail one of these. A
+// blob touching the tile's edge may be a word cut there, so it can be squarer.
+function textShaped(rw, rh, n, h, atEdge) {
+  if (rh > h * 0.25) return false;
+  const minAspect = atEdge ? 0.5 : rh < h * 0.06 ? 1.0 : 1.4;
+  if (rw / rh < minAspect) return false;
+  return n / (rw * rh) >= 0.3;
 }

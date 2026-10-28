@@ -18,6 +18,18 @@
     return t * t * (3 - 2 * t);
   };
 
+  // How much of a pixel's colour to keep: 1 near the hue, fading to 0 (grey) away from it
+  function amount(r, g, b, [centre, half]) {
+    const max = Math.max(r, g, b);
+    const c = max - Math.min(r, g, b);
+    if (c <= 20) return 0;
+    let hue = max === r ? ((g - b) / c) % 6 : max === g ? (b - r) / c + 2 : (r - g) / c + 4;
+    hue = (hue * 60 + 360) % 360;
+    const off = Math.abs(((hue - centre + 540) % 360) - 180);
+    // close to the hue, saturated enough, and not too dark
+    return (1 - smooth(half, half + FEATHER, off)) * smooth(0.18, 0.4, c / max) * smooth(25, 60, max);
+  }
+
   function draw(source, hue = keep) {
     const w = source.width || source.naturalWidth || 512;
     const h = source.height || source.naturalHeight || 512;
@@ -27,23 +39,12 @@
     g.drawImage(source, 0, 0, w, h);
     const img = g.getImageData(0, 0, w, h);
     const d = img.data;
-    const [centre, half] = hue;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i];
       const gr = d[i + 1];
       const b = d[i + 2];
-      const max = Math.max(r, gr, b);
-      const min = Math.min(r, gr, b);
       const grey = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
-      let k = 0;
-      if (max - min > 20) {
-        const c = max - min;
-        let hue = max === r ? ((gr - b) / c) % 6 : max === gr ? (b - r) / c + 2 : (r - gr) / c + 4;
-        hue = (hue * 60 + 360) % 360;
-        const off = Math.abs(((hue - centre + 540) % 360) - 180);
-        // close to the hue, saturated enough, and not too dark
-        k = (1 - smooth(half, half + FEATHER, off)) * smooth(0.18, 0.4, c / max) * smooth(25, 60, max);
-      }
+      const k = amount(r, gr, b, hue);
       d[i] = grey + (r - grey) * k;
       d[i + 1] = grey + (gr - grey) * k;
       d[i + 2] = grey + (b - grey) * k;

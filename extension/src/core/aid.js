@@ -21,17 +21,12 @@
 //   note(text), status(text) }. rand() is a stream seeded by loc. pick() is seeded by the real
 //   round, so it's the same whether lying or not. note() puts a badge on the map ('' hides it).
 // ggs.aid.hints[id] = { shapes(ctx), random(rand) -> cfg } lists the hint scripts for Lying
-// hints to pick from.
+// hints to pick from. ggs.aid also carries geo.js's geometry helpers (ggs.aid.distance etc).
 // The location is only used to draw an area it's inside, a distance, or to pick between the
 // player's own pins. It's never drawn itself.
 (() => {
   const ggs = globalThis.__ggs;
-  const KM_PER_DEG = 111.32;
-  const EARTH_KM = 6371;
-  // km. The band sliders' marks, then the hemisphere.
-  const BANDS = [0, 5, 25, 50, 100, 500, 1000, 2500];
-  // km. The radius slider's first marks.
-  const RADII = [5, 25, 50, 100, 500, 1000, 2500];
+  const { seeded, covers, loadGeo } = ggs.geo;
   const RING_PX = 9;
   // Not clickable, so clicks still reach the map to place the guess.
   const STYLE = {
@@ -61,208 +56,27 @@
     return box;
   }
 
-  // A seeded random stream (FNV-1a into mulberry32). Seeded by the game, the round's location
-  // and the script, so a reload draws the same shapes and can't be used to average them out.
-  function seeded(str) {
-    let a = 2166136261;
-    for (let i = 0; i < str.length; i++) a = Math.imul(a ^ str.charCodeAt(i), 16777619);
-    return () => {
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  // Every size's band is placed biggest first, each inside the one before and all holding x.
-  // So moving the slider mid-round tells you no more than the thinnest band you looked at.
-  // The biggest is the hemisphere, 0 to ±half. x, half and the result are in degrees.
-  // Widths are km along the axis. For longitude that's at the equator, so a band's width
-  // can't give the latitude away.
-  function band(x, rand, index, half) {
-    let lo = x < 0 ? -half : 0;
-    let hi = lo + half;
-    for (let i = BANDS.length - 1; i >= index; i--) {
-      const w = BANDS[i] / KM_PER_DEG;
-      const min = Math.max(lo, x - w);
-      const max = Math.min(hi - w, x);
-      lo = min + rand() * (max - min);
-      hi = lo + w;
-    }
-    return [lo, hi];
-  }
-
-  // The same nesting for circles. Each centre is within 95% of its radius of the location, and
-  // close enough to the bigger circle's centre to sit inside it. Offsets are km east and north.
-  // If 50 tries miss, the point on the line from the bigger centre towards the location fits.
-  function circle(loc, rand, index) {
-    let c = [0, 0];
-    let room = Infinity;
-    for (let i = RADII.length - 1; i >= index; i--) {
-      const r = 0.95 * RADII[i];
-      let p = null;
-      for (let t = 0; t < 50 && !p; t++) {
-        const d = r * Math.sqrt(rand());
-        const a = 2 * Math.PI * rand();
-        const q = [d * Math.sin(a), d * Math.cos(a)];
-        if (Math.hypot(q[0] - c[0], q[1] - c[1]) <= room) p = q;
-      }
-      if (!p) {
-        const d = Math.hypot(...c);
-        const k = Math.max(0, 1 - room / d);
-        p = [c[0] * k, c[1] * k];
-      }
-      c = p;
-      room = RADII[i] - (RADII[i - 1] ?? 0);
-    }
-    return { center: destination(loc, Math.hypot(...c), Math.atan2(c[0], c[1])), km: RADII[index] };
-  }
-
-  // A lat/lng box as unstroked pieces at most 90 degrees wide, since Google Maps takes the
-  // short way between two points. latLine and lngLine draw edges over the joins.
-  function box(s, n, w, e) {
-    const out = [];
-    for (let x = w; x < e; x += 90) {
-      const x2 = Math.min(e, x + 90);
-      const paths = [
-        { lat: s, lng: x },
-        { lat: n, lng: x },
-        { lat: n, lng: x2 },
-        { lat: s, lng: x2 },
-      ];
-      out.push({ type: 'Polygon', strokeWeight: 0, paths });
-    }
-    return out;
-  }
-  const latLine = lat => ({ type: 'Polyline', path: [-180, -90, 0, 90, 180].map(lng => ({ lat, lng })) });
-  const lngLine = lng => ({
-    type: 'Polyline',
-    path: [
-      { lat: -85, lng },
-      { lat: 85, lng },
-    ],
-  });
-
-  // The point km away from a spot along a bearing (radians from north), on a sphere.
-  function destination({ lat, lng }, km, bearing) {
-    const rad = Math.PI / 180;
-    const d = km / EARTH_KM;
-    const p1 = lat * rad;
-    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(bearing));
-    const l2 =
-      lng * rad +
-      Math.atan2(Math.sin(bearing) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
-    return { lat: p2 / rad, lng: ((l2 / rad + 540) % 360) - 180 };
-  }
-
-  // Great-circle distance in km.
-  function distance(a, b) {
-    const rad = Math.PI / 180;
-    const h =
-      Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 +
-      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
-    return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(h)));
-  }
-
-  // Country outlines from draw-guess's geo.json (code -> [[outer ring, ...holes], ...] in
-  // [lng, lat]). Fetched once, the first time a script asks.
-  let geo = null;
-  const loadGeo = () =>
-    (geo ??= fetch(`${ggs.extBase}src/scripts/draw-guess/app/data/geo.json`)
-      .then(r => r.json())
-      .catch(err => {
-        geo = null;
-        throw err;
-      }));
-
-  function inside([x, y], ring) {
-    let hit = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i];
-      const [xj, yj] = ring[j];
-      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
-    }
-    return hit;
-  }
-  // Which country a spot is in: the smallest outline holding it, so the Vatican beats Italy.
-  // Failing that, with `near`, the nearest vertex within ~1.5 degrees. That catches coastal
-  // roads outside the simplified coastlines.
-  function countryAt(geo, { lat, lng }, { near: useNear = true } = {}) {
-    let best = null;
-    let bestArea = Infinity;
-    let near = null;
-    let nearD = 1.5 ** 2;
-    const k = Math.cos((lat * Math.PI) / 180);
-    for (const [code, polys] of Object.entries(geo)) {
-      for (const [outer, ...holes] of polys) {
-        if (inside([lng, lat], outer) && !holes.some(h => inside([lng, lat], h))) {
-          const xs = outer.map(p => p[0]);
-          const ys = outer.map(p => p[1]);
-          const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-          if (area < bestArea) {
-            bestArea = area;
-            best = code;
-          }
-        }
-        if (!useNear) continue;
-        for (const [x, y] of outer) {
-          const d = ((x - lng) * k) ** 2 + (y - lat) ** 2;
-          if (d < nearD) {
-            nearD = d;
-            near = code;
-          }
-        }
-      }
-    }
-    return best ?? near;
-  }
-
-  // Whether any drawn shape holds a spot. Polygons by even-odd, also one turn of the globe
-  // either way for pieces drawn past ±180. Circles by distance.
-  function covers(specs, p) {
-    return specs.some(s => {
-      if (s.type === 'Circle') return distance(s.center, p) <= s.radius / 1000;
-      if (s.type !== 'Polygon') return false;
-      const rings = (s.paths[0]?.lat === undefined ? s.paths : [s.paths]).map(r =>
-        r.map(q => [q.lng, q.lat]),
-      );
-      return [p.lng, p.lng - 360, p.lng + 360].some(
-        x => rings.filter(r => inside([x, p.lat], r)).length % 2 === 1,
-      );
-    });
-  }
-
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
   const guessHooks = new Set();
   let passing = false;
   let swallowUp = false;
-  function onPress(e) {
-    if (passing || !guessHooks.size) return;
-    if (e.type === 'keyup') {
-      if (swallowUp && e.code === 'Space') {
-        swallowUp = false;
-        e.stopImmediatePropagation();
-      }
-      return;
-    }
-    const isPress =
-      e.type === 'keydown'
-        ? e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement()
-        : !!ggs.maps.guessButton()?.contains(e.target);
-    if (!isPress) return;
-    let p = null;
+  function isGuessPress(e) {
+    if (e.type === 'keydown') return e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement();
+    return !!ggs.maps.guessButton()?.contains(e.target);
+  }
+  // Any hook returning false blocks the guess. Otherwise the last point given wins.
+  function askGuessHooks() {
+    let point = null;
     let block = false;
     for (const fn of guessHooks) {
       const r = fn();
       if (r === false) block = true;
-      else p = r ?? p;
+      else point = r ?? point;
     }
-    if (!p && !block) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    if (e.type === 'keydown') swallowUp = true;
-    if (block) return;
+    return { point, block };
+  }
+  function guessAt(p) {
     ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
     passing = true;
     // Waits so GeoGuessr takes the new pin first.
@@ -270,6 +84,23 @@
       if (!ggs.maps.submitGuess()) ggs.maps.pressSpace();
       passing = false;
     }, 150);
+  }
+  // The keyup after a swallowed Space press goes too.
+  function onKeyUp(e) {
+    if (!swallowUp || e.code !== 'Space') return;
+    swallowUp = false;
+    e.stopImmediatePropagation();
+  }
+  function onPress(e) {
+    if (passing || !guessHooks.size) return;
+    if (e.type === 'keyup') return onKeyUp(e);
+    if (!isGuessPress(e)) return;
+    const { point, block } = askGuessHooks();
+    if (!point && !block) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === 'keydown') swallowUp = true;
+    if (!block) guessAt(point);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -310,6 +141,16 @@
       return { lat, lng };
     });
   }
+
+  // A circle's ring: a marker RING_PX across on its centre, so it can be found zoomed out.
+  const ringIcon = look => ({
+    path: 0,
+    scale: RING_PX,
+    strokeColor: look.strokeColor,
+    strokeWeight: 3,
+    fillColor: look.fillColor,
+    fillOpacity: 0.3,
+  });
 
   ggs.aid = (id, hooks) => ({
     start(cfg) {
@@ -408,6 +249,60 @@
         }
       }
 
+      // GeoGuessr made a new map, so move everything onto it.
+      function moveTo(now) {
+        map = now;
+        listener?.remove();
+        listener = gm().event.addListener(map, 'click', e => {
+          if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
+        });
+        for (const o of extras) o.setMap(map);
+        shapesKey = '';
+        if (note?.textContent) ctx.note(note.textContent);
+        detach?.();
+        detach = hooks.attach?.(ctx) ?? null;
+      }
+
+      function newRound(key) {
+        round = key;
+        real = loc = lying = lies = null;
+        clear(shapes);
+        clear(extras);
+        shapesKey = '';
+        ctx.note('');
+        hooks.round?.(ctx);
+        if (hooks.usesLocation === false) return;
+        ggs.game.roundLocation().then(l => {
+          // Moved on, or stopped.
+          if (round !== key) return;
+          real = l;
+          ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
+        });
+      }
+
+      // Tosses this round's coin, the first time the real location is known.
+      function tossCoin(key) {
+        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
+        if (lie === lying) return;
+        lying = lie;
+        lies = null;
+        loc = lie ? null : real;
+        shapesKey = '';
+        if (!lie) return;
+        const current = () => round === key && lying === lie;
+        fakes(seed('fake', real)).then(
+          list => {
+            if (!current()) return;
+            lies = list;
+            loc = list[0];
+          },
+          () => {
+            // No outlines to lie with, so tell the truth.
+            if (current()) loc = real;
+          },
+        );
+      }
+
       // The shapes for the current spot. When lying, made-up spots are tried until the shapes
       // miss the real one. loc stays on the one it settled on, for the other hooks too.
       async function draw(want) {
@@ -420,104 +315,61 @@
         return specs;
       }
 
-      const tick = setInterval(() => {
-        const now = ggs.maps.findGuessMap();
-        const key = ggs.game.roundKey();
-        if (!now) {
-          goneSince ||= Date.now();
-          if (Date.now() - goneSince > OVER_MS) ownUp();
-          return;
+      // rings() shows a circle's ring only while the circle itself is smaller than it.
+      function show(specs) {
+        clear(shapes);
+        shapes.push(...specs.map(make));
+        for (const o of [...shapes]) {
+          if (!(o instanceof gm().Circle)) continue;
+          o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon: ringIcon(look()) });
+          shapes.push(o.ring);
         }
-        goneSince = 0;
-        // GeoGuessr made a new map, so move everything onto it.
-        if (now !== map) {
-          map = now;
-          listener?.remove();
-          listener = gm().event.addListener(map, 'click', e => {
-            if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
-          });
-          for (const o of extras) o.setMap(map);
-          shapesKey = '';
-          if (note?.textContent) ctx.note(note.textContent);
-          detach?.();
-          detach = hooks.attach?.(ctx) ?? null;
-        }
-        if (key !== round) {
-          round = key;
-          real = loc = lying = lies = null;
-          clear(shapes);
-          clear(extras);
-          shapesKey = '';
-          ctx.note('');
-          hooks.round?.(ctx);
-          if (hooks.usesLocation !== false) {
-            ggs.game.roundLocation().then(l => {
-              // Moved on, or stopped.
-              if (round !== key) return;
-              real = l;
-              ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
-            });
-          }
-        }
-        hooks.tick?.(ctx);
         rings();
-        if (!real) return;
-        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
-        // First time this round.
-        if (lie !== lying) {
-          lying = lie;
-          lies = null;
-          loc = lie ? null : real;
-          shapesKey = '';
-          if (lie) {
-            fakes(seed('fake', real)).then(
-              list => {
-                if (round === key && lying === lie) {
-                  lies = list;
-                  loc = list[0];
-                }
-              },
-              () => {
-                // No outlines to lie with, so tell the truth.
-                if (round === key && lying === lie) loc = real;
-              },
-            );
-          }
-        }
-        // A redraw after the guess put the plain name back.
-        if (owned === key) ownUp();
-        const want = `${round}|${lying}|${JSON.stringify(cfg)}`;
-        if (!loc || !hooks.shapes || want === shapesKey) return;
+        if (hooks.colour) label();
+      }
+
+      function redraw(want) {
         shapesKey = want;
         if (lies) loc = lies[0];
         draw(want).then(
           specs => {
             // The settings or round moved on (or it stopped) while it loaded.
-            if (!specs || shapesKey !== want) return;
-            clear(shapes);
-            shapes.push(...specs.map(make));
-            // A circle also gets a ring of RING_PX on its centre, so it can be found zoomed out.
-            // rings() shows it only while the circle itself is smaller than that.
-            for (const o of [...shapes]) {
-              if (!(o instanceof gm().Circle)) continue;
-              const icon = {
-                path: 0,
-                scale: RING_PX,
-                strokeColor: look().strokeColor,
-                strokeWeight: 3,
-                fillColor: look().fillColor,
-                fillOpacity: 0.3,
-              };
-              o.ring = make({ type: 'Marker', position: o.getCenter(), visible: false, icon });
-              shapes.push(o.ring);
-            }
-            rings();
-            if (hooks.colour) label();
+            if (specs && shapesKey === want) show(specs);
           },
           err => {
             if (shapesKey === want) ctx.status(`Couldn't draw it (${err.message})`);
           },
         );
+      }
+
+      // Follows GeoGuessr onto a new guess map or into a new round.
+      function catchUp(now, key) {
+        if (now !== map) moveTo(now);
+        if (key !== round) newRound(key);
+      }
+
+      function withLocation(key) {
+        tossCoin(key);
+        // A redraw after the guess put the plain name back.
+        if (owned === key) ownUp();
+        const want = `${round}|${lying}|${JSON.stringify(cfg)}`;
+        if (loc && hooks.shapes && want !== shapesKey) redraw(want);
+      }
+
+      function mapGone() {
+        goneSince ||= Date.now();
+        if (Date.now() - goneSince > OVER_MS) ownUp();
+      }
+
+      const tick = setInterval(() => {
+        const now = ggs.maps.findGuessMap();
+        const key = ggs.game.roundKey();
+        if (!now) return mapGone();
+        goneSince = 0;
+        catchUp(now, key);
+        hooks.tick?.(ctx);
+        rings();
+        if (real) withLocation(key);
       }, 300);
 
       return {
@@ -550,18 +402,6 @@
       };
     },
   });
-  Object.assign(ggs.aid, {
-    seeded,
-    band,
-    circle,
-    box,
-    latLine,
-    lngLine,
-    destination,
-    distance,
-    loadGeo,
-    countryAt,
-    covers,
-    hints: {},
-  });
+  // Scripts use the geometry helpers from here.
+  Object.assign(ggs.aid, ggs.geo, { hints: {} });
 })();
