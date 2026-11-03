@@ -4,6 +4,7 @@
 (() => {
   const ggs = globalThis.__ggs;
   const ring = r => r.map(([lng, lat]) => ({ lat, lng }));
+  const EXACT = 13;
 
   function decoys(pool, real, n, rand) {
     const rest = pool.filter(c => c !== real).sort();
@@ -18,9 +19,12 @@
     // its own colour, so it's told apart from other hints (Terrible hints uses it too)
     colour: '#2b8a3e',
     async shapes({ loc, rand, cfg, status }) {
-      // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to 5 km
+      // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to
+      // 5 km, 13 the exact spot
       const area = cfg.area ?? 8;
       const continentOnly = area === 0;
+      // a 50 m circle on the spot, ringed when zoomed out (core/aid.js)
+      if (area === EXACT) return [{ type: 'Circle', center: loc, radius: 50 }];
       if (area >= 6) {
         const { center, km } = ggs.aid.circle(loc, rand(), 12 - area);
         // core/aid.js adds a ring round it when it's tiny on screen

@@ -12,7 +12,7 @@
         label: 'Area',
         type: 'slider',
         min: 0,
-        max: 12,
+        max: 13,
         default: 8,
         steps: [
           'continent',
@@ -28,6 +28,7 @@
           '50 km',
           '25 km',
           '5 km',
+          'exact',
         ],
       },
     ],

@@ -92,7 +92,7 @@
           ...COUNTRIES.map(([value, label]) => ({ value, label })),
         ],
       },
-      { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: true },
+      { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: false },
     ],
   });
 })();

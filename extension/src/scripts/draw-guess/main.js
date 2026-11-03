@@ -1,4 +1,4 @@
-// Draw your country: a drawing board (app/) over GeoGuessr's guess map, through core/board.js.
+// Draw the country: a drawing board (app/) over GeoGuessr's guess map, through core/board.js.
 // Sketch the country and pin your spot, and the board snaps the drawing onto the closest real
 // country. The pin becomes the guess, and a few seconds after the animation GeoGuessr's own Guess
 // button is pressed.

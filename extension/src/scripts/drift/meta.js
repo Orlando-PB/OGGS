@@ -8,7 +8,15 @@
     excludes: ['draw-guess', 'flag-guess'],
     options: [
       // index into SPEED in main.js
-      { key: 'speed', label: 'Speed', type: 'slider', min: 0, max: 2, default: 1, marks: ['Less', 'More'] },
+      {
+        key: 'speed',
+        label: 'Speed',
+        type: 'slider',
+        min: 0,
+        max: 4,
+        default: 1,
+        marks: ['Slower', 'Faster'],
+      },
     ],
   });
 })();

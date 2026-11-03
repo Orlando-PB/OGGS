@@ -177,17 +177,22 @@
       }, wait);
     }
 
-    // Try n at pressing Guess. True once there's nothing left to do: pressed, or already
-    // guessed or moved on.
+    // Try n at pressing Guess. True once there's nothing left to do: guessed or moved on.
+    // A press can be held back (core/aid.js beforeGuess hooks), so pressing alone isn't done.
     function tryPress(guess, n) {
-      if (!ggs.maps.guessMapElement() || ggs.maps.submitGuess()) return true;
+      if (!ggs.maps.guessMapElement() || ggs.game.guessed()) return true;
+      if (!ggs.maps.submitGuess()) pressAnotherWay(guess, n);
+      return false;
+    }
+
+    // The button wasn't there or was disabled: put the pin down again once, then try Space.
+    function pressAnotherWay(guess, n) {
       if (n === 2) {
         try {
           ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
         } catch {}
       }
       if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
-      return false;
     }
 
     // The round's real location, for boards that show it once the guess is in.
@@ -226,8 +231,10 @@
       if (answer) sendAnswer(ggs.game.roundKey());
     }
 
+    // After a guess the round is over for the board, even when the guess map comes back
+    // (back from spectating the other player in a duel).
     const tick = setInterval(() => {
-      const inRound = !!ggs.maps.guessMapElement();
+      const inRound = !!ggs.maps.guessMapElement() && !ggs.game.guessed();
       if (inRound && !host) create();
       if (host) follow(inRound);
       onTick?.(inRound);

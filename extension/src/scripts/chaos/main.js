@@ -341,7 +341,8 @@
       const now = performance.now();
       const dt = now - last;
       last = now;
-      const inRound = !!ggs.maps.guessMapElement();
+      // A guess ends the round here, even with the guess map back from spectating.
+      const inRound = !!ggs.maps.guessMapElement() && !ggs.game.guessed();
       const round = ggs.game.roundKey();
       if (inRound) awaySince = 0;
       else awaySince ||= now;

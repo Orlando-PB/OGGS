@@ -913,9 +913,11 @@ section.flat .status:empty { display: none; }
       entryToken = token;
       entries = 0;
       hadMap = false;
+      holding = false;
+      ggs.debug(`round key reset: token ${token}`);
     }
     if (hasMap) {
-      if (!hadMap) entries++;
+      onMap();
       hadMap = true;
       goneSince = 0;
     } else if (hadMap) {
@@ -924,6 +926,44 @@ section.flat .status:empty { display: none; }
     }
   }, 200);
   const roundKey = () => `${context()?.token}|${entries}`;
+
+  // The guess map coming back is a new round, except in a duel the player has already guessed
+  // in. There it's back from spectating the other player, so the round only moves on once the
+  // Street View is at a different round of the game.
+  let holding = false;
+  function onMap() {
+    if (hadMap && !holding) return;
+    const held = sameGuessedRound();
+    if (!hadMap) holding = held;
+    if (held) return;
+    holding = false;
+    entries++;
+    ggs.debug(`round key ${roundKey()}`);
+  }
+
+  // The round the player guessed in: { key, n } (n is the duel round, when known).
+  let guessedIn = null;
+  const guessed = () => guessedIn?.key === roundKey();
+  const sameGuessedRound = () => guessed() && guessedIn.n != null && spotRound() === guessedIn.n;
+
+  // A guess: GeoGuessr's Guess button clicked (by the player or a board), or Space with a
+  // pin down. Disabled buttons get no clicks. Heard as the event bubbles out, so a press that
+  // core/aid.js held back (a beforeGuess hook: Ocean only, Lag's slow guess) doesn't count.
+  addEventListener('click', e => {
+    if (ggs.maps.guessButton()?.contains(e.target)) noteGuess();
+  });
+  addEventListener('keydown', e => {
+    if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.lastGuess()) noteGuess();
+  });
+  async function noteGuess() {
+    const key = roundKey();
+    guessedIn = { key, n: spotRound() };
+    const ctx = context();
+    if (guessedIn.n != null || ctx?.mode !== 'duels') return;
+    // No round list yet (no script has asked for the location), so fetch it.
+    duelList = { token: ctx.token, rounds: (await fetchGame(ctx).catch(() => null))?.rounds ?? [] };
+    if (guessedIn.key === key) guessedIn.n = spotRound();
+  }
 
   // { n, total, lat, lng } in standard games and friendly party duels. total is null in duels,
   // which run until someone's out. Scripts may use the location for gameplay (draw-guess's
@@ -960,9 +1000,17 @@ section.flat .status:empty { display: none; }
     return null;
   };
 
-  const DUEL_TRIES = 8;
-  // token -> { n, key }: the last duel round handed out, and for which roundKey.
+  const DUEL_TRIES = 20;
+  // token -> Map(round number -> the roundKey it was handed out for).
   const duelRounds = new Map();
+  // GeoGuessr's Street View panoramas, to see where the player is.
+  const panos = [];
+  ggs.maps.hook('StreetViewPanorama', p => panos.push(p));
+  // How far the Street View can be from a round's location and still be that round
+  // (the player may have moved a little before the lookup).
+  const SAME_SPOT_KM = 50;
+  // { token, rounds }: the last duel round list fetched.
+  let duelList = null;
 
   async function lookupRound(key) {
     const ctx = context();
@@ -981,39 +1029,78 @@ section.flat .status:empty { display: none; }
     return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
   }
 
-  // The new round can reach the game data a few seconds after the guess map appears.
-  // Until then currentRoundNumber still names the round just played. So a round that has
-  // ended, or was already handed out for an earlier round, is waited on. After DUEL_TRIES
-  // it's taken anyway, since the roundKey can move on without a new round (e.g. a reload).
+  // Duel rounds are found by place, not by currentRoundNumber. In party duels the game data
+  // is a snapshot from when the game was made: status "Created" and currentRoundNumber 1 all
+  // game, with every round's location listed up front. So the round is the listed one nearest
+  // the Street View on screen. At a round's start the panorama can still be the last round's
+  // for a moment, so a round already handed out for an earlier roundKey is waited on. After
+  // DUEL_TRIES it's taken anyway, since the roundKey can move on mid-round (the guess map
+  // blinking out, a reload).
   async function duelRound(ctx, key) {
     let found = { why: 'no duel data' };
+    let j;
     for (let tries = 0; tries < DUEL_TRIES; tries++) {
-      if (tries) await new Promise(r => setTimeout(r, 1000));
       if (roundKey() !== key) return noRound('moved on while waiting');
-      found = duelRoundIn(await fetchGame(ctx), ctx.token, key);
+      // The round list only needs fetching again if no round matched (a live duel lists
+      // each round as it starts). Waiting on the Street View is then just a position check.
+      if (!found.round) {
+        j = await fetchGame(ctx);
+        duelList = { token: ctx.token, rounds: j?.rounds ?? [] };
+      }
+      found = duelRoundAt(streetViewSpot(), j, ctx.token, key);
       if (found.round && !found.stale) break;
+      await new Promise(r => setTimeout(r, 1000));
     }
+    ggs.debug(`duel lookup for ${key}: round ${found.round?.n} stale=${!!found.stale}`);
     return handOut(found, ctx.token, key);
   }
 
   function handOut({ round, why, stale }, token, key) {
     if (!round) return noRound(why);
-    if (stale) ggs.log(`duel round ${round.n} still looks old, using it anyway`);
-    duelRounds.set(token, { n: round.n, key });
+    if (stale) ggs.log(`duel round ${round.n} was already played, using it anyway`);
+    if (!duelRounds.has(token)) duelRounds.set(token, new Map());
+    duelRounds.get(token).set(round.n, key);
     return round;
   }
 
-  // The duel's current round in its game data: { round, stale } or { why } when it has no
-  // location. stale means it has ended or was handed out for an earlier roundKey.
-  function duelRoundIn(j, token, key) {
-    const n = j?.currentRoundNumber;
-    const cur = j?.rounds?.find(r => r.roundNumber === n);
-    const p = cur?.panorama ?? cur;
-    if (!(n > 0) || typeof p?.lat !== 'number') return { why: `duel data has no location for round ${n}` };
-    const ended = cur.endTime && Date.parse(cur.endTime) < Date.now();
-    const seen = duelRounds.get(token);
-    const stale = ended || (seen && seen.n >= n && seen.key !== key);
-    return { round: { n, total: null, lat: p.lat, lng: p.lng }, stale };
+  // Where the Street View is: the newest panorama that has a position.
+  // The duel round the Street View is at, from the round list, or null.
+  function spotRound() {
+    const spot = streetViewSpot();
+    if (!spot || duelList?.token !== context()?.token) return null;
+    const best = nearestRound(spot, duelList.rounds);
+    return best && best.km <= SAME_SPOT_KM ? best.n : null;
+  }
+
+  function streetViewSpot() {
+    for (let i = panos.length - 1; i >= 0; i--) {
+      const p = panos[i].getPosition?.();
+      if (p) return { lat: p.lat(), lng: p.lng() };
+    }
+    return null;
+  }
+
+  // The listed duel round nearest the Street View: { round, stale } or { why }. stale means
+  // it was handed out for an earlier roundKey.
+  function duelRoundAt(spot, j, token, key) {
+    if (!spot) return { why: 'no Street View position yet' };
+    const best = nearestRound(spot, j?.rounds ?? []);
+    if (!best || best.km > SAME_SPOT_KM) return { why: 'no duel round near the Street View' };
+    const was = duelRounds.get(token)?.get(best.n);
+    const stale = was !== undefined && was !== key;
+    return { round: { n: best.n, total: null, lat: best.lat, lng: best.lng }, stale };
+  }
+
+  // { n, lat, lng, km } of the round whose location is nearest spot, or null.
+  function nearestRound(spot, rounds) {
+    let best = null;
+    for (const r of rounds) {
+      const p = r.panorama ?? r;
+      if (typeof p?.lat !== 'number') continue;
+      const km = ggs.geo.distance(spot, p);
+      if (!best || km < best.km) best = { n: r.roundNumber, lat: p.lat, lng: p.lng, km };
+    }
+    return best;
   }
 
   const roundLocation = () =>
@@ -1081,7 +1168,7 @@ section.flat .status:empty { display: none; }
     return guardCache.get(ctx.token);
   }
 
-  ggs.game = { context, roundKey, whyNoRound, mapInfo, roundLocation, competitive, noteLobby };
+  ggs.game = { context, roundKey, guessed, whyNoRound, mapInfo, roundLocation, competitive, noteLobby };
 })();
 
 // ==================== src/core/ui.js ==============================================
@@ -2249,17 +2336,22 @@ section.flat .status:empty { display: none; }
       }, wait);
     }
 
-    // Try n at pressing Guess. True once there's nothing left to do: pressed, or already
-    // guessed or moved on.
+    // Try n at pressing Guess. True once there's nothing left to do: guessed or moved on.
+    // A press can be held back (core/aid.js beforeGuess hooks), so pressing alone isn't done.
     function tryPress(guess, n) {
-      if (!ggs.maps.guessMapElement() || ggs.maps.submitGuess()) return true;
+      if (!ggs.maps.guessMapElement() || ggs.game.guessed()) return true;
+      if (!ggs.maps.submitGuess()) pressAnotherWay(guess, n);
+      return false;
+    }
+
+    // The button wasn't there or was disabled: put the pin down again once, then try Space.
+    function pressAnotherWay(guess, n) {
       if (n === 2) {
         try {
           ggs.maps.placeGuess(guess.lat, guess.lng, { pan: false });
         } catch {}
       }
       if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
-      return false;
     }
 
     // The round's real location, for boards that show it once the guess is in.
@@ -2298,8 +2390,10 @@ section.flat .status:empty { display: none; }
       if (answer) sendAnswer(ggs.game.roundKey());
     }
 
+    // After a guess the round is over for the board, even when the guess map comes back
+    // (back from spectating the other player in a duel).
     const tick = setInterval(() => {
-      const inRound = !!ggs.maps.guessMapElement();
+      const inRound = !!ggs.maps.guessMapElement() && !ggs.game.guessed();
       if (inRound && !host) create();
       if (host) follow(inRound);
       onTick?.(inRound);
@@ -2692,7 +2786,7 @@ section.flat .status:empty { display: none; }
     });
   }
 
-  // A circle's ring: a marker RING_PX across on its centre, so it can be found zoomed out.
+  // A circle's ring: a marker RING_PX in radius on its centre, so it can be found zoomed out.
   const ringIcon = look => ({
     path: 0,
     scale: RING_PX,
@@ -2715,6 +2809,7 @@ section.flat .status:empty { display: none; }
       let shapesKey = '';
       let extras = [];
       let listener = null;
+      let zoomListener = null;
       let note = null;
       let detach = null;
       const gm = () => window.google.maps;
@@ -2788,14 +2883,15 @@ section.flat .status:empty { display: none; }
         if (note) Object.assign(note.style, { background: colour(), color: '#fff' });
       }
 
-      // A circle's ring shows while the circle is under RING_PX across on screen.
-      // Metres per pixel come from the zoom.
+      // A circle under RING_PX in radius on screen is swapped for its ring, so the two never
+      // show at once. Metres per pixel come from the zoom.
       function rings() {
         const z = map?.getZoom();
         for (const o of shapes) {
           if (!o.ring || z == null) continue;
           const px = o.getRadius() / ((156543 * Math.cos((o.getCenter().lat() * Math.PI) / 180)) / 2 ** z);
           o.ring.setVisible(px < RING_PX);
+          o.setVisible(px >= RING_PX);
         }
       }
 
@@ -2803,9 +2899,12 @@ section.flat .status:empty { display: none; }
       function moveTo(now) {
         map = now;
         listener?.remove();
+        zoomListener?.remove();
         listener = gm().event.addListener(map, 'click', e => {
           if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
         });
+        // At once, not on the next tick, so the swap doesn't trail the zoom.
+        zoomListener = gm().event.addListener(map, 'zoom_changed', rings);
         for (const o of extras) o.setMap(map);
         shapesKey = '';
         if (note?.textContent) ctx.note(note.textContent);
@@ -2865,7 +2964,7 @@ section.flat .status:empty { display: none; }
         return specs;
       }
 
-      // rings() shows a circle's ring only while the circle itself is smaller than it.
+      // rings() shows a circle's ring in its place while the circle is smaller than it.
       function show(specs) {
         clear(shapes);
         shapes.push(...specs.map(make));
@@ -2939,6 +3038,7 @@ section.flat .status:empty { display: none; }
           clearInterval(tick);
           guessHooks.delete(guessHook);
           listener?.remove();
+          zoomListener?.remove();
           detach?.();
           clear(shapes);
           clear(extras);
@@ -4236,7 +4336,7 @@ section.flat .status:empty { display: none; }
 (() => {
   globalThis.__ggs.registry.push({
     id: 'draw-guess',
-    name: 'Draw your country',
+    name: 'Draw the country',
     description: 'Draw the country instead of using the map.',
     section: 'guessing',
     defaultEnabled: false,
@@ -4256,7 +4356,7 @@ section.flat .status:empty { display: none; }
 })();
 
 // ==================== src/scripts/draw-guess/main.js ==============================
-// Draw your country: a drawing board (app/) over GeoGuessr's guess map, through core/board.js.
+// Draw the country: a drawing board (app/) over GeoGuessr's guess map, through core/board.js.
 // Sketch the country and pin your spot, and the board snaps the drawing onto the closest real
 // country. The pin becomes the guess, and a few seconds after the animation GeoGuessr's own Guess
 // button is pressed.
@@ -4476,7 +4576,7 @@ section.flat .status:empty { display: none; }
         label: 'Area',
         type: 'slider',
         min: 0,
-        max: 12,
+        max: 13,
         default: 8,
         steps: [
           'continent',
@@ -4492,6 +4592,7 @@ section.flat .status:empty { display: none; }
           '50 km',
           '25 km',
           '5 km',
+          'exact',
         ],
       },
     ],
@@ -4527,6 +4628,7 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   const ring = r => r.map(([lng, lat]) => ({ lat, lng }));
+  const EXACT = 13;
 
   function decoys(pool, real, n, rand) {
     const rest = pool.filter(c => c !== real).sort();
@@ -4541,9 +4643,12 @@ section.flat .status:empty { display: none; }
     // its own colour, so it's told apart from other hints (Terrible hints uses it too)
     colour: '#2b8a3e',
     async shapes({ loc, rand, cfg, status }) {
-      // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to 5 km
+      // slider stops: 0 continent, 1-5 five down to one country, 6-12 circles from 2500 down to
+      // 5 km, 13 the exact spot
       const area = cfg.area ?? 8;
       const continentOnly = area === 0;
+      // a 50 m circle on the spot, ringed when zoomed out (core/aid.js)
+      if (area === EXACT) return [{ type: 'Circle', center: loc, radius: 50 }];
       if (area >= 6) {
         const { center, km } = ggs.aid.circle(loc, rand(), 12 - area);
         // core/aid.js adds a ring round it when it's tiny on screen
@@ -4601,7 +4706,7 @@ section.flat .status:empty { display: none; }
 // (a copy of its pin element, with the original hidden), so you can't tell which is the guess.
 // On Guess, core/aid.js first moves the guess to the pin closest to the round's location. The
 // same happens if the script stops mid-round (Chaos mode). Without the location the guess stays
-// on the last click. Click a pin to take it back.
+// on the last click. Click a pin to take it back. With all pins down, a click moves the oldest.
 (() => {
   const ggs = globalThis.__ggs;
   // the boards' pin (marks.js)
@@ -4616,32 +4721,35 @@ section.flat .status:empty { display: none; }
   const realPin = () =>
     document.querySelector(ggs.maps.GUESS_PIN_SELECTORS.map(s => `${s}:not([${OURS}] *)`).join(', '));
 
-  // Copy GeoGuessr's pin for a click, once it has drawn it (a couple of frames later).
-  function copyLook(map, latLng, done) {
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const el = realPin();
-        const proj = done.projection;
-        if (el && proj) {
-          // the outermost marker element, and its offset from the clicked spot
-          let root = el;
-          while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
-            root = root.parentElement;
-          }
-          const r = root.getBoundingClientRect();
-          const m = map.getDiv().getBoundingClientRect();
-          const p = proj.fromLatLngToContainerPixel(latLng);
-          look = {
-            html: root.outerHTML,
-            dx: r.left - m.left - p.x,
-            dy: r.top - m.top - p.y,
-            w: r.width,
-            h: r.height,
-          };
-        }
-        done(look);
-      }),
-    );
+  // Copy GeoGuessr's pin for a click once it has drawn it: at least a couple of frames later,
+  // and the first pin of a game can take longer, so it keeps looking for up to LOOK_FRAMES.
+  const LOOK_FRAMES = 60;
+  function copyLook(map, latLng, done, frame = 0) {
+    requestAnimationFrame(() => {
+      const el = frame >= 1 && realPin();
+      const proj = done.projection;
+      if (!(el && proj)) {
+        if (frame < LOOK_FRAMES) copyLook(map, latLng, done, frame + 1);
+        else done(look);
+        return;
+      }
+      // the outermost marker element, and its offset from the clicked spot
+      let root = el;
+      while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
+        root = root.parentElement;
+      }
+      const r = root.getBoundingClientRect();
+      const m = map.getDiv().getBoundingClientRect();
+      const p = proj.fromLatLngToContainerPixel(latLng);
+      look = {
+        html: root.outerHTML,
+        dx: r.left - m.left - p.x,
+        dy: r.top - m.top - p.y,
+        w: r.width,
+        h: r.height,
+      };
+      done(look);
+    });
   }
 
   // A pin on the map: an OverlayView holding the copy (or the fallback pin), clickable to remove.
@@ -4730,7 +4838,8 @@ section.flat .status:empty { display: none; }
       show(ctx);
     },
     click(latLng, ctx) {
-      if (ctx.pins.length >= most(ctx.cfg)) return; // full: click a pin to free one
+      // full: the oldest pin makes way
+      if (ctx.pins.length >= most(ctx.cfg)) ctx.remove(ctx.pins.shift());
       addPin(ctx, latLng);
       show(ctx);
     },
@@ -5044,7 +5153,7 @@ section.flat .status:empty { display: none; }
           ...COUNTRIES.map(([value, label]) => ({ value, label })),
         ],
       },
-      { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: true },
+      { key: 'world', label: 'Show the squashed world', type: 'checkbox', default: false },
     ],
   });
 })();
@@ -5490,7 +5599,15 @@ section.flat .status:empty { display: none; }
     excludes: ['draw-guess', 'flag-guess'],
     options: [
       // index into SPEED in main.js
-      { key: 'speed', label: 'Speed', type: 'slider', min: 0, max: 2, default: 1, marks: ['Less', 'More'] },
+      {
+        key: 'speed',
+        label: 'Speed',
+        type: 'slider',
+        min: 0,
+        max: 4,
+        default: 1,
+        marks: ['Slower', 'Faster'],
+      },
     ],
   });
 })();
@@ -5503,7 +5620,7 @@ section.flat .status:empty { display: none; }
 (() => {
   const ggs = globalThis.__ggs;
   // screen pixels per frame
-  const SPEED = [0.6, 1.4, 3];
+  const SPEED = [0.6, 1.4, 3, 5.5, 9];
   const LOCK = ['minZoom', 'maxZoom', 'scrollwheel', 'disableDoubleClickZoom', 'zoomControl'];
 
   ggs.scripts.drift = ggs.aid('drift', {
@@ -6644,15 +6761,17 @@ section.flat .status:empty { display: none; }
     async function newRound(key) {
       round = key;
       clearRound();
-      loc = await ggs.game.roundLocation().catch(() => null);
+      const found = await ggs.game.roundLocation().catch(() => null);
+      // A newer round took over during the wait, so this one's results are dropped.
       if (round !== key) return;
+      loc = found;
       if (!loc) {
         tuning = false;
         return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
       }
       const { list, failed } = await searchStations();
-      stations = list;
       if (round !== key) return;
+      stations = list;
       tuning = false;
       playFound(failed);
     }
@@ -11402,7 +11521,8 @@ section.flat .status:empty { display: none; }
       const now = performance.now();
       const dt = now - last;
       last = now;
-      const inRound = !!ggs.maps.guessMapElement();
+      // A guess ends the round here, even with the guess map back from spectating.
+      const inRound = !!ggs.maps.guessMapElement() && !ggs.game.guessed();
       const round = ggs.game.roundKey();
       if (inRound) awaySince = 0;
       else awaySince ||= now;

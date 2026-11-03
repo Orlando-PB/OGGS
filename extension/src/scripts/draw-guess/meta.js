@@ -1,7 +1,7 @@
 (() => {
   globalThis.__ggs.registry.push({
     id: 'draw-guess',
-    name: 'Draw your country',
+    name: 'Draw the country',
     description: 'Draw the country instead of using the map.',
     section: 'guessing',
     defaultEnabled: false,

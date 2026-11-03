@@ -32,9 +32,9 @@ GTA-style: every so often (10 s to 2 min, default 30 s; the first 3 s into each 
 
 ### Guessing
 
-**Draw your country.** Replaces the guess map with a drawing board. Sketch the country you think you're in and pin your spot; it snaps to the closest real country, then zooms out to where you really were, with the real country outlined if you missed.
+**Draw the country.** Replaces the guess map with a drawing board. Sketch the country you think you're in and pin your spot; it snaps to the closest real country, then zooms out to where you really were, with the real country outlined if you missed.
 
-![Draw your country](docs/screenshots/screenshot-2-draw-ingame.png)
+![Draw the country](docs/screenshots/screenshot-2-draw-ingame.png)
 
 **Draw the flag.** Replaces the guess map with a paint board. Paint the flag of the country you think you're in, then click your spot in the outline of the country whose flag it matched (by default the guess has to go inside it), and it zooms out to where you really were.
 
@@ -42,9 +42,9 @@ GTA-style: every so often (10 s to 2 min, default 30 s; the first 3 s into each 
 
 **Show latitude, Show longitude.** Shades a band the round is somewhere inside, from exact to a hemisphere.
 
-**Show area.** One slider from the continent, through 5 down to 1 countries (the right one among decoys), to a circle of 2500 down to 5 km radius.
+**Show area.** One slider from the continent, through 5 down to 1 countries (the right one among decoys), to a circle of 2500 down to 5 km radius, or the exact spot. 500 km by default.
 
-**Extra guesses.** Drop several pins; when you guess, the closest one counts.
+**Extra guesses.** Drop several pins; when you guess, the closest one counts. Once they're all down, a new click moves the oldest.
 
 **Show distance.** Each pin you drop shows how far it is from the spot, in kilometres or miles.
 
@@ -54,11 +54,11 @@ GTA-style: every so often (10 s to 2 min, default 30 s; the first 3 s into each 
 
 **Ocean only.** You can only guess in the ocean.
 
-**Guess in a country.** The guess map shows one country (Australia unless you pick another, or a random one each round) with the rest of the world greyed out, and the whole world squashed into it: the Americas in the west, Asia in the east, the far north along the top. Pin a spot in the country and the guess goes to the place in the world it stands for. You can still zoom and pan, but clicks outside the country don't count. Small far-off islands are left out. The squashed world's outlines can be switched off.
+**Guess in a country.** The guess map shows one country (Australia unless you pick another, or a random one each round) with the rest of the world greyed out, and the whole world squashed into it: the Americas in the west, Asia in the east, the far north along the top. Pin a spot in the country and the guess goes to the place in the world it stands for. You can still zoom and pan, but clicks outside the country don't count. Small far-off islands are left out. The squashed world's outlines are off unless you switch them on.
 
 **Blind map.** The guess map goes blank.
 
-**Drifting map.** The guess map keeps sliding about, and you can't zoom it.
+**Drifting map.** The guess map keeps sliding about, slower or faster, and you can't zoom it.
 
 ### Street View
 

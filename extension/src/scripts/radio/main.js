@@ -281,15 +281,17 @@
     async function newRound(key) {
       round = key;
       clearRound();
-      loc = await ggs.game.roundLocation().catch(() => null);
+      const found = await ggs.game.roundLocation().catch(() => null);
+      // A newer round took over during the wait, so this one's results are dropped.
       if (round !== key) return;
+      loc = found;
       if (!loc) {
         tuning = false;
         return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
       }
       const { list, failed } = await searchStations();
-      stations = list;
       if (round !== key) return;
+      stations = list;
       tuning = false;
       playFound(failed);
     }

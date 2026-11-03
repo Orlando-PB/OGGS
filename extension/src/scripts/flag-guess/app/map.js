@@ -1,8 +1,11 @@
 // Draw the flag, part 3: the map the guess is clicked into, and the zoom out to the answer.
 const pick = $('pick');
 const kctx = pick.getContext('2d');
-const view = null;
-const pin = null;
+// Both are set by app.js (the page's scripts share one scope), so they stay `let`.
+// biome-ignore lint/style/useConst: reassigned in app.js
+let view = null;
+// biome-ignore lint/style/useConst: reassigned in app.js
+let pin = null;
 
 // Mercator, like GeoGuessr's own map, in degree-sized units (y down). Land is projected once
 // into Path2Ds, plus a lighter copy for zoomed-out views. view.at turns these units into canvas

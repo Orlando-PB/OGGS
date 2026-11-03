@@ -5,7 +5,7 @@
 (() => {
   const ggs = globalThis.__ggs;
   // screen pixels per frame
-  const SPEED = [0.6, 1.4, 3];
+  const SPEED = [0.6, 1.4, 3, 5.5, 9];
   const LOCK = ['minZoom', 'maxZoom', 'scrollwheel', 'disableDoubleClickZoom', 'zoomControl'];
 
   ggs.scripts.drift = ggs.aid('drift', {

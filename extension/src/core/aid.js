@@ -142,7 +142,7 @@
     });
   }
 
-  // A circle's ring: a marker RING_PX across on its centre, so it can be found zoomed out.
+  // A circle's ring: a marker RING_PX in radius on its centre, so it can be found zoomed out.
   const ringIcon = look => ({
     path: 0,
     scale: RING_PX,
@@ -165,6 +165,7 @@
       let shapesKey = '';
       let extras = [];
       let listener = null;
+      let zoomListener = null;
       let note = null;
       let detach = null;
       const gm = () => window.google.maps;
@@ -238,14 +239,15 @@
         if (note) Object.assign(note.style, { background: colour(), color: '#fff' });
       }
 
-      // A circle's ring shows while the circle is under RING_PX across on screen.
-      // Metres per pixel come from the zoom.
+      // A circle under RING_PX in radius on screen is swapped for its ring, so the two never
+      // show at once. Metres per pixel come from the zoom.
       function rings() {
         const z = map?.getZoom();
         for (const o of shapes) {
           if (!o.ring || z == null) continue;
           const px = o.getRadius() / ((156543 * Math.cos((o.getCenter().lat() * Math.PI) / 180)) / 2 ** z);
           o.ring.setVisible(px < RING_PX);
+          o.setVisible(px >= RING_PX);
         }
       }
 
@@ -253,9 +255,12 @@
       function moveTo(now) {
         map = now;
         listener?.remove();
+        zoomListener?.remove();
         listener = gm().event.addListener(map, 'click', e => {
           if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
         });
+        // At once, not on the next tick, so the swap doesn't trail the zoom.
+        zoomListener = gm().event.addListener(map, 'zoom_changed', rings);
         for (const o of extras) o.setMap(map);
         shapesKey = '';
         if (note?.textContent) ctx.note(note.textContent);
@@ -315,7 +320,7 @@
         return specs;
       }
 
-      // rings() shows a circle's ring only while the circle itself is smaller than it.
+      // rings() shows a circle's ring in its place while the circle is smaller than it.
       function show(specs) {
         clear(shapes);
         shapes.push(...specs.map(make));
@@ -389,6 +394,7 @@
           clearInterval(tick);
           guessHooks.delete(guessHook);
           listener?.remove();
+          zoomListener?.remove();
           detach?.();
           clear(shapes);
           clear(extras);
