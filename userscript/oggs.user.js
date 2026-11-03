@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OGGS - Orlando's GeoGuessr Scripts
 // @namespace    https://github.com/Orlando-PB/OGGS
-// @version      2.0.0
+// @version      2.0.1
 // @description  A collection of fun GeoGuessr extension scripts. Made by Orlando with love.
 // @author       Orlando
 // @homepageURL  https://github.com/Orlando-PB/OGGS
@@ -240,6 +240,18 @@ section.flat .status:empty { display: none; }
   globalThis.__ggs ??= {};
   const ggs = globalThis.__ggs;
   ggs.registry ??= [];
+
+  // Puts our own markup into el as nodes, in place of innerHTML (the form, panels and boards
+  // build it from fixed strings, with outside text escaped by ggs.esc). DOMParser makes inert
+  // nodes; under an SVG element the markup is read as SVG.
+  ggs.html = (el, markup) => {
+    const svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
+    const body = new DOMParser().parseFromString(
+      `<body>${svg ? `<svg>${markup}</svg>` : markup}`,
+      'text/html',
+    ).body;
+    el.replaceChildren(...(svg ? body.firstChild : body).childNodes);
+  };
 
   // Stored settings are { "<id>": { enabled, <option>: value } }; gaps get the defaults.
   ggs.config = (meta, all) => ({
@@ -1202,8 +1214,11 @@ section.flat .status:empty { display: none; }
     };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${BASE_CSS}${css}</style>
-      <div class="panel"><div class="head">${title}</div><div class="body">${html}</div></div>`;
+    ggs.html(
+      root,
+      `<style>${BASE_CSS}${css}</style>
+      <div class="panel"><div class="head">${title}</div><div class="body">${html}</div></div>`,
+    );
     document.body.append(host);
 
     const posKey = `ggs-pos-${id}`;
@@ -1657,9 +1672,11 @@ section.flat .status:empty { display: none; }
   function show() {
     const host = document.createElement('div');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML =
+    ggs.html(
+      root,
       `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
-      '<div class="bar"><div class="fill"></div></div></div>';
+        '<div class="bar"><div class="fill"></div></div></div>',
+    );
     document.body.append(host);
     overlay = {
       host,
@@ -2235,7 +2252,7 @@ section.flat .status:empty { display: none; }
       host = document.createElement('div');
       host.setAttribute('data-ggs-ui', id);
       const root = host.attachShadow({ mode: 'open' });
-      root.innerHTML = `<style>${CSS}</style><div class="status"></div><iframe></iframe>`;
+      ggs.html(root, `<style>${CSS}</style><div class="status"></div><iframe></iframe>`);
       frame = root.querySelector('iframe');
       statusEl = root.querySelector('.status');
       frame.src = ggs.extBase + app;
@@ -3540,7 +3557,9 @@ section.flat .status:empty { display: none; }
     const shadow = look.shadow
       ? `<path class="shadow" fill-rule="evenodd" fill="${look.shadow}" transform="translate(5 5)"/>`
       : '';
-    root.innerHTML = `<style>
+    ggs.html(
+      root,
+      `<style>
         svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden;
               pointer-events: none; }
         .sheet { pointer-events: visiblePainted; cursor: default; }
@@ -3552,7 +3571,8 @@ section.flat .status:empty { display: none; }
         ${shadow}
         <path class="sheet" fill-rule="evenodd" fill="url(#paper)" stroke="${look.edge}"
               stroke-width="${look.width}" stroke-linejoin="round"/>
-      </svg>`;
+      </svg>`,
+    );
     const m = { last: null, pano: null, saved: null };
 
     // Puts back the panorama's own isolation and position.
@@ -3798,10 +3818,12 @@ section.flat .status:empty { display: none; }
       .filter(m => !m.flat)
       .map(m => `<option value="${m.name}">`)
       .join('');
-    search.innerHTML =
+    ggs.html(
+      search,
       '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
-      ` list="ggs-names" autocomplete="off">
-      <datalist id="ggs-names">${names}</datalist>`;
+        ` list="ggs-names" autocomplete="off">
+      <datalist id="ggs-names">${names}</datalist>`,
+    );
     container.append(search);
     const box = search.querySelector('input');
     // The sections' open state before the search, put back when it's cleared.
@@ -3940,9 +3962,11 @@ section.flat .status:empty { display: none; }
       el.className = 'sec';
       el.dataset.section = key;
       el.open = opened()[key] ?? metas.some(m => config(m, initial).enabled);
-      el.innerHTML =
+      ggs.html(
+        el,
         `<summary><span class="title">${title}</span><span class="count"></span></summary>` +
-        '<div class="cards"></div>';
+          '<div class="cards"></div>',
+      );
       // A click, not 'toggle', which also fires for the default set just above.
       el.querySelector('summary').addEventListener('click', () => {
         try {
@@ -4015,7 +4039,7 @@ section.flat .status:empty { display: none; }
       const setOff = () => reflect(card, metasHere);
       setOff();
       card.classList.toggle('flat', !!meta.flat && !meta.group);
-      part.innerHTML = meta.flat ? flatHtml(meta) : scriptHtml(meta);
+      ggs.html(part, meta.flat ? flatHtml(meta) : scriptHtml(meta));
       if (meta.group) card.append(part);
       wire(part, meta, setOff);
     }
@@ -4351,6 +4375,12 @@ section.flat .status:empty { display: none; }
         type: 'checkbox',
         default: false,
       },
+      {
+        key: 'forceInside',
+        label: 'Guess must go inside the matched country',
+        type: 'checkbox',
+        default: true,
+      },
     ],
   });
 })();
@@ -4401,10 +4431,12 @@ section.flat .status:empty { display: none; }
       },
     });
     board.post({ ggs: 'hard', on: !!cfg.hardMode });
+    board.post({ ggs: 'strict', on: !!cfg.forceInside });
 
     return {
       update(next) {
         if (!!next.hardMode !== !!cfg.hardMode) board.post({ ggs: 'hard', on: !!next.hardMode });
+        if (!!next.forceInside !== !!cfg.forceInside) board.post({ ggs: 'strict', on: !!next.forceInside });
         cfg = next;
       },
       stop: board.stop,
@@ -4765,7 +4797,7 @@ section.flat .status:empty { display: none; }
       onClick();
     });
     const dress = l => {
-      node.innerHTML = l ? l.html : FALLBACK;
+      ggs.html(node, l ? l.html : FALLBACK);
       // the copy sits in our box, which is already where the original was drawn
       if (l) {
         Object.assign(node.firstElementChild.style, {
@@ -6406,7 +6438,7 @@ section.flat .status:empty { display: none; }
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', 'radio');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = playerHtml(streamerMode, volume);
+    ggs.html(root, playerHtml(streamerMode, volume));
     const $ = sel => root.querySelector(sel);
     $('.play').onclick = on.toggle;
     $('canvas').onclick = on.toggle;
@@ -6432,7 +6464,7 @@ section.flat .status:empty { display: none; }
       const look = on.frame(now);
       if (look.playing !== playing) {
         playing = look.playing;
-        $('.play').innerHTML = playing ? ICON.pause : ICON.play;
+        ggs.html($('.play'), playing ? ICON.pause : ICON.play);
       }
       draw(now, look);
     };
@@ -6452,7 +6484,7 @@ section.flat .status:empty { display: none; }
       },
       revealed: () => !!$('.reveal').innerHTML,
       reveal(html) {
-        $('.reveal').innerHTML = html;
+        ggs.html($('.reveal'), html);
       },
       // on the panorama's spot during a round with Street View hidden, otherwise top-left
       place(inRound, showStreetView) {
@@ -9333,7 +9365,8 @@ section.flat .status:empty { display: none; }
     let round = null; // { key, since, ready, until }
     let first = true;
     const el = (css, html = '') => {
-      const e = Object.assign(document.createElement('div'), { hidden: true, innerHTML: html });
+      const e = Object.assign(document.createElement('div'), { hidden: true });
+      ggs.html(e, html);
       e.style.cssText = css;
       e.setAttribute('data-ggs-view', '');
       document.body.append(e);
@@ -10196,7 +10229,7 @@ section.flat .status:empty { display: none; }
       ep.finally = fn => ep.undo.push(fn);
       ep.show = (html, at, style = {}) => {
         const t = document.createElement('template');
-        t.innerHTML = html;
+        ggs.html(t, html);
         const el = t.content.firstElementChild;
         if (at) Object.assign(el.style, { left: `${at[0]}px`, top: `${at[1]}px` });
         Object.assign(el.style, style);
@@ -10451,7 +10484,7 @@ section.flat .status:empty { display: none; }
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', ''); // keys on the fake dialog's buttons stay away from GeoGuessr
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${L.CSS}</style>`;
+    ggs.html(root, `<style>${L.CSS}</style>`);
     document.body.append(host);
     const input = L.heldInput();
     const fx = L.effects(root, input);
@@ -10759,7 +10792,7 @@ section.flat .status:empty { display: none; }
     // input on the foil stops here, so neither Street View nor GeoGuessr see it
     for (const t of BLOCKED) host.addEventListener(t, e => e.stopPropagation());
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><canvas></canvas><div class="meter">Scratch <b><i></i></b></div>`;
+    ggs.html(root, `<style>${CSS}</style><canvas></canvas><div class="meter">Scratch <b><i></i></b></div>`);
     const canvas = root.querySelector('canvas');
     const bar = root.querySelector('.meter i');
     const g = canvas.getContext('2d');
@@ -11544,14 +11577,17 @@ section.flat .status:empty { display: none; }
       panel.$('.next .secs').textContent = `${Math.ceil(Math.max(0, next) / 1000)}s`;
       panel.$('.next .bar i').style.width = `${(100 * Math.max(0, next)) / span}%`;
       if (rebuild) {
-        list.innerHTML = [...active.values()]
-          .map(
-            e =>
-              `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
-              `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
-              '<div class="bar"><i></i></div></li>',
-          )
-          .join('');
+        ggs.html(
+          list,
+          [...active.values()]
+            .map(
+              e =>
+                `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
+                `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
+                '<div class="bar"><i></i></div></li>',
+            )
+            .join(''),
+        );
       }
       for (const li of list.children) {
         const e = active.get(li.dataset.key);

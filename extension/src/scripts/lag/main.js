@@ -27,7 +27,7 @@
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', ''); // keys on the fake dialog's buttons stay away from GeoGuessr
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${L.CSS}</style>`;
+    ggs.html(root, `<style>${L.CSS}</style>`);
     document.body.append(host);
     const input = L.heldInput();
     const fx = L.effects(root, input);

@@ -43,10 +43,12 @@
       },
     });
     board.post({ ggs: 'hard', on: !!cfg.hardMode });
+    board.post({ ggs: 'strict', on: !!cfg.forceInside });
 
     return {
       update(next) {
         if (!!next.hardMode !== !!cfg.hardMode) board.post({ ggs: 'hard', on: !!next.hardMode });
+        if (!!next.forceInside !== !!cfg.forceInside) board.post({ ggs: 'strict', on: !!next.forceInside });
         cfg = next;
       },
       stop: board.stop,

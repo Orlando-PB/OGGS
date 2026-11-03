@@ -31,9 +31,11 @@
   function show() {
     const host = document.createElement('div');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML =
+    ggs.html(
+      root,
       `<style>${CSS}</style><div class="box"><div class="text">Loading round…</div>` +
-      '<div class="bar"><div class="fill"></div></div></div>';
+        '<div class="bar"><div class="fill"></div></div></div>',
+    );
     document.body.append(host);
     overlay = {
       host,

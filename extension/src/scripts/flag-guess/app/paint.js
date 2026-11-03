@@ -15,7 +15,6 @@ const MAX_UNDO = 30;
 const toParent = msg => {
   if (parent !== window) parent.postMessage(msg, '*');
 };
-const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
 let tool = 'medium';
 let color = 0;
@@ -149,9 +148,14 @@ function setColor(i) {
   });
 }
 function buildPalette() {
-  const swatch = (p, i) =>
-    `<button class="swatch" style="background:${p.hex}" title="${esc(p.name)} (${i + 1})"></button>`;
-  $('palette').innerHTML = data.palette.map(swatch).join('');
+  const swatch = (p, i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = p.hex;
+    b.title = `${p.name} (${i + 1})`;
+    return b;
+  };
+  $('palette').replaceChildren(...data.palette.map(swatch));
   $('palette')
     .querySelectorAll('.swatch')
     .forEach((s, i) => {

@@ -186,6 +186,10 @@
   // Hard mode ignores the map and matches against every country ("all" pool).
   // gamePool: { id, how, map } picked for the game's map
   let hard = false;
+  // "Guess must go inside the matched country": the pin goes inside the drawing and the guess
+  // lands on the matched country. Off, the pin can go in the sea and stays there (keepSeaPin).
+  // The page sends the setting on start.
+  let strict = true;
   let gamePool = null;
 
   async function boardReady() {
@@ -250,6 +254,10 @@
       case 'hard':
         hard = !!d.on;
         applyPool();
+        break;
+      case 'strict':
+        strict = !!d.on;
+        pinTip();
         break;
       case 'answer':
         setAnswer(d);
@@ -331,7 +339,7 @@
       el.dataset.for = show[el.id] ?? 'none';
     });
     tip.hidden = true;
-    tip.textContent = 'Click where you think you are';
+    pinTip();
 
     keepPin(btn, tip);
     pointerTweaks();
@@ -346,7 +354,15 @@
     redraw();
   }
 
-  // The pin can go anywhere, on land or in the sea. It belongs to the loop it's in, or in the
+  function pinTip() {
+    const tip = document.getElementById('tip');
+    if (tip)
+      tip.textContent = strict
+        ? 'Click where in your drawing you think you are'
+        : 'Click where you think you are';
+  }
+
+  // Without strict the pin can go anywhere, on land or in the sea. It belongs to the loop it's in, or in the
   // sea to the nearest loop (the morph needs one to follow).
   function pinLoop(p) {
     const s = shapes();
@@ -368,13 +384,15 @@
     return best;
   }
 
-  // Keep the pin through undo/clear/new strokes; drop it only when nothing is drawn.
+  // Keep the pin through undo/clear/new strokes; drop it only when nothing is drawn (or, with
+  // strict, nothing is drawn round it).
   function keepPin(btn, tip) {
     const baseRedraw = redraw;
     redraw = () => {
       baseRedraw();
       if (stage !== 'draw') return;
-      if (pinXY && !shapes().length) pinXY = null;
+      // strict: an undo can leave the pin outside what's left, so it goes too
+      if (pinXY && (!shapes().length || (strict && !shapes().some(r => inside(pinXY, r))))) pinXY = null;
       else if (pinXY) {
         pinShape = pinLoop(pinXY);
         drawPin(pinXY);
@@ -434,10 +452,22 @@
     if (Math.max(x1 - x0, y1 - y0) >= CLICK) return;
     current = null;
     const p = pos(e);
+    if (strict && !shapes().some(r => inside(p, r))) {
+      nudgeTip();
+      return;
+    }
     if (shapes().length) {
       pinXY = p;
       pinShape = pinLoop(p);
     }
+  }
+
+  // the same shake app.js gives a click outside the drawing in its own pin step
+  function nudgeTip() {
+    const tip = document.getElementById('tip');
+    tip.classList.remove('nudge');
+    void tip.offsetWidth;
+    tip.classList.add('nudge');
   }
 
   // answer: the correct spot, shown as the reveal zooms out to the map, a flag and a dashed line
@@ -449,7 +479,7 @@
     const svg = () => document.createElementNS('http://www.w3.org/2000/svg', 'g');
     const answer = svg();
     answer.setAttribute('visibility', 'hidden');
-    answer.innerHTML = marks.answerSvg;
+    setHtml(answer, marks.answerSvg);
     document.getElementById('map').append(answer);
     const real = svg();
     real.id = 'realHl';
@@ -477,17 +507,20 @@
       const kicker = document.querySelector('#reveal .kicker');
       const [cls, html] = verdict(matchData.target, top);
       kicker.className = `kicker${cls}`;
-      kicker.innerHTML = html;
+      setHtml(kicker, html);
       realLayer.querySelector('path')?.classList.add('pulse');
       // a single-country map has nothing to compare against
       coord.hidden = matchData.results.length < 2;
-      document.getElementById('rRunners').innerHTML = matchData.results
-        .slice(1, 4)
-        .map(
-          r => `
+      setHtml(
+        document.getElementById('rRunners'),
+        matchData.results
+          .slice(1, 4)
+          .map(
+            r => `
         <li><i>${esc(r.name)}</i><em><b style="width:${r.score}%"></b></em><u>${r.score}%</u></li>`,
-        )
-        .join('');
+          )
+          .join(''),
+      );
     };
   }
 
@@ -535,7 +568,8 @@
     startMorph = targets => {
       showDrawn(layers.drawn);
       const end = baseStartMorph(targets);
-      return keepSeaPin() ?? end;
+      // strict: app.js's end, which it keeps on the matched country's land
+      return (strict ? null : keepSeaPin()) ?? end;
     };
 
     const baseBackToDraw = backToDraw;
@@ -577,7 +611,7 @@
     const d = shapes()
       .map(r => `M${r.map(p => T.invert(p).join(',')).join('L')}Z`)
       .join('');
-    drawnLayer.innerHTML = `<path d="${d}"/>`;
+    setHtml(drawnLayer, `<path d="${d}"/>`);
   }
 
   // A pin in the sea stays where it was put relative to the drawing (app.js would pull it onto

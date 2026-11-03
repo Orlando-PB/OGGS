@@ -163,10 +163,12 @@
       .filter(m => !m.flat)
       .map(m => `<option value="${m.name}">`)
       .join('');
-    search.innerHTML =
+    ggs.html(
+      search,
       '<input type="search" placeholder="Search modifiers" aria-label="Search modifiers"' +
-      ` list="ggs-names" autocomplete="off">
-      <datalist id="ggs-names">${names}</datalist>`;
+        ` list="ggs-names" autocomplete="off">
+      <datalist id="ggs-names">${names}</datalist>`,
+    );
     container.append(search);
     const box = search.querySelector('input');
     // The sections' open state before the search, put back when it's cleared.

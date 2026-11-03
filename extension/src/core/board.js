@@ -76,7 +76,7 @@
       host = document.createElement('div');
       host.setAttribute('data-ggs-ui', id);
       const root = host.attachShadow({ mode: 'open' });
-      root.innerHTML = `<style>${CSS}</style><div class="status"></div><iframe></iframe>`;
+      ggs.html(root, `<style>${CSS}</style><div class="status"></div><iframe></iframe>`);
       frame = root.querySelector('iframe');
       statusEl = root.querySelector('.status');
       frame.src = ggs.extBase + app;

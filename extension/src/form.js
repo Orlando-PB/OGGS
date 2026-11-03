@@ -102,9 +102,11 @@
       el.className = 'sec';
       el.dataset.section = key;
       el.open = opened()[key] ?? metas.some(m => config(m, initial).enabled);
-      el.innerHTML =
+      ggs.html(
+        el,
         `<summary><span class="title">${title}</span><span class="count"></span></summary>` +
-        '<div class="cards"></div>';
+          '<div class="cards"></div>',
+      );
       // A click, not 'toggle', which also fires for the default set just above.
       el.querySelector('summary').addEventListener('click', () => {
         try {
@@ -177,7 +179,7 @@
       const setOff = () => reflect(card, metasHere);
       setOff();
       card.classList.toggle('flat', !!meta.flat && !meta.group);
-      part.innerHTML = meta.flat ? flatHtml(meta) : scriptHtml(meta);
+      ggs.html(part, meta.flat ? flatHtml(meta) : scriptHtml(meta));
       if (meta.group) card.append(part);
       wire(part, meta, setOff);
     }

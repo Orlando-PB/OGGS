@@ -28,7 +28,14 @@ function setStage(s) {
   cv.style.opacity = svg.node().style.opacity = '';
 }
 
-function sidePanel(html) { $('results').innerHTML = html; }
+// Our own markup (outside text goes through esc) as nodes, in place of innerHTML. DOMParser
+// makes inert nodes; under an SVG element the markup is read as SVG.
+function setHtml(el, markup) {
+  const svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
+  const body = new DOMParser().parseFromString(`<body>${svg ? `<svg>${markup}</svg>` : markup}`, 'text/html').body;
+  el.replaceChildren(...(svg ? body.firstChild : body).childNodes);
+}
+function sidePanel(html) { setHtml($('results'), html); }
 const INTRO = {
   draw: `<p class="empty">Sketch the outline of the country you think you're in, pick a map, then hit <b>Done drawing</b>.</p>`,
   pin: `<p class="empty"><b>Where in it are you?</b><br>Click inside your drawing. When you guess, the drawing snaps to the closest real country and your pin travels with it — that becomes your guess coordinate.</p>`,
@@ -471,8 +478,8 @@ const fmtCoord = ({ lat, lng }) =>
   `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lng).toFixed(4)}° ${lng >= 0 ? 'E' : 'W'}`;
 
 function showCard(top, g) {
-  $('rName').innerHTML = [...top.name].map((ch, i) =>
-    `<span style="animation-delay:${250 + i * 45}ms">${ch === ' ' ? '&nbsp;' : esc(ch)}</span>`).join('');
+  setHtml($('rName'), [...top.name].map((ch, i) =>
+    `<span style="animation-delay:${250 + i * 45}ms">${ch === ' ' ? '&nbsp;' : esc(ch)}</span>`).join(''));
   $('rShape').textContent = top.score + '%';
   $('rCoord').textContent = fmtCoord(g);
   $('reveal').classList.add('show');
@@ -552,7 +559,7 @@ window.addEventListener('resize', redraw);
 fetch('/api/maps').then(r => r.json()).then(maps => {
   mapsInfo = maps;
   const sel = $('mapSel');
-  sel.innerHTML = maps.map(m => `<option value="${m.id}">${esc(m.label)} · ${m.count}</option>`).join('');
+  setHtml(sel, maps.map(m => `<option value="${m.id}">${esc(m.label)} · ${m.count}</option>`).join(''));
   try { const saved = localStorage.getItem('map'); if (saved && maps.some(m => m.id === saved)) sel.value = saved; } catch {}
   sel.onchange = () => { try { localStorage.setItem('map', sel.value); } catch {} };
 });

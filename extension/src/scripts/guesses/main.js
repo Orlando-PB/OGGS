@@ -61,7 +61,7 @@
       onClick();
     });
     const dress = l => {
-      node.innerHTML = l ? l.html : FALLBACK;
+      ggs.html(node, l ? l.html : FALLBACK);
       // the copy sits in our box, which is already where the original was drawn
       if (l) {
         Object.assign(node.firstElementChild.style, {

@@ -103,7 +103,7 @@
     const host = document.createElement('div');
     host.setAttribute('data-ggs-ui', 'radio');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = playerHtml(streamerMode, volume);
+    ggs.html(root, playerHtml(streamerMode, volume));
     const $ = sel => root.querySelector(sel);
     $('.play').onclick = on.toggle;
     $('canvas').onclick = on.toggle;
@@ -129,7 +129,7 @@
       const look = on.frame(now);
       if (look.playing !== playing) {
         playing = look.playing;
-        $('.play').innerHTML = playing ? ICON.pause : ICON.play;
+        ggs.html($('.play'), playing ? ICON.pause : ICON.play);
       }
       draw(now, look);
     };
@@ -149,7 +149,7 @@
       },
       revealed: () => !!$('.reveal').innerHTML,
       reveal(html) {
-        $('.reveal').innerHTML = html;
+        ggs.html($('.reveal'), html);
       },
       // on the panorama's spot during a round with Street View hidden, otherwise top-left
       place(inRound, showStreetView) {

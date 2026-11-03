@@ -90,7 +90,7 @@
     // input on the foil stops here, so neither Street View nor GeoGuessr see it
     for (const t of BLOCKED) host.addEventListener(t, e => e.stopPropagation());
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${CSS}</style><canvas></canvas><div class="meter">Scratch <b><i></i></b></div>`;
+    ggs.html(root, `<style>${CSS}</style><canvas></canvas><div class="meter">Scratch <b><i></i></b></div>`);
     const canvas = root.querySelector('canvas');
     const bar = root.querySelector('.meter i');
     const g = canvas.getContext('2d');

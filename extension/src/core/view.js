@@ -202,7 +202,9 @@
     const shadow = look.shadow
       ? `<path class="shadow" fill-rule="evenodd" fill="${look.shadow}" transform="translate(5 5)"/>`
       : '';
-    root.innerHTML = `<style>
+    ggs.html(
+      root,
+      `<style>
         svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden;
               pointer-events: none; }
         .sheet { pointer-events: visiblePainted; cursor: default; }
@@ -214,7 +216,8 @@
         ${shadow}
         <path class="sheet" fill-rule="evenodd" fill="url(#paper)" stroke="${look.edge}"
               stroke-width="${look.width}" stroke-linejoin="round"/>
-      </svg>`;
+      </svg>`,
+    );
     const m = { last: null, pano: null, saved: null };
 
     // Puts back the panorama's own isolation and position.

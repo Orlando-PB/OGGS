@@ -16,6 +16,12 @@
         type: 'checkbox',
         default: false,
       },
+      {
+        key: 'forceInside',
+        label: 'Guess must go inside the matched country',
+        type: 'checkbox',
+        default: true,
+      },
     ],
   });
 })();

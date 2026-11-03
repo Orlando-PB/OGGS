@@ -32,7 +32,8 @@
     let round = null; // { key, since, ready, until }
     let first = true;
     const el = (css, html = '') => {
-      const e = Object.assign(document.createElement('div'), { hidden: true, innerHTML: html });
+      const e = Object.assign(document.createElement('div'), { hidden: true });
+      ggs.html(e, html);
       e.style.cssText = css;
       e.setAttribute('data-ggs-view', '');
       document.body.append(e);

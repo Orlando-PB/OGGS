@@ -31,7 +31,7 @@
       ep.finally = fn => ep.undo.push(fn);
       ep.show = (html, at, style = {}) => {
         const t = document.createElement('template');
-        t.innerHTML = html;
+        ggs.html(t, html);
         const el = t.content.firstElementChild;
         if (at) Object.assign(el.style, { left: `${at[0]}px`, top: `${at[1]}px` });
         Object.assign(el.style, style);

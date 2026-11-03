@@ -364,14 +364,17 @@
       panel.$('.next .secs').textContent = `${Math.ceil(Math.max(0, next) / 1000)}s`;
       panel.$('.next .bar i').style.width = `${(100 * Math.max(0, next)) / span}%`;
       if (rebuild) {
-        list.innerHTML = [...active.values()]
-          .map(
-            e =>
-              `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
-              `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
-              '<div class="bar"><i></i></div></li>',
-          )
-          .join('');
+        ggs.html(
+          list,
+          [...active.values()]
+            .map(
+              e =>
+                `<li data-key="${ggs.esc(e.key)}"><div class="row"><span class="label"><b>${ggs.esc(e.name)}</b>` +
+                `${e.detail ? `<small>${ggs.esc(e.detail)}</small>` : ''}</span></div>` +
+                '<div class="bar"><i></i></div></li>',
+            )
+            .join(''),
+        );
       }
       for (const li of list.children) {
         const e = active.get(li.dataset.key);

@@ -28,8 +28,11 @@
     };
     host.addEventListener('pointerdown', front, true);
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${BASE_CSS}${css}</style>
-      <div class="panel"><div class="head">${title}</div><div class="body">${html}</div></div>`;
+    ggs.html(
+      root,
+      `<style>${BASE_CSS}${css}</style>
+      <div class="panel"><div class="head">${title}</div><div class="body">${html}</div></div>`,
+    );
     document.body.append(host);
 
     const posKey = `ggs-pos-${id}`;
