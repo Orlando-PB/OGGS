@@ -5,19 +5,21 @@
 // IONOS webspace: ~/oggs is the web root, and secrets and the usage database live in ~/oggs_private.
 //
 //   GET  ?caps=1&client=<id>&code=<code>
-//        -> { normal, hq, codeOk, log: { normal: [ms timestamps], hq: [...] } }
+//        -> { normal, hq, codeOk, log: { normal: [ms timestamps], hq: [...] },
+//             paused: { normal: ms timestamp or 0, hq: ... } }
 //   POST pano=<panorama id> worldWidth=<px> tileWidth=<px> mode=normal|hq
 //        style=minecraft client=<id> code=<code>
-//        -> { image: "data:image/jpeg;base64,...", usage, ms, log } or { error, code? }
-//        code 'credit': the API account for that mode is out of credit (or rate limited), so it
-//        is paused for PAUSE seconds and the page stops asking until then.
+//        -> { image: "data:image/jpeg;base64,...", usage, ms, log } or { error, code?, until? }
+//        code 'credit': the API account for that mode is out of credit (PAUSE) or rate limited
+//        (RATE_PAUSE), so it is paused and the page stops asking until `until` (ms).
 //
 // What comes in: a panorama id (public, the same string Google's own tile URLs carry), the
 // panorama's size, the mode, a random per-install client id and an optional code. No account
 // details, no cookies, no location beyond what the panorama itself shows. What goes out: the
 // generated JPEG plus the day's usage for that client id. The usage database keeps the time,
 // client id, IP address, mode, and the API's error if it failed, for two days, for the daily
-// limits only.
+// limits only. Wrong codes are kept the same way (time, and hashes of the IP and of the code)
+// so the code can't be guessed by trying many.
 //
 // Limits are per client id over a rolling 24 h, in the same shape as the page's own log so the
 // two can be merged. Per-IP and global daily caps sit behind that, so fresh client ids can't run
@@ -60,8 +62,11 @@ const IP_CAPS = ['normal' => 900, 'hq' => 100];
 // everyone together
 const GLOBAL_CAPS = ['normal' => 1500, 'hq' => 200];
 const DAY = 86400;
-// after the API says the account is out of credit or over its rate limit
+// after the API says the account is out of credit, or only over its rate limit
 const PAUSE = 900;
+const RATE_PAUSE = 60;
+// different wrong codes an IP address may try per rolling 24 h; after that every code is wrong
+const CODE_TRIES = 10;
 const NO_CREDIT = "Can't be used right now, try again later";
 // tile zoom to stitch: 2048x1024 on Gen 4, a bit less on older coverage
 const ZOOM = 2;
@@ -87,16 +92,16 @@ function promptFor(): string {
   return PROMPTS['minecraft'];
 }
 
-function fail(int $status, string $msg, ?string $code = null): never {
+function fail(int $status, string $msg, ?string $code = null, array $extra = []): never {
+  $GLOBALS['failedWith'] = $msg; // for the usage log, if a round was already counted
   http_response_code($status);
-  echo json_encode(['error' => $msg] + ($code ? ['code' => $code] : []));
+  echo json_encode(['error' => $msg] + ($code ? ['code' => $code] : []) + $extra);
   exit;
 }
 
 $client = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($_REQUEST['client'] ?? ''));
 if (strlen($client) < 8 || strlen($client) > 64) fail(400, 'Bad client id');
 $code = trim((string)($_REQUEST['code'] ?? ''));
-$codeOk = $code !== '' && !empty($config['HQ_CODE']) && hash_equals((string)$config['HQ_CODE'], $code);
 $ip = $_SERVER['REMOTE_ADDR'] ?? '?';
 
 // ---- usage database ----
@@ -108,7 +113,26 @@ $db->exec('CREATE TABLE IF NOT EXISTS usage_log (t INTEGER NOT NULL, client TEXT
 $db->exec('CREATE INDEX IF NOT EXISTS usage_t ON usage_log(t)');
 $cols = array_column($db->query('PRAGMA table_info(usage_log)')->fetchAll(), 'name');
 if (!in_array('err', $cols, true)) $db->exec('ALTER TABLE usage_log ADD COLUMN err TEXT');
+$db->exec('CREATE TABLE IF NOT EXISTS code_fails (t INTEGER NOT NULL, ip TEXT NOT NULL, code TEXT NOT NULL)');
 $db->exec('DELETE FROM usage_log WHERE t < ' . (time() - 2 * DAY));
+$db->exec('DELETE FROM code_fails WHERE t < ' . (time() - 2 * DAY));
+$codeOk = checkCode($db, $code, (string)($config['HQ_CODE'] ?? ''), $ip);
+
+// Right code, unless this IP has already tried CODE_TRIES different wrong ones today. A wrong
+// one is remembered so repeating the same one, e.g. a saved typo, counts once. Both the IP and
+// the wrong code are kept only as a hash keyed with the real code, so the table alone gives
+// neither away.
+function checkCode(PDO $db, string $code, string $real, string $ip): bool {
+  if ($code === '' || $real === '') return false;
+  $ipKey = hash_hmac('sha256', $ip, $real);
+  $q = $db->prepare('SELECT COUNT(DISTINCT code) FROM code_fails WHERE ip = ? AND t > ?');
+  $q->execute([$ipKey, time() - DAY]);
+  if ((int)$q->fetchColumn() >= CODE_TRIES) return false;
+  if (hash_equals($real, $code)) return true;
+  $db->prepare('INSERT INTO code_fails (t, ip, code) VALUES (?, ?, ?)')
+    ->execute([time(), $ipKey, hash_hmac('sha256', $code, $real)]);
+  return false;
+}
 
 function logFor(PDO $db, string $client): array {
   $out = ['normal' => [], 'hq' => []];
@@ -124,21 +148,35 @@ function countWhere(PDO $db, string $where, array $args): int {
   return (int)$q->fetchColumn();
 }
 
-// The page works out what's left as cap minus its count. So with the code, each mode's cap is
-// "used so far plus what the remaining budget buys", never above the ceiling.
-$used = [
-  'normal' => countWhere($db, 'client = ? AND mode = ?', [$client, 'normal']),
-  'hq' => countWhere($db, 'client = ? AND mode = ?', [$client, 'hq']),
-];
-$spent = $used['normal'] * COST['normal'] + $used['hq'] * COST['hq'];
-$caps = [];
-foreach (['normal', 'hq'] as $m) {
-  $affordable = (int)floor(max(0, CODE_BUDGET - $spent) / COST[$m]);
-  $caps[$m] = $codeOk ? min(CODE_CAPS[$m], $used[$m] + $affordable) : CAPS[$m];
+// [rounds used today per mode, cap per mode]. The page works out what's left as cap minus its
+// count. So with the code, each mode's cap is "used so far plus what the remaining budget
+// buys", never above the ceiling.
+function capsFor(PDO $db, string $client, bool $codeOk): array {
+  $used = [
+    'normal' => countWhere($db, 'client = ? AND mode = ?', [$client, 'normal']),
+    'hq' => countWhere($db, 'client = ? AND mode = ?', [$client, 'hq']),
+  ];
+  $spent = $used['normal'] * COST['normal'] + $used['hq'] * COST['hq'];
+  $caps = [];
+  foreach (['normal', 'hq'] as $m) {
+    $affordable = (int)floor(max(0, CODE_BUDGET - $spent) / COST[$m]);
+    $caps[$m] = $codeOk ? min(CODE_CAPS[$m], $used[$m] + $affordable) : CAPS[$m];
+  }
+  return [$used, $caps];
+}
+
+// A mode whose API account ran dry (or hit its rate limit) stays off until this time (s), without
+// stitching or calling it.
+function pausedUntil(string $private, string $mode): int {
+  $until = (int)@file_get_contents("$private/paused-$mode");
+  return $until > time() ? $until : 0;
 }
 
 if (isset($_GET['caps']) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-  echo json_encode($caps + ['codeOk' => $codeOk, 'log' => logFor($db, $client)]);
+  $paused = [];
+  foreach (['normal', 'hq'] as $m) $paused[$m] = pausedUntil($private, $m) * 1000;
+  echo json_encode(capsFor($db, $client, $codeOk)[1]
+    + ['codeOk' => $codeOk, 'log' => logFor($db, $client), 'paused' => $paused]);
   exit;
 }
 
@@ -155,43 +193,38 @@ if ($tileWidth < 128 || $tileWidth > 2048 || $worldWidth < $tileWidth || $worldW
   fail(400, 'Bad panorama size');
 }
 
-if ($used[$mode] >= $caps[$mode]) fail(429, 'Limit reached for today');
-if (countWhere($db, 'ip = ? AND mode = ?', [$ip, $mode]) >= IP_CAPS[$mode]) {
-  fail(429, 'Limit reached for today');
-}
-if (countWhere($db, 'mode = ?', [$mode]) >= GLOBAL_CAPS[$mode]) {
-  fail(503, 'Fully booked today, try again tomorrow');
-}
+$until = pausedUntil($private, $mode);
+if ($until) fail(503, NO_CREDIT, 'credit', ['until' => $until * 1000]);
 
-// A mode whose API account ran dry stays off for a while, without stitching or calling it.
-$pauseFile = "$private/paused-$mode";
-if ((int)@file_get_contents($pauseFile) > time()) fail(503, NO_CREDIT, 'credit');
+// The round is counted (and the limits checked) in one write transaction before anything slow,
+// so parallel requests can't all get past the limits. It's marked failed, and so not counted,
+// if anything after this goes wrong, including the script dying part way.
+$rowId = reserve($db, $client, $ip, $mode, $codeOk);
+$finished = false;
+register_shutdown_function(function () use ($db, $rowId, &$finished) {
+  if (!$finished) markFailed($db, $rowId, $GLOBALS['failedWith'] ?? 'stopped before the picture was made');
+});
 
 set_time_limit(300);
 $t0 = microtime(true);
 $m = MODES[$mode];
 $jpeg = stitch($pano, $worldWidth, $tileWidth, $m['input'], $m['inputHeight'] ?? 0);
 
-// counted before the call; marked failed (and so not counted) if the API says no
-$ins = $db->prepare('INSERT INTO usage_log (t, client, ip, mode) VALUES (?, ?, ?, ?)');
-$ins->execute([time(), $client, $ip, $mode]);
-$rowId = (int)$db->lastInsertId();
-
-[$b64, $usage, $err, $noCredit] = $m['api'] === 'gemini'
+[$b64, $usage, $err, $pause] = $m['api'] === 'gemini'
   ? viaGemini($m, $jpeg, $config['GEMINI_API_KEY'])
   : viaOpenAI($m, $jpeg, $config['OPENAI_API_KEY']);
 @unlink($jpeg);
 if (!$b64) {
   // the reason stays in the log for the owner; the player only sees "not available"
-  $db->prepare('UPDATE usage_log SET ok = 0, err = ? WHERE rowid = ?')
-    ->execute([substr($err, 0, 300), $rowId]);
+  markFailed($db, $rowId, $err);
   error_log("oggs $style: $err");
-  if ($noCredit) {
-    file_put_contents($pauseFile, (string)(time() + PAUSE));
-    fail(503, NO_CREDIT, 'credit');
+  if ($pause) {
+    file_put_contents("$private/paused-$mode", (string)(time() + $pause));
+    fail(503, NO_CREDIT, 'credit', ['until' => (time() + $pause) * 1000]);
   }
   fail(502, 'Not available right now, try again later');
 }
+$finished = true;
 echo json_encode([
   'image' => 'data:image/jpeg;base64,' . $b64,
   'usage' => $usage,
@@ -199,13 +232,50 @@ echo json_encode([
   'log' => logFor($db, $client),
 ]);
 
+// Checks the limits and counts the round, all inside one SQLite write lock. Returns its row id.
+function reserve(PDO $db, string $client, string $ip, string $mode, bool $codeOk): int {
+  $db->exec('BEGIN IMMEDIATE');
+  $full = overLimit($db, $client, $ip, $mode, $codeOk);
+  if ($full) {
+    $db->exec('ROLLBACK');
+    fail(...$full);
+  }
+  $db->prepare('INSERT INTO usage_log (t, client, ip, mode) VALUES (?, ?, ?, ?)')
+    ->execute([time(), $client, $ip, $mode]);
+  $rowId = (int)$db->lastInsertId();
+  $db->exec('COMMIT');
+  return $rowId;
+}
+// [status, message] for the first daily limit this round would go over, or null.
+function overLimit(PDO $db, string $client, string $ip, string $mode, bool $codeOk): ?array {
+  [$used, $caps] = capsFor($db, $client, $codeOk);
+  if ($used[$mode] >= $caps[$mode]) return [429, 'Limit reached for today'];
+  if (countWhere($db, 'ip = ? AND mode = ?', [$ip, $mode]) >= IP_CAPS[$mode]) {
+    return [429, 'Limit reached for today'];
+  }
+  if (countWhere($db, 'mode = ?', [$mode]) >= GLOBAL_CAPS[$mode]) {
+    return [503, 'Fully booked today, try again tomorrow'];
+  }
+  return null;
+}
+function markFailed(PDO $db, int $rowId, string $err): void {
+  $db->prepare('UPDATE usage_log SET ok = 0, err = ? WHERE rowid = ? AND ok = 1')
+    ->execute([substr($err, 0, 300), $rowId]);
+}
+
 // ---- image APIs ----
-// Each returns [base64 JPEG or null, the API's usage report, error text, out of credit?].
-// Out of credit is HTTP 402/429 or OpenAI's quota codes: billing, not a bad picture.
-function noCredit(int $status, ?array $j): bool {
-  $code = $j['error']['code'] ?? $j['error']['type'] ?? '';
-  return $status === 402 || $status === 429
-    || in_array($code, ['insufficient_quota', 'billing_hard_limit_reached', 'RESOURCE_EXHAUSTED'], true);
+// Each returns [base64 JPEG or null, the API's usage report, error text, seconds to pause].
+// Out of credit (402, OpenAI's billing codes, Gemini's used-up quota) pauses the mode for
+// PAUSE; a plain rate limit (any other 429) only for RATE_PAUSE. Gemini's error.code is the
+// HTTP status as a number and its reason is in error.status.
+function pauseFor(int $status, ?array $j): int {
+  $e = is_array($j['error'] ?? null) ? $j['error'] : [];
+  $code = (string)($e['code'] ?? $e['type'] ?? '');
+  $billing = in_array($code, ['insufficient_quota', 'billing_hard_limit_reached'], true)
+    || (($e['status'] ?? '') === 'RESOURCE_EXHAUSTED'
+      && preg_match('/billing|current quota|per ?day/i', (string)($e['message'] ?? '')));
+  if ($status === 402 || $billing) return PAUSE;
+  return $status === 429 ? RATE_PAUSE : 0;
 }
 function viaOpenAI(array $m, string $jpeg, string $key): array {
   $ch = curl_init('https://api.openai.com/v1/images/edits');
@@ -229,7 +299,7 @@ function viaOpenAI(array $m, string $jpeg, string $key): array {
   $j = is_string($body) ? json_decode($body, true) : null;
   $b64 = $status === 200 ? ($j['data'][0]['b64_json'] ?? null) : null;
   $err = $j['error']['message'] ?? (curl_error($ch) ?: "OpenAI HTTP $status");
-  return [$b64, $j['usage'] ?? null, $err, !$b64 && noCredit($status, $j)];
+  return [$b64, $j['usage'] ?? null, $err, $b64 ? 0 : pauseFor($status, $j)];
 }
 
 // Gemini answers at 16:9. The picture is stretched back to 2:1 here, so the page gets the same
@@ -262,15 +332,15 @@ function viaGemini(array $m, string $jpeg, string $key): array {
   }
   $noImage = 'Gemini gave no image (' . ($j['candidates'][0]['finishReason'] ?? "HTTP $status") . ')';
   $err = $j['error']['message'] ?? (curl_error($ch) ?: ($data ? '' : $noImage));
-  if ($status !== 200 || !$data) return [null, null, $err, noCredit($status, $j)];
+  if ($status !== 200 || !$data) return [null, null, $err, pauseFor($status, $j)];
   $img = @imagecreatefromstring(base64_decode($data));
-  if (!$img) return [null, null, 'Gemini image would not decode', false];
+  if (!$img) return [null, null, 'Gemini image would not decode', 0];
   $h = imagesy($img);
   $out = imagecreatetruecolor(2 * $h, $h);
   imagecopyresampled($out, $img, 0, 0, 0, 0, 2 * $h, $h, imagesx($img), $h);
   ob_start();
   imagejpeg($out, null, 90);
-  return [base64_encode(ob_get_clean()), $j['usageMetadata'] ?? null, '', false];
+  return [base64_encode(ob_get_clean()), $j['usageMetadata'] ?? null, '', 0];
 }
 
 // ---- stitching ----
