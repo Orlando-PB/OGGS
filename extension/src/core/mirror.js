@@ -158,19 +158,21 @@
   // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
   let pressAt = null;
   let noClickTo = null;
+  // Set through ggs.lock, so GeoGuessr's own setting (off in No Move games) comes back after.
   function clickToGo() {
     const p = panoOf.get(panoElement());
     const off = want('move') ? p : null;
     if (off === noClickTo) return;
-    noClickTo?.setOptions({ clickToGo: true });
-    off?.setOptions({ clickToGo: false });
+    if (noClickTo) ggs.lock.giveBack(noClickTo, { clickToGo: true });
+    if (off) ggs.lock.setOwn(off, { clickToGo: false });
     noClickTo = off;
   }
   function walkBack(x) {
     const el = panoElement();
     const p = panoOf.get(el);
     const links = p?.getLinks?.();
-    if (!links?.length) return;
+    // never in a game that doesn't let you move
+    if (!links?.length || !ggs.lock.gameAllows(p, 'clickToGo')) return;
     const r = el.getBoundingClientRect();
     const pov = p.getPov();
     const fov = 180 / 2 ** (p.getZoom?.() ?? 1);
