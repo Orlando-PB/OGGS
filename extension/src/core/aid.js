@@ -66,26 +66,33 @@
     if (e.type === 'keydown') return e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement();
     return !!ggs.maps.guessButton()?.contains(e.target);
   }
+  // A hook that threw answers this: the press is held back once (see guessHook below).
+  const ERRORED = Symbol('errored');
   // Any hook returning false blocks the guess. Otherwise the last point given wins, and `by`
-  // is the script that gave it.
+  // is the script that gave it. errored: a hook threw.
   function askGuessHooks() {
     let point = null;
     let by = null;
     let block = false;
+    let errored = false;
     for (const [fn, id] of guessHooks) {
       const r = fn();
-      if (r === false) block = true;
+      if (r === false || r === ERRORED) block = true;
       else if (r) [point, by] = [r, id];
+      errored ||= r === ERRORED;
     }
-    return { point, by, block };
+    return { point, by, block, errored };
   }
-  // The press was already held back, so a pin that can't be moved is said out loud.
+  // The press was already held back, so a pin that can't be moved is said out loud, and for
+  // the rest of the round presses go through as they are, so the player can still guess.
+  let guessFailedIn = null;
   function guessAt(p, by) {
     try {
       ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
     } catch (err) {
       ggs.log('could not move the guess', err);
-      ggs.status(by, "Couldn't place the guess. GeoGuessr may have changed something, please tell Orlando");
+      guessFailedIn = ggs.game.roundKey();
+      ggs.status(by, "Couldn't move the guess, press Guess again to guess as it is. Please tell Orlando");
       return;
     }
     passing = true;
@@ -95,13 +102,14 @@
       passing = false;
     }, 150);
   }
-  // The keyup after a swallowed Space press goes too.
+  // The keyup after a swallowed Space press goes too (the player's, not our own pressSpace's).
   function onKeyUp(e) {
-    if (!swallowUp || e.code !== 'Space') return;
+    if (!swallowUp || e.code !== 'Space' || !e.isTrusted) return;
     swallowUp = false;
     e.stopImmediatePropagation();
   }
-  // When a hook last held a press back (performance.now()), for boards pressing Guess.
+  // When a hook last held a press back on purpose (performance.now()), for boards pressing
+  // Guess. A hook that threw doesn't count: the board's next press goes past it.
   let heldAt = -1;
   // Space held down repeats; only the first press counts, so repeats can't slip past a hook.
   function swallowRepeat(e) {
@@ -110,17 +118,21 @@
     e.stopImmediatePropagation();
     return true;
   }
+  // Our own press going through, or the pin couldn't be moved this round.
+  const standingAside = () => passing || guessFailedIn === ggs.game.roundKey();
   function onPress(e) {
-    if (!guessHooks.size || swallowRepeat(e) || passing) return;
     if (e.type === 'keyup') return onKeyUp(e);
-    if (!isGuessPress(e)) return;
-    const { point, by, block } = askGuessHooks();
-    if (!point && !block) return;
+    if (!guessHooks.size || swallowRepeat(e) || standingAside() || !isGuessPress(e)) return;
+    const asked = askGuessHooks();
+    if (asked.point || asked.block) holdBack(e, asked);
+  }
+  // The press is swallowed, then moved to the hooks' point or stopped.
+  function holdBack(e, { point, by, block, errored }) {
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.type === 'keydown') swallowUp = true;
-    if (block) heldAt = performance.now();
-    else guessAt(point, by);
+    if (block && !errored) heldAt = performance.now();
+    if (!block) guessAt(point, by);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -256,7 +268,7 @@
             const msg = `Something went wrong, press Guess again to guess without ${name()}`;
             ctx.status(msg);
             ctx.note(msg);
-            return false;
+            return ERRORED;
           }
         });
       if (guessHook) guessHooks.set(guessHook, id);
