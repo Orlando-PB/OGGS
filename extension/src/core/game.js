@@ -85,6 +85,7 @@
       entries = 0;
       hadMap = false;
       holding = false;
+      forgetOtherGames(token);
       ggs.debug(`round key reset: token ${token}`);
     }
     if (hasMap) {
@@ -392,6 +393,14 @@
       check.then(c => c.retry && guardCache.delete(ctx.token));
     }
     return guardCache.get(ctx.token);
+  }
+
+  // A new game: what was kept about earlier ones goes, so a long session doesn't pile it up.
+  function forgetOtherGames(token) {
+    roundCache.clear();
+    for (const cache of [mapCache, handedOut, guardCache]) {
+      for (const t of [...cache.keys()]) if (t !== token) cache.delete(t);
+    }
   }
 
   ggs.game = { context, roundKey, guessed, whyNoRound, mapInfo, roundLocation, competitive, noteLobby };

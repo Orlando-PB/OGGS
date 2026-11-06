@@ -54,6 +54,7 @@
 
   // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
   const meta = new Map();
+  const META_KEEP = 100;
   const metaSync = new Map();
   // A failed lookup isn't kept, so the next one tries again.
   function panoMeta(id) {
@@ -67,6 +68,12 @@
       });
       p.catch(() => meta.delete(id));
       meta.set(id, p);
+      // only recent panoramas are kept
+      if (meta.size > META_KEEP) {
+        const old = meta.keys().next().value;
+        meta.delete(old);
+        metaSync.delete(old);
+      }
     }
     return meta.get(id);
   }
