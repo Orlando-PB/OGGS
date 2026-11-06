@@ -357,16 +357,22 @@
       // The shapes for the current spot. When lying, made-up spots are tried until the shapes
       // miss the real one. loc stays on the one it settled on, for the other hooks too. If none
       // misses it (a huge area), the truth is told, so a "lie" is never secretly the truth.
+      // loc is only moved while this draw is still the current one.
       async function draw(want) {
-        let specs = await hooks.shapes(ctx);
-        for (let i = 1; lies && i < lies.length && covers(specs, real); i++) {
-          loc = lies[i];
-          specs = await hooks.shapes(ctx);
-          if (shapesKey !== want) return null;
-        }
-        if (!lies || !covers(specs, real)) return specs;
+        const current = () => shapesKey === want;
+        const specs = await hooks.shapes(ctx);
+        const lie = lies ? await nextLie(specs, current) : specs;
+        if (!current()) return null;
+        if (!lies || !covers(lie, real)) return lie;
         loc = real;
         return hooks.shapes(ctx);
+      }
+      async function nextLie(specs, current) {
+        for (let i = 1; i < lies.length && covers(specs, real) && current(); i++) {
+          loc = lies[i];
+          specs = await hooks.shapes(ctx);
+        }
+        return specs;
       }
 
       // rings() shows a circle's ring in its place while the circle is smaller than it.
