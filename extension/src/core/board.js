@@ -42,6 +42,9 @@
   const TRIES = 10;
   // The guess map gone this long means a result screen, so the board clears.
   const AWAY_MS = 1500;
+  // Lookups of the round's location for the board, ANSWER_RETRY_MS apart.
+  const ANSWER_TRIES = 3;
+  const ANSWER_RETRY_MS = 5000;
 
   ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
@@ -59,6 +62,7 @@
     let placed = false;
     let answerRound;
     let lastGuess = null;
+    let answerTimer = 0;
     // Where the board sits. Measured once per round and window size.
     let spot = null;
     let spotKey = '';
@@ -195,17 +199,22 @@
       if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
     }
 
-    // The round's real location, for boards that show it once the guess is in.
+    // The round's real location, for boards that show it once the guess is in. A failed
+    // lookup is tried again a few times, then the reason shows on the board.
     function sendAnswer(round) {
       if (round === answerRound) return;
       answerRound = round;
       post({ ggs: 'answer', lat: null });
-      ggs.game
-        .roundLocation()
-        .then(
-          loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }),
-        )
-        .catch(() => {});
+      findAnswer(round);
+    }
+    function findAnswer(round, tries = 1) {
+      ggs.game.roundLocation().then(loc => {
+        if (ggs.game.roundKey() !== round || answerRound !== round) return;
+        if (loc) return post({ ggs: 'answer', lat: loc.lat, lng: loc.lng });
+        if (tries < ANSWER_TRIES)
+          answerTimer = setTimeout(() => findAnswer(round, tries + 1), ANSWER_RETRY_MS);
+        else status(ggs.game.whyNoRound());
+      });
     }
 
     function clearBoard() {
@@ -252,6 +261,7 @@
         clearInterval(tick);
         clearTimeout(collapseTimer);
         clearTimeout(pressTimer);
+        clearTimeout(answerTimer);
         window.removeEventListener('message', onFrameMessage);
         host?.remove();
         hideMap.remove();

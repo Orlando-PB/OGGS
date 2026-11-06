@@ -118,6 +118,9 @@
   // the round is over. A guess is Guess clicked or Space with a pin down (board guesses press
   // the same button). Over is the guess map gone OVER_MS, and the note stays on the results map.
   const OVER_MS = 1500;
+  // Lookups of the round's location, RETRY_MS apart.
+  const LOCATION_TRIES = 3;
+  const RETRY_MS = 5000;
   // Each running aid's own-up, called on a guess.
   const owners = new Set();
   const guessed = () => {
@@ -303,13 +306,19 @@
         shapesKey = '';
         ctx.note('');
         hooks.round?.(ctx);
-        if (hooks.usesLocation === false) return;
-        ggs.game.roundLocation().then(l => {
-          // Moved on, or stopped.
-          if (round !== key) return;
-          real = l;
-          ctx.status(l ? '' : ggs.game.whyNoRound());
-        });
+        if (hooks.usesLocation !== false) findLocation(key);
+      }
+
+      // A failed lookup (a network blip) is tried again a few times before giving up.
+      function findLocation(key, tries = 1) {
+        ggs.game.roundLocation().then(l => gotLocation(key, l, tries));
+      }
+      function gotLocation(key, l, tries) {
+        // Moved on, or stopped.
+        if (round !== key) return;
+        real = l;
+        ctx.status(l ? '' : ggs.game.whyNoRound());
+        if (!l && tries < LOCATION_TRIES) setTimeout(() => findLocation(key, tries + 1), RETRY_MS);
       }
 
       // Tosses this round's coin, the first time the real location is known.
