@@ -247,7 +247,10 @@
       const img = new Image();
       img.src = r.image;
       await img.decode();
-      g.image = await createImageBitmap(img);
+      const bitmap = await createImageBitmap(img);
+      // cancelled while it decoded: dropped, so it can't touch a newer generation's bar
+      if (g.error) return bitmap.close();
+      g.image = bitmap;
       ggs.debug(`${style}: generated ${id} (${mode}) in ${(r.ms / 1000).toFixed(1)} s`);
       await flush(g);
       await ggs.tiles.repaint(id);
