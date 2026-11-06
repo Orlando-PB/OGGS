@@ -76,17 +76,7 @@
   // active is { id, style, label, cfg } while a script is on.
   let active = null;
   const bar = ggs.redrawBar;
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
-  function shownPano() {
-    for (const p of panos) {
-      try {
-        const id = p.getPano();
-        if (id) return id;
-      } catch {}
-    }
-    return null;
-  }
+  const shownPano = () => ggs.maps.panorama()?.getPano() ?? null;
 
   // Tiles of a panorama with no generation yet wait here, blue on screen, until the view has
   // stayed on one panorama for SETTLE ms. Then that panorama is generated and the others get

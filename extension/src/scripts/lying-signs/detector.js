@@ -151,16 +151,14 @@
   }
 
   // ---- which way you're looking, for the queue order ----
-  const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
-    panos.add(p);
     try {
       p.addListener('pano_changed', pruneQueue);
     } catch {}
   });
   function pruneQueue() {
     const shown = new Set();
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       try {
         shown.add(p.getPano());
       } catch {}
@@ -174,7 +172,7 @@
   function tileDistance(url) {
     const k = ggs.tileKey(url);
     if (!k) return null;
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       const view = viewOf(p, k.pano);
       if (view === undefined) continue;
       if (!view) return null;

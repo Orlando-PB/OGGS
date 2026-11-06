@@ -72,6 +72,18 @@
       }
     }
   }, 10);
+  // Every StreetViewPanorama GeoGuessr made, oldest first. An old one can live on after a
+  // remount and still answer, so the one on screen is the newest that has a panorama.
+  const panoramas = [];
+  hook('StreetViewPanorama', p => panoramas.push(p));
+  function panorama() {
+    for (let i = panoramas.length - 1; i >= 0; i--) {
+      try {
+        if (panoramas[i].getPano()) return panoramas[i];
+      } catch {}
+    }
+    return null;
+  }
   const created = [];
   // The last spot clicked on any map this round, by the player or placeGuess, so a script
   // switched on mid-round knows where the pin already is. A shift-click takes it off.
@@ -211,6 +223,8 @@
     GUESS_AREA,
     GUESS_PIN_SELECTORS,
     pinRoot,
+    panorama,
+    panoramas: () => panoramas,
     hook,
     debug,
   };

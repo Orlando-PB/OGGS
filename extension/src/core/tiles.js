@@ -154,9 +154,6 @@
 
   // The renderer only redraws on a view change, so nudge it after an upload. It gets a heading
   // change held for a frame and a mouse move over the canvas, since either alone can be swallowed.
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
-
   async function repaint(panoId) {
     const nudged = nudge(panoId);
     await new Promise(r => requestAnimationFrame(r));
@@ -170,7 +167,7 @@
   // Turns each panorama (or only panoId) a touch. Returns [panorama, its pov before].
   function nudge(panoId) {
     const nudged = [];
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       try {
         if (panoId && p.getPano() !== panoId) continue;
         const pov = p.getPov();

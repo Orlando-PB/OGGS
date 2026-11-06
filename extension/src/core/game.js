@@ -179,9 +179,6 @@
   const TRIES = 20;
   // token -> Map(round number -> the roundKey it was handed out for).
   const duelRounds = new Map();
-  // GeoGuessr's Street View panoramas, to see where the player is.
-  const panos = [];
-  ggs.maps.hook('StreetViewPanorama', p => panos.push(p));
   // How far the Street View can be from a round's location and still be that round
   // (the player may have moved a little before the lookup).
   const SAME_SPOT_KM = 50;
@@ -251,7 +248,6 @@
     return round;
   }
 
-  // Where the Street View is: the newest panorama that has a position.
   // The duel round the Street View is at, from the round list, or null.
   function spotRound() {
     const spot = streetViewSpot();
@@ -260,12 +256,10 @@
     return best && best.km <= SAME_SPOT_KM ? best.n : null;
   }
 
+  // Where the Street View on screen is.
   function streetViewSpot() {
-    for (let i = panos.length - 1; i >= 0; i--) {
-      const p = panos[i].getPosition?.();
-      if (p) return { lat: p.lat(), lng: p.lng() };
-    }
-    return null;
+    const p = ggs.maps.panorama()?.getPosition();
+    return p ? { lat: p.lat(), lng: p.lng() } : null;
   }
 
   // The listed duel round nearest the Street View: { round, stale } or { why }. stale means
