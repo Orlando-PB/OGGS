@@ -291,16 +291,20 @@
   // ---- competitive guard ----
   // Party and ranked duels share /duels/<id> URLs, so two signals decide. One is the lobby you
   // came through (/party or /join vs matchmaking pages), the other is party/rated fields in the
-  // game data. Anything not clearly friendly counts as competitive.
+  // game data. Anything not clearly friendly counts as competitive. The lobby only counts for
+  // games reached straight from it: any other page (home, profile...) on the way forgets it, so
+  // a ranked duel opened later from a link isn't taken for the party's.
   const COMPETITIVE_PAGES = /^\/(multiplayer|competitive|ranked|quick-play|matchmaking)(\/|$)/;
   const PARTY_PAGES = /^\/(party|join)(\/|$)/;
   const LOBBY_KEY = 'ggs-lobby';
 
   function noteLobby(path = location.pathname) {
     const lobby = PARTY_PAGES.test(path) ? 'party' : COMPETITIVE_PAGES.test(path) ? 'competitive' : null;
-    if (!lobby) return;
+    // a game page keeps the lobby it came from
+    if (!lobby && ROUTES.some(([re]) => re.test(path))) return;
     try {
-      sessionStorage.setItem(LOBBY_KEY, lobby);
+      if (lobby) sessionStorage.setItem(LOBBY_KEY, lobby);
+      else sessionStorage.removeItem(LOBBY_KEY);
     } catch {}
   }
 
