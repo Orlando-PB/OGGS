@@ -46,23 +46,13 @@
   }
   const inGhana = pt => insidePolygon(pt, ggs.GHANA) || nearEdge(pt, ggs.GHANA);
 
-  // pano id -> Promise<{ width, centerHeading } | null>, from the page's own Maps API
-  const tileCache = new Map();
-  function tiles(id) {
-    if (!tileCache.has(id)) {
-      tileCache.set(
-        id,
-        new window.google.maps.StreetViewService()
-          .getPanorama({ pano: id })
-          .then(({ data }) => ({
-            width: data.tiles.worldSize.width,
-            centerHeading: data.tiles.centerHeading,
-          }))
-          .catch(() => null),
-      );
-    }
-    return tileCache.get(id);
-  }
+  // { width, centerHeading } of a panorama, or null, from maps.js's shared lookup (which
+  // tries again next time after a failure)
+  const tiles = id =>
+    ggs.maps
+      .panoData(id)
+      .then(data => ({ width: data.tiles.worldSize.width, centerHeading: data.tiles.centerHeading }))
+      .catch(() => null);
 
   const rad = d => (d * Math.PI) / 180;
   function toCamera([x, y, z], pov) {
@@ -94,6 +84,17 @@
     return clipped.map(([x, y, z]) => [w / 2 + (f * x) / z, h / 2 - (f * y) / z]);
   }
 
+  // Panoramas gone from the page and from maps.js's list (which keeps the newest few, as a new
+  // one can be put on the page after it's made).
+  function gone(list) {
+    const kept = ggs.maps.panoramas();
+    return list.filter(p => !panos.get(p)?.isConnected && !kept.includes(p));
+  }
+  // The canvas lines up with its panorama once that is on the page.
+  function placeable(div) {
+    if (div.isConnected && getComputedStyle(div).position === 'static') div.style.position = 'relative';
+  }
+
   function start(cfg) {
     const attached = new Map(); // pano -> { canvas, listeners, resize, info }
 
@@ -102,6 +103,7 @@
       if (!st) return;
       const { canvas } = st;
       const div = panos.get(pano);
+      placeable(div);
       const w = div.clientWidth;
       const h = div.clientHeight;
       const dpr = devicePixelRatio || 1;
@@ -244,12 +246,11 @@
 
     function attach(pano) {
       if (attached.has(pano)) return;
-      for (const [p, st] of attached) if (!panos.get(p)?.isConnected) detach(p, st);
+      for (const p of gone([...attached.keys()])) detach(p, attached.get(p));
       const div = panos.get(pano);
       const canvas = document.createElement('canvas');
       canvas.style.cssText =
         'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000';
-      if (getComputedStyle(div).position === 'static') div.style.position = 'relative';
       div.append(canvas);
       const redraw = () => {
         try {

@@ -52,30 +52,19 @@
   const etaOf = (style, mode) => eta[etaKey(style, mode)] ?? ETA_DEFAULT[mode];
   const keyOf = id => `${id}/${active.style}/${modeOf(active.cfg)}`;
 
-  // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
-  const meta = new Map();
+  // panoId -> { worldWidth, tileWidth, zmax } once known, for the last META_KEEP panoramas.
+  // The lookup itself is maps.js's shared panoData.
   const META_KEEP = 100;
   const metaSync = new Map();
-  // A failed lookup isn't kept, so the next one tries again.
-  function panoMeta(id) {
-    if (!meta.has(id)) {
-      const p = new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
-        const worldWidth = data.tiles.worldSize.width;
-        const tileWidth = data.tiles.tileSize.width;
-        const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
-        metaSync.set(id, m);
-        return m;
-      });
-      p.catch(() => meta.delete(id));
-      meta.set(id, p);
-      // only recent panoramas are kept
-      if (meta.size > META_KEEP) {
-        const old = meta.keys().next().value;
-        meta.delete(old);
-        metaSync.delete(old);
-      }
-    }
-    return meta.get(id);
+  async function panoMeta(id) {
+    const data = await ggs.maps.panoData(id);
+    const worldWidth = data.tiles.worldSize.width;
+    const tileWidth = data.tiles.tileSize.width;
+    const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
+    metaSync.delete(id);
+    metaSync.set(id, m);
+    if (metaSync.size > META_KEEP) metaSync.delete(metaSync.keys().next().value);
+    return m;
   }
   const widthAt = (m, zoom) => Math.ceil(m.worldWidth / 2 ** (m.zmax - zoom));
 
