@@ -6,6 +6,7 @@
   const ggs = globalThis.__ggs;
   const MAX_H = 640;
   const AUTO_GUESS_MS = 6000;
+  const MAP_RETRY_MS = 5000;
 
   function start(cfg) {
     let lastToken;
@@ -39,7 +40,13 @@
               ? board.post({ ggs: 'map', name: m.name })
               : ggs.debug('draw-guess: no map name, using world coverage'),
           )
-          .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
+          .catch(err => {
+            ggs.log('draw-guess: could not read the map, using world coverage for now', err);
+            // tried again shortly
+            setTimeout(() => {
+              if (lastToken === token) lastToken = undefined;
+            }, MAP_RETRY_MS);
+          });
       },
     });
     board.post({ ggs: 'hard', on: !!cfg.hardMode });

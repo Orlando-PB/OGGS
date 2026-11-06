@@ -60,7 +60,12 @@
   function mapInfo() {
     const ctx = context();
     if (!ctx) return Promise.resolve(null);
-    if (!mapCache.has(ctx.token)) mapCache.set(ctx.token, fetchGame(ctx).then(pickMap));
+    if (!mapCache.has(ctx.token)) {
+      const p = fetchGame(ctx).then(pickMap);
+      // a failed lookup isn't kept, so the next one tries again
+      p.catch(() => mapCache.delete(ctx.token));
+      mapCache.set(ctx.token, p);
+    }
     return mapCache.get(ctx.token);
   }
 
