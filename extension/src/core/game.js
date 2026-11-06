@@ -126,14 +126,21 @@
   addEventListener('keydown', e => {
     if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.lastGuess()) noteGuess();
   });
+  // In a duel the round guessed in has to be known, or coming back from spectating would look
+  // like a new round. With no round list yet (no script has asked for the location) it's
+  // fetched, a few times if need be. A failed fetch leaves the last list alone.
+  const GUESS_TRIES = 3;
   async function noteGuess() {
     const key = roundKey();
     guessedIn = { key, n: spotRound() };
     const ctx = context();
-    if (guessedIn.n != null || ctx?.mode !== 'duels') return;
-    // No round list yet (no script has asked for the location), so fetch it.
-    duelList = { token: ctx.token, rounds: (await fetchGame(ctx).catch(() => null))?.rounds ?? [] };
-    if (guessedIn.key === key) guessedIn.n = spotRound();
+    if (ctx?.mode !== 'duels') return;
+    for (let tries = 0; tries < GUESS_TRIES && guessedIn.key === key && guessedIn.n == null; tries++) {
+      if (tries) await new Promise(r => setTimeout(r, 1000));
+      const j = await fetchGame(ctx).catch(() => null);
+      if (j?.rounds) duelList = { token: ctx.token, rounds: j.rounds };
+      if (guessedIn.key === key) guessedIn.n = spotRound();
+    }
   }
 
   // { n, total, lat, lng } in standard games and friendly party duels. total is null in duels,
