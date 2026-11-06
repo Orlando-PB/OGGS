@@ -101,8 +101,17 @@
     swallowUp = false;
     e.stopImmediatePropagation();
   }
+  // When a hook last held a press back (performance.now()), for boards pressing Guess.
+  let heldAt = -1;
+  // Space held down repeats; only the first press counts, so repeats can't slip past a hook.
+  function swallowRepeat(e) {
+    if (!(e.type === 'keydown' && e.repeat && isGuessPress(e))) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return true;
+  }
   function onPress(e) {
-    if (passing || !guessHooks.size) return;
+    if (!guessHooks.size || swallowRepeat(e) || passing) return;
     if (e.type === 'keyup') return onKeyUp(e);
     if (!isGuessPress(e)) return;
     const { point, by, block } = askGuessHooks();
@@ -110,7 +119,8 @@
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.type === 'keydown') swallowUp = true;
-    if (!block) guessAt(point, by);
+    if (block) heldAt = performance.now();
+    else guessAt(point, by);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -447,6 +457,6 @@
       };
     },
   });
-  // Scripts use the geometry helpers from here.
-  Object.assign(ggs.aid, ggs.geo, { hints: {} });
+  // Scripts use the geometry helpers from here. heldSince(t): a hook held a press back since t.
+  Object.assign(ggs.aid, ggs.geo, { hints: {}, heldSince: t => heldAt >= t });
 })();

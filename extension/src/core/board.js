@@ -183,10 +183,12 @@
 
     // Try n at pressing Guess. True once there's nothing left to do: guessed or moved on.
     // A press can be held back (core/aid.js beforeGuess hooks), so pressing alone isn't done.
+    // A script holding the press back (Ocean only on land) says why itself, so the board stops.
     function tryPress(guess, n) {
       if (!ggs.maps.guessMapElement() || ggs.game.guessed()) return true;
+      const t = performance.now();
       if (!ggs.maps.submitGuess()) pressAnotherWay(guess, n);
-      return false;
+      return ggs.aid.heldSince(t);
     }
 
     // The button wasn't there or was disabled: put the pin down again once, then try Space.
