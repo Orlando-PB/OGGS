@@ -9,10 +9,13 @@
 //   'ready', 'height' { h }
 //   'guess' { guess: { lat, lng } } when its Guess is pressed. The pin goes down at once.
 //   'done' once its animation is over. GeoGuessr's Guess is pressed guessDelay ms later.
+//   'retry' to press GeoGuessr's Guess again after 'failed', with the same pin.
 //   anything else goes to onMessage.
 // Messages down to the app:
 //   'reset' each round
 //   'answer' { lat, lng } each round when `answer` is set (lat null until it's known)
+//   'placed' { ok } after each 'guess': whether the pin went down. Show the answer only when ok.
+//   'failed' { why } when GeoGuessr's Guess couldn't be pressed
 //   plus whatever the script posts.
 (() => {
   const ggs = globalThis.__ggs;
@@ -61,7 +64,9 @@
     let awaySince = 0;
     let placed = false;
     let answerRound;
-    let lastGuess = null;
+    // The app's guess ('guess'), on the map but maybe not sent in yet. The app may be
+    // showing the answer by then, so stop() sends it in before the real map comes back.
+    let boardGuess = null;
     let answerTimer = 0;
     // Where the board sits. Measured once per round and window size.
     let spot = null;
@@ -71,7 +76,8 @@
     hideMap.textContent = HIDE_MAP_CSS;
     (document.head ?? document.documentElement).append(hideMap);
 
-    const post = msg => (ready ? frame.contentWindow.postMessage(msg, origin) : queued.push(msg));
+    // contentWindow is null once the frame is gone (after stop)
+    const post = msg => (ready ? frame.contentWindow?.postMessage(msg, origin) : queued.push(msg));
     const status = text => {
       if (statusEl) statusEl.textContent = text ?? '';
     };
@@ -137,11 +143,15 @@
         if (host.style.width) layout();
       },
       guess(d) {
-        lastGuess = place(d.guess) ? d.guess : null;
+        const ok = place(d.guess);
+        boardGuess = ok ? d.guess : null;
+        post({ ggs: 'placed', ok });
       },
       done() {
-        if (lastGuess) press(lastGuess, guessDelay);
-        lastGuess = null;
+        if (boardGuess) press(boardGuess, guessDelay);
+      },
+      retry() {
+        if (boardGuess) press(boardGuess, 0);
       },
     };
     const onFrameMessage = e => {
@@ -170,14 +180,17 @@
     // So keep trying for a few seconds, and put the pin down again once in case it was missed.
     // With no button on the page at all (some layouts only show it on hover), press Space.
     // A new round clears pressTimer (tick below), so this never presses into the next round.
-    function press(guess, wait, n = 1) {
+    // then() runs once it's over, pressed or not.
+    function press(guess, wait, n = 1, then) {
       clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
-        if (tryPress(guess, n)) return;
-        if (n < TRIES) return press(guess, RETRY_MS, n + 1);
+        if (tryPress(guess, n)) return then?.();
+        if (n < TRIES) return press(guess, RETRY_MS, n + 1, then);
         const why = ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found';
         status(`Guess placed, but couldn't press Guess (${why})`);
+        post({ ggs: 'failed', why });
         ggs.maps.debug();
+        then?.();
       }, wait);
     }
 
@@ -223,6 +236,7 @@
       post({ ggs: 'reset' });
       clearTimeout(pressTimer);
       placed = false;
+      boardGuess = null;
       status('');
     }
 
@@ -266,7 +280,10 @@
         clearTimeout(answerTimer);
         window.removeEventListener('message', onFrameMessage);
         host?.remove();
-        hideMap.remove();
+        // Switching off mid-reveal would bring the map back with the pin still movable and the
+        // answer just seen, so the guess goes in first.
+        if (boardGuess && !ggs.game.guessed()) press(boardGuess, 0, 1, () => hideMap.remove());
+        else hideMap.remove();
       },
     };
   };
