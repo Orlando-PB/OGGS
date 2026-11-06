@@ -82,7 +82,6 @@
     let amount = cfg.amount ?? 6;
     let round = null;
     let pano = null;
-    let saved = null;
     let drag = null;
     const host = document.createElement('div');
     host.setAttribute('data-ggs-view', '');
@@ -197,17 +196,16 @@
 
     // ---- placement: on the panorama during a round, nowhere otherwise ----
     function unpin() {
-      if (pano) Object.assign(pano.style, saved);
+      if (pano) ggs.view.unpinPano(pano);
       pano = null;
     }
-    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
+    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD;
+    // shared with view masks, so whichever leaves last puts its style back
     function pin(el) {
       unpin();
       el.append(host);
       pano = el;
-      saved = { isolation: el.style.isolation, position: el.style.position };
-      el.style.isolation = 'isolate';
-      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+      ggs.view.pinPano(el);
     }
     const resized = () => {
       const dpr = devicePixelRatio || 1;

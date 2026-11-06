@@ -11,6 +11,8 @@
 //     part swallows clicks, wheel and drags. The holes let them through.
 //   ggs.view.mirror(owner, flips | null) and ggs.view.copyEvent(e, change): see core/mirror.js.
 //   ggs.view.shape.rect / circle / poly build that path data.
+//   ggs.view.pinPano(el) / unpinPano(el): the panorama as its own stacking layer while
+//     something sits in it (counted, shared with the masks).
 //   guessArea() is the guess map's rect with its Guess button (null outside a round).
 //   lastTile() is when the last Street View tile reached the screen (performance.now()).
 (() => {
@@ -305,5 +307,16 @@
     raf = requestAnimationFrame(frame);
   }
 
-  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, shape, ...ggs.viewMirror };
+  ggs.view = {
+    panoElement,
+    guessArea,
+    lastTile,
+    effect,
+    script,
+    mask,
+    shape,
+    pinPano,
+    unpinPano,
+    ...ggs.viewMirror,
+  };
 })();
