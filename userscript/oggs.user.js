@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OGGS - Orlando's GeoGuessr Scripts
 // @namespace    https://github.com/Orlando-PB/OGGS
-// @version      2.0.1
+// @version      2.1.0
 // @description  A collection of fun GeoGuessr extension scripts. Made by Orlando with love.
 // @author       Orlando
 // @homepageURL  https://github.com/Orlando-PB/OGGS
@@ -443,6 +443,13 @@ section.flat .status:empty { display: none; }
   // GeoGuessr's own guess pin (guessed, never seen live). The extra-guesses script hides it
   // so its pins all look the same.
   const GUESS_PIN_SELECTORS = ['[class*="guess-map_"] [class*="marker_"]', '[data-qa="guess-marker"]'];
+  // The whole pin round a matched element: its outermost ancestor that also matches.
+  const pinRoot = el => {
+    const sel = GUESS_PIN_SELECTORS.join(', ');
+    let root = el;
+    while (root.parentElement?.matches(sel)) root = root.parentElement;
+    return root;
+  };
 
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists.
@@ -620,6 +627,7 @@ section.flat .status:empty { display: none; }
     guessButton,
     GUESS_AREA,
     GUESS_PIN_SELECTORS,
+    pinRoot,
     hook,
     debug,
   };
@@ -2174,7 +2182,7 @@ section.flat .status:empty { display: none; }
 })();
 
 // ==================== src/core/board.js ===========================================
-// Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess). An app page in an
+// Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess, jack-guess). An app page in an
 // iframe sits where the guess map was. The real map stays in the page, invisible, and the
 // guess goes through it. This handles the hidden map, the frame and its messages, the
 // hover-to-expand size, a blank board each round, placing the pin and pressing Guess.
@@ -4365,7 +4373,7 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     // one board over the guess map at a time
-    excludes: ['flag-guess'],
+    excludes: ['flag-guess', 'jack-guess'],
     // the guess map is hidden, so its leftover Google bits go too
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
@@ -4455,7 +4463,7 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     // one board over the guess map at a time
-    excludes: ['draw-guess'],
+    excludes: ['draw-guess', 'jack-guess'],
     // the guess map is hidden, so its leftover Google bits go too
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
@@ -4503,6 +4511,83 @@ section.flat .status:empty { display: none; }
   }
 
   ggs.scripts['flag-guess'] = { start };
+})();
+
+// ==================== src/scripts/jack-guess/meta.js ==============================
+(() => {
+  globalThis.__ggs.registry.push({
+    id: 'jack-guess',
+    name: 'Guess on Jack',
+    description: "The world is Jack's face. Click the country you think you're in.",
+    section: 'guessing',
+    defaultEnabled: false,
+    // one board over the guess map at a time
+    excludes: ['draw-guess', 'flag-guess'],
+    // the guess map is hidden, so its leftover Google bits go too
+    turnsOn: [{ id: 'clean', key: 'google' }],
+    options: [],
+  });
+})();
+
+// ==================== src/scripts/jack-guess/main.js ==============================
+// Guess on Jack: a picture of JackSucksAtGeography (app/) over GeoGuessr's guess map, through
+// core/board.js. Every part of his face is a country (each tooth, the eyes, the ears...) and the
+// background is the sea. Each click on him puts GeoGuessr's pin on the matching spot of the
+// hidden map, and the board's Guess presses GeoGuessr's. The result is GeoGuessr's own.
+(() => {
+  const ggs = globalThis.__ggs;
+  const MAX_W = 520;
+  // the board's header, buttons and padding round the 1840x2000 photo
+  const CHROME_H = 100;
+  // frames to wait for GeoGuessr to draw its pin after a click
+  const PIN_FRAMES = 30;
+
+  function start() {
+    let guess = null;
+    const board = ggs.board({
+      id: 'jack-guess',
+      app: 'src/scripts/jack-guess/app/index.html',
+      size: (roomW, roomH, boardH) => {
+        const w = Math.min(MAX_W, roomW, ((roomH - CHROME_H) * 1840) / 2000);
+        return { w, h: Math.min(boardH || w * 1.09 + CHROME_H, roomH) };
+      },
+      guessDelay: 0,
+      onMessage(d) {
+        if (d.ggs === 'pick') {
+          guess = board.place(d.guess) ? d.guess : null;
+          board.post({ ggs: 'placed', ok: !!guess });
+          if (guess) sendPinPicture();
+        }
+        if (d.ggs === 'go' && guess) board.press(guess, 0);
+      },
+    });
+
+    // The picture in GeoGuessr's pin (the player's avatar), so the board's pin can show it too.
+    function sendPinPicture(frame = 0) {
+      requestAnimationFrame(() => {
+        const src = pinPicture();
+        if (src) board.post({ ggs: 'pin', src });
+        else if (frame < PIN_FRAMES) sendPinPicture(frame + 1);
+      });
+    }
+
+    return { update() {}, stop: board.stop };
+  }
+
+  function pinPicture() {
+    const pin = document.querySelector(ggs.maps.GUESS_PIN_SELECTORS.join(', '));
+    if (!pin) return null;
+    const root = ggs.maps.pinRoot(pin);
+    const img = root.querySelector('img');
+    if (img?.src) return img.src;
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+      const url = getComputedStyle(el).backgroundImage.match(/url\("?([^")]+)"?\)/);
+      if (url) return url[1];
+    }
+    return null;
+  }
+
+  ggs.scripts['jack-guess'] = { start };
 })();
 
 // ==================== src/scripts/lat-band/meta.js ================================
@@ -4717,7 +4802,7 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     // the boards hide the map, and wobble moves the pin after each click
-    excludes: ['draw-guess', 'flag-guess', 'wobble'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'wobble'],
     options: [
       // index into COUNTS in main.js
       {
@@ -4766,10 +4851,7 @@ section.flat .status:empty { display: none; }
         return;
       }
       // the outermost marker element, and its offset from the clicked spot
-      let root = el;
-      while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
-        root = root.parentElement;
-      }
+      const root = ggs.maps.pinRoot(el);
       const r = root.getBoundingClientRect();
       const m = map.getDiv().getBoundingClientRect();
       const p = proj.fromLatLngToContainerPixel(latLng);
@@ -5043,7 +5125,7 @@ section.flat .status:empty { display: none; }
     section: 'guessing',
     defaultEnabled: false,
     // the boards guess through the button; extra pins and wobble put the guess back on land
-    excludes: ['draw-guess', 'flag-guess', 'guesses', 'wobble'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'guesses', 'wobble'],
     options: [],
   });
 })();
@@ -5164,6 +5246,7 @@ section.flat .status:empty { display: none; }
     excludes: [
       'draw-guess',
       'flag-guess',
+      'jack-guess',
       'ocean',
       'guesses',
       'wobble',
@@ -5190,35 +5273,21 @@ section.flat .status:empty { display: none; }
   });
 })();
 
-// ==================== src/scripts/in-country/main.js ==============================
-// Guess in a country: the guess map shows one country (draw-guess's geo.json outlines) with the
-// rest of the world greyed out, and the whole world squashed into it. Rows of the country map to
-// rows of the world (north to south), and along each row the country's land, gaps skipped, maps
-// to -180..180. So a pin in the west of Australia is a guess in the Americas. Clicks outside the
-// country take the pin off again. On Guess the pin moves to the world spot it stands for
-// (core/aid.js beforeGuess). The round timer running out guesses the unmoved pin.
+// ==================== src/scripts/in-country/rows.js ==============================
+// A country's rows, shared by Guess in a country (page) and the Guess on Jack board, whose
+// iframe loads this file by relative path. A country's main pieces (draw-guess's geo.json) in
+// [lng, mercator y], read row by row; both squash something onto the land along a row, the
+// gaps between pieces skipped. Maths only: nothing here reads or sends anything.
 (() => {
-  const ggs = globalThis.__ggs;
-  // The world's latitudes that are squashed in: Tierra del Fuego to Greenland.
-  const WORLD_S = -56;
-  const WORLD_N = 84;
-  const ROWS = 2048; // the country's rows cached for squashing the world outlines
-  const MAX_STEP = 1; // degrees: world edges are split this fine before squashing, so they bend
-  const GREY = '#dee2e6';
+  // rows cached per country, south to north
+  const ROWS = 2048;
   const rad = Math.PI / 180;
   const mercY = lat => Math.log(Math.tan(Math.PI / 4 + (lat * rad) / 2));
   const fromMercY = y => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / rad;
-  const names = () =>
-    Object.fromEntries(
-      ggs.registry.find(m => m.id === 'in-country').options[0].choices.map(c => [c.value, c.label]),
-    );
 
-  // Land pieces under this share of the country's biggest are left out (greyed like the rest of
-  // the world): Australia's Macquarie and Heard Islands would otherwise stretch its rows to
+  // Land pieces under this share of the country's biggest are left out: Australia's Macquarie and Heard Islands would otherwise stretch its rows to
   // -54 degrees and hold the whole southern world.
   const MIN_PIECE = 0.005;
-  // Square degrees: smaller islands of the squashed world are left out, as clutter.
-  const MIN_WORLD_PIECE = 1;
   const area = ring => {
     let a = 0;
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -5302,17 +5371,58 @@ section.flat .status:empty { display: none; }
 
   const wrap = lng => ((lng + 540) % 360) - 180;
 
-  // A world spot to its place in the country.
-  function squash(shape, lat, lng) {
-    const t = (Math.min(WORLD_N, Math.max(WORLD_S, lat)) - WORLD_S) / (WORLD_N - WORLD_S);
-    const r = rowAt(shape, t);
-    let left = ((lng + 180) / 360) * r.length;
+  // The spot f (0..1) of the way along a row's land, west to east, gaps skipped.
+  function alongRow(r, f) {
+    let left = f * r.length;
     for (const [a, b] of r.segs) {
       if (left <= b - a) return { lat: fromMercY(r.y), lng: wrap(a + left) };
       left -= b - a;
     }
     const last = r.segs[r.segs.length - 1];
     return { lat: fromMercY(r.y), lng: wrap(last[1]) };
+  }
+
+  // In the page it joins the other ggs helpers; the board's iframe has no __ggs.
+  (globalThis.__ggs ?? globalThis).countryRows = {
+    mercY,
+    fromMercY,
+    wrap,
+    area,
+    shapeOf,
+    row,
+    rowAt,
+    alongRow,
+  };
+})();
+
+// ==================== src/scripts/in-country/main.js ==============================
+// Guess in a country: the guess map shows one country (draw-guess's geo.json outlines) with the
+// rest of the world greyed out, and the whole world squashed into it. Rows of the country map to
+// rows of the world (north to south), and along each row the country's land, gaps skipped, maps
+// to -180..180. So a pin in the west of Australia is a guess in the Americas. Clicks outside the
+// country take the pin off again. On Guess the pin moves to the world spot it stands for
+// (core/aid.js beforeGuess). The round timer running out guesses the unmoved pin.
+(() => {
+  const ggs = globalThis.__ggs;
+  // The world's latitudes that are squashed in: Tierra del Fuego to Greenland.
+  const WORLD_S = -56;
+  const WORLD_N = 84;
+  const MAX_STEP = 1; // degrees: world edges are split this fine before squashing, so they bend
+  const GREY = '#dee2e6';
+  // country rows, shared with Guess on Jack (rows.js)
+  const { mercY, area, shapeOf, row, rowAt, alongRow, wrap } = ggs.countryRows;
+  const names = () =>
+    Object.fromEntries(
+      ggs.registry.find(m => m.id === 'in-country').options[0].choices.map(c => [c.value, c.label]),
+    );
+
+  // Square degrees: smaller islands of the squashed world are left out, as clutter.
+  const MIN_WORLD_PIECE = 1;
+
+  // A world spot to its place in the country.
+  function squash(shape, lat, lng) {
+    const t = (Math.min(WORLD_N, Math.max(WORLD_S, lat)) - WORLD_S) / (WORLD_N - WORLD_S);
+    return alongRow(rowAt(shape, t), (lng + 180) / 360);
   }
 
   // A pin in the country to the world spot it stands for. null outside the country.
@@ -5536,7 +5646,7 @@ section.flat .status:empty { display: none; }
     description: 'The guess map goes blank.',
     section: 'guessing',
     defaultEnabled: false,
-    excludes: ['draw-guess', 'flag-guess', 'drift'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'drift'],
     options: [{ key: 'grid', label: 'Grid lines', type: 'checkbox', default: true }],
   });
 })();
@@ -5628,7 +5738,7 @@ section.flat .status:empty { display: none; }
     description: 'The guess map keeps sliding about.',
     section: 'guessing',
     defaultEnabled: false,
-    excludes: ['draw-guess', 'flag-guess'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess'],
     options: [
       // index into SPEED in main.js
       {
@@ -11230,7 +11340,7 @@ section.flat .status:empty { display: none; }
   // Chance of a board per pick at a 30 s interval. It scales with the interval, so a board comes
   // up about once a game whatever the setting.
   const DRAW_CHANCE = 0.04;
-  const BOARDS = ['draw-guess', 'flag-guess'];
+  const BOARDS = ['draw-guess', 'flag-guess', 'jack-guess'];
   // Effects that need the guess map, which a board hides (or that press Guess themselves).
   const NEEDS_MAP = [
     'guesses',

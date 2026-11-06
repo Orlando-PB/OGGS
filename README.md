@@ -1,6 +1,6 @@
 # OGGS: Orlando's GeoGuessr Scripts
 
-> **Status:** v2.0.1, a small project maintained now and then. Live on the Chrome Web Store and as a script for Tampermonkey.
+> **Status:** v2.1.0 in progress, a small project maintained now and then. Live on the Chrome Web Store and as a script for Tampermonkey (both still on an older version until 2.1.0 is released).
 
 A collection of modifiers for GeoGuessr.
 
