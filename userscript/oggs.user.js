@@ -2171,16 +2171,23 @@ section.flat .status:empty { display: none; }
     flush(g).then(() => ggs.tiles.repaint(key.split('/')[0]));
     ggs.debug(`${active?.style}: cancelled ${key}`);
   }
+  // Each picture is a 2048x1024 or 3072x1536 bitmap (8-18 MB), so only the last few are kept.
+  // One still on its way is never dropped: it would finish with nothing to close its bitmap.
+  const GENS_KEEP = 6;
+  function forgetOldGens() {
+    for (const [k, old] of gens) {
+      if (gens.size <= GENS_KEEP) return;
+      if (!old.image && !old.error) continue;
+      old.image?.close();
+      gens.delete(k);
+    }
+  }
   function generation(id, style = active.style, mode = modeOf(active.cfg)) {
     const key = `${id}/${style}/${mode}`;
     if (gens.has(key)) return gens.get(key);
     const g = { image: null, pending: [], error: null, ctrl: new AbortController(), mode, t0: Date.now() };
     gens.set(key, g);
-    if (gens.size > 20) {
-      const k = gens.keys().next().value;
-      gens.get(k).image?.close?.();
-      gens.delete(k);
-    }
+    forgetOldGens();
     const t0 = g.t0;
     // Counted from the start. The server's log takes over once it answers.
     inFlight[mode].push(t0);
@@ -6152,14 +6159,18 @@ section.flat .status:empty { display: none; }
 })();
 
 // ==================== src/scripts/drift/main.js ===================================
-// Drifting map: the guess map's centre moves a little every frame, in a direction that wanders
-// slowly and turns back near the top or bottom of the world. setCenter doesn't animate, so frames
-// don't cancel each other. Zoom is locked where it was (GeoGuessr's values put back after), which
-// makes it harder and stops the moving centre fighting Google's zoom animation.
+// Drifting map: the guess map keeps sliding round in a slow loop. The centre goes round a circle
+// about the spot the player is looking at, so the same few map tiles stay on screen and nothing
+// new has to load while it drifts. Dragging the map still works: the loop follows to the new
+// spot. Zoom is locked where it was (GeoGuessr's values put back after), which makes it harder
+// and stops the moving centre fighting Google's zoom animation.
 (() => {
   const ggs = globalThis.__ggs;
-  // screen pixels per frame
-  const SPEED = [0.6, 1.4, 3, 5.5, 9];
+  // the loop's radius as a share of the map's smaller side, and seconds per lap, by the slider
+  const RADIUS = 0.3;
+  const LAP_S = [24, 14, 8, 5, 3];
+  // a centre further than this (px) from where it was put was moved by the player
+  const DRAGGED_PX = 2;
   const LOCK = ['minZoom', 'maxZoom', 'scrollwheel', 'disableDoubleClickZoom', 'zoomControl'];
 
   ggs.scripts.drift = ggs.aid('drift', {
@@ -6167,8 +6178,6 @@ section.flat .status:empty { display: none; }
     attach(ctx) {
       // This map, not ctx.map: by the time cleanup runs, ctx.map may already be the next one.
       const map = ctx.map;
-      let angle = Math.random() * 2 * Math.PI;
-      let frame;
       const saved = Object.fromEntries(LOCK.map(k => [k, map.get(k)]));
       const z0 = map.getZoom();
       map.setOptions({
@@ -6178,28 +6187,56 @@ section.flat .status:empty { display: none; }
         disableDoubleClickZoom: true,
         zoomControl: false,
       });
-      const step = () => {
+      const loop = makeLoop(map, () => LAP_S[ctx.cfg.speed] ?? LAP_S[1]);
+      let frame = requestAnimationFrame(function step(now) {
         frame = requestAnimationFrame(step);
-        const c = map.getCenter();
-        const z = map.getZoom();
-        if (!c || z == null) return;
-        angle += (Math.random() - 0.5) * 0.15;
-        // turn back near the poles (screen y points down)
-        if ((c.lat() > 60 && Math.sin(angle) < 0) || (c.lat() < -50 && Math.sin(angle) > 0)) angle = -angle;
-        const v = SPEED[ctx.cfg.speed] ?? SPEED[1];
-        const deg = 360 / (256 * 2 ** z); // degrees of longitude per pixel
-        map.setCenter({
-          lat: c.lat() - v * Math.sin(angle) * deg * Math.cos((c.lat() * Math.PI) / 180),
-          lng: c.lng() + v * Math.cos(angle) * deg,
-        });
-      };
-      frame = requestAnimationFrame(step);
+        loop(now);
+      });
       return () => {
         cancelAnimationFrame(frame);
         map.setOptions(saved);
       };
     },
   });
+
+  // Moves the map's centre round a circle about `home`, in screen pixels at the locked zoom.
+  // home starts at the centre the map had, and moves with the player's drags.
+  function makeLoop(map, lapSeconds) {
+    let home = null;
+    let put = null;
+    let angle = Math.random() * 2 * Math.PI;
+    let last = 0;
+    return now => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      const div = map.getDiv();
+      if (!c || z == null || !div) return;
+      const px = 256 * 2 ** z; // world width in pixels
+      const at = { x: ((c.lng() + 180) / 360) * px, y: mercY(c.lat()) * px };
+      home = follow(home, put, at, px);
+      angle += ((now - (last || now)) / 1000 / lapSeconds()) * 2 * Math.PI;
+      last = now;
+      const r = RADIUS * Math.min(div.clientWidth, div.clientHeight);
+      put = { x: home.x + r * Math.cos(angle), y: home.y + r * Math.sin(angle) };
+      map.setCenter({ lat: fromMercY(put.y / px), lng: (put.x / px) * 360 - 180 });
+    };
+  }
+  // The loop's centre: where it was, moved by however far the player dragged the map since.
+  // Across ±180 Google wraps the centre round, which isn't a drag.
+  function follow(home, put, at, px) {
+    if (!home) return at;
+    const dx = ((((at.x - put.x) % px) + 1.5 * px) % px) - px / 2;
+    const dy = at.y - put.y;
+    if (Math.hypot(dx, dy) <= DRAGGED_PX) return home;
+    return { x: home.x + dx, y: home.y + dy };
+  }
+
+  // Web Mercator y in 0..1 (top to bottom) and back, so circles stay round on screen.
+  const mercY = lat => {
+    const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+    return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+  };
+  const fromMercY = y => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
 })();
 
 // ==================== src/scripts/radio/meta.js ===================================

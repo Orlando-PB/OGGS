@@ -226,16 +226,23 @@
     flush(g).then(() => ggs.tiles.repaint(key.split('/')[0]));
     ggs.debug(`${active?.style}: cancelled ${key}`);
   }
+  // Each picture is a 2048x1024 or 3072x1536 bitmap (8-18 MB), so only the last few are kept.
+  // One still on its way is never dropped: it would finish with nothing to close its bitmap.
+  const GENS_KEEP = 6;
+  function forgetOldGens() {
+    for (const [k, old] of gens) {
+      if (gens.size <= GENS_KEEP) return;
+      if (!old.image && !old.error) continue;
+      old.image?.close();
+      gens.delete(k);
+    }
+  }
   function generation(id, style = active.style, mode = modeOf(active.cfg)) {
     const key = `${id}/${style}/${mode}`;
     if (gens.has(key)) return gens.get(key);
     const g = { image: null, pending: [], error: null, ctrl: new AbortController(), mode, t0: Date.now() };
     gens.set(key, g);
-    if (gens.size > 20) {
-      const k = gens.keys().next().value;
-      gens.get(k).image?.close?.();
-      gens.delete(k);
-    }
+    forgetOldGens();
     const t0 = g.t0;
     // Counted from the start. The server's log takes over once it answers.
     inFlight[mode].push(t0);
