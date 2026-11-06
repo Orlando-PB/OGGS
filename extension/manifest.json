@@ -74,6 +74,7 @@
         "src/scripts/ocean/meta.js",
         "src/scripts/ocean/main.js",
         "src/scripts/in-country/meta.js",
+        "src/scripts/in-country/rows.js",
         "src/scripts/in-country/main.js",
         "src/scripts/blind/meta.js",
         "src/scripts/blind/main.js",
