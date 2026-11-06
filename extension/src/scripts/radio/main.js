@@ -35,6 +35,7 @@
     let loc = null;
     let stations = [];
     let idx = 0;
+    let stopped = false;
 
     const setStatus = t => ui.setStatus(t);
     const stationLine = () => `Station ${idx + 1} of ${stations.length}`;
@@ -138,6 +139,7 @@
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
+      if (stopped) return;
       const a = out.element(volume);
       audio = a;
       node = cors ? out.connect(a) : null;
@@ -178,7 +180,7 @@
     }
 
     function tune(i, { paused = false } = {}) {
-      if (!stations.length) return;
+      if (stopped || !stations.length) return;
       idx = ((i % stations.length) + stations.length) % stations.length;
       resetStation(paused);
       if (cfg.streamerMode && !paused && notActivated()) {
@@ -282,15 +284,16 @@
       round = key;
       clearRound();
       const found = await ggs.game.roundLocation().catch(() => null);
-      // A newer round took over during the wait, so this one's results are dropped.
-      if (round !== key) return;
+      // A newer round took over during the wait (or radio was switched off), so this one's
+      // results are dropped.
+      if (stopped || round !== key) return;
       loc = found;
       if (!loc) {
         tuning = false;
         return setStatus(ggs.game.whyNoRound() || 'No location for this round');
       }
       const { list, failed } = await searchStations();
-      if (round !== key) return;
+      if (stopped || round !== key) return;
       stations = list;
       tuning = false;
       playFound(failed);
@@ -331,6 +334,10 @@
 
     function leaveGame() {
       drop();
+      stopTimers();
+      clearTimeout(skipping);
+      skipping = 0;
+      stations = [];
       ui?.hide(true);
       round = null;
     }
@@ -358,6 +365,8 @@
         if (retune) round = null; // retune this round
       },
       stop() {
+        stopped = true;
+        round = null;
         clearInterval(tick);
         clearTimeout(skipping);
         window.removeEventListener('pointerdown', unblock, true);
