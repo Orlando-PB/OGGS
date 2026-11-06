@@ -327,7 +327,7 @@
     limitShownFor = id;
     const what = active.cfg.hq ? 'High quality' : active.label;
     if (paused(mode))
-      return bar.notice(`${what} is out of AI credit for now · back in ${Q.until(pausedUntil[mode])}`);
+      return bar.notice(`${what} can't be used right now · try again in ${Q.until(pausedUntil[mode])}`);
     const { resetAt } = Q.left(log, mode, caps[mode]);
     bar.notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
   }

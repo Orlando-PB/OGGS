@@ -62,7 +62,7 @@ const GLOBAL_CAPS = ['normal' => 1500, 'hq' => 200];
 const DAY = 86400;
 // after the API says the account is out of credit or over its rate limit
 const PAUSE = 900;
-const NO_CREDIT = 'Out of AI credit for now, try again later';
+const NO_CREDIT = "Can't be used right now, try again later";
 // tile zoom to stitch: 2048x1024 on Gen 4, a bit less on older coverage
 const ZOOM = 2;
 const MAX_TILES = 64;
