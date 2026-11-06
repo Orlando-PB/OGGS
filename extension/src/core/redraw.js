@@ -172,13 +172,19 @@
     const hq = part('high quality', Q.left(log, 'hq', caps.hq));
     ggs.status(active.id, `Today: ${normal} · ${hq}${caps.codeOk ? ' · code accepted' : ''}`);
   }
+  // Only the newest ask counts, so a slow answer for a half-typed code can't win.
+  let quotaAsk = 0;
   async function loadQuota() {
+    const ask = ++quotaAsk;
     serverLog = ggs.store.get(QKEY, {});
     saveLog();
     try {
-      caps = await server({});
+      const got = await server({});
+      if (ask !== quotaAsk) return;
+      caps = got;
       saveLog(caps.log);
     } catch (err) {
+      if (ask !== quotaAsk) return;
       if (active) ggs.status(active.id, err.shown ? err.message : 'Server not reachable');
       ggs.debug('redraw: caps', err);
     }
