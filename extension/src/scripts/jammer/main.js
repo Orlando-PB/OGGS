@@ -86,7 +86,10 @@
     let stopped = false;
     let stream = null;
     let audio = null;
+    // switched itself off: its message stays for the popup to show
+    let blocked = false;
     const status = text => ggs.status('jammer', text);
+    status('');
 
     // a page can only start sound after a click or key press, so it waits for one if needed
     const resume = () => {
@@ -102,6 +105,7 @@
     // refused: it switches itself off rather than stay on doing nothing
     function micFailed(err) {
       if (err?.name === 'NotAllowedError') {
+        blocked = true;
         ggs.saveSetting('jammer', { enabled: false });
         status('Microphone blocked, so it was switched off');
       } else {
@@ -135,7 +139,7 @@
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
         if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
-        status('');
+        if (!blocked) status('');
       },
     };
   }

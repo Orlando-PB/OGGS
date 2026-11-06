@@ -28,14 +28,21 @@
     let stream = null;
     let audio = null;
     let analyser = null;
+    let track = null;
     let raf = 0;
+    // switched itself off: its message stays for the popup to show
+    let blocked = false;
     const status = text => ggs.status('eye', text);
+    status('');
 
-    // no sheet until there's a microphone to open the eye with
+    // No sheet unless the microphone is really heard, so silence from a paused page or a
+    // lost microphone never keeps the view covered.
+    const hearing = () =>
+      analyser && audio.state === 'running' && track?.readyState === 'live' && !track.muted;
     const mask = ggs.view.mask({
       over: 'pano',
       look: 'paper',
-      cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
+      cut: (w, h) => (!hearing() || open > 0.98 ? null : lids(w, h, open)),
     });
 
     const resume = () => {
@@ -45,8 +52,13 @@
       if (stopped) return;
       const running = audio.state === 'running';
       for (const t of GESTURES) window[running ? 'removeEventListener' : 'addEventListener'](t, resume, true);
-      status(running ? 'Listening' : 'Click the page to start listening');
+      status(running ? micState() : 'Click the page to start listening, the eye is open until then');
     };
+    function micState() {
+      if (track.readyState !== 'live') return 'Microphone lost, so the eye stays open';
+      if (track.muted) return 'Microphone muted, so the eye stays open';
+      return 'Listening';
+    }
 
     const buf = new Float32Array(1024);
     function frame() {
@@ -63,6 +75,7 @@
     // refused: it switches itself off rather than stay on doing nothing
     function micFailed(err) {
       if (err?.name === 'NotAllowedError') {
+        blocked = true;
         ggs.saveSetting('eye', { enabled: false });
         status('Microphone blocked, so it was switched off');
       } else {
@@ -76,6 +89,8 @@
       a.fftSize = buf.length;
       audio.createMediaStreamSource(stream).connect(a);
       analyser = a;
+      track = stream.getAudioTracks()[0];
+      for (const t of ['ended', 'mute', 'unmute']) track?.addEventListener(t, onState);
       audio.addEventListener('statechange', onState);
       onState();
       frame();
@@ -106,7 +121,7 @@
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
         if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
-        status('');
+        if (!blocked) status('');
       },
       update(next) {
         sensitivity = next.sensitivity ?? 5;
