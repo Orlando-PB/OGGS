@@ -1,6 +1,8 @@
 # OGGS: Orlando's GeoGuessr Scripts
 
 > **Status:** v2.1.0 in progress, a small project maintained now and then. Live on the Chrome Web Store and as a script for Tampermonkey (both still on an older version until 2.1.0 is released).
+>
+> **Tests:** `node --test tests/` (Node's built-in runner, no installs). Run it before every commit and release; it also fails if `userscript/oggs.user.js` wasn't rebuilt (`node tools/build.mjs`).
 
 A collection of modifiers for GeoGuessr.
 

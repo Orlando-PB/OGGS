@@ -10,6 +10,7 @@
       "extension/**",
       "server/**",
       "tools/**",
+      "tests/**",
       "userscript/bridge.js",
       "!extension/src/scripts/draw-guess/app/app.js",
       "!extension/src/scripts/draw-guess/app/index.html",
