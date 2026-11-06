@@ -5,7 +5,9 @@
 // Each tile upload gets a record ({ gl, name, args, url, key, img, tex, ... }). The registered
 // filters (redraw, lying-signs, gradient) then get a turn, in order, to swap the source for a
 // canvas. A filter that needs time can keep the record and push a new source into the same
-// texture later with upload(rec, source). Other uploads pass straight through.
+// texture later with reupload(rec, source, order): the filters after its own order get their
+// turn on it first, so a late tile still gets every later effect. Other uploads pass straight
+// through.
 // The API never re-uploads a tile already on screen. So replay() loads every remembered tile
 // again (from the browser cache) and runs it through the same path. That's how switching a
 // script on or off mid-round takes effect.
@@ -75,8 +77,12 @@
   // What goes into WebGL right now for this upload.
   function handle(rec) {
     remember(rec);
-    let source = rec.img;
+    return runFilters(rec, rec.img);
+  }
+  // The filters after order `after` on this source, in order.
+  function runFilters(rec, source, after = -Infinity) {
     for (const f of filters) {
+      if (f.order <= after) continue;
       try {
         source = f.fn(rec, source) ?? source;
       } catch (err) {
@@ -110,6 +116,13 @@
       gl.bindTexture(rec.target, prevTex);
     }
     return true;
+  }
+  // A filter's late result for a record: the filters after `fromOrder` run on it, then it goes
+  // up. Those filters see the same record again, as on a replay, and may keep it to send their
+  // own late result the same way.
+  function reupload(rec, source, fromOrder) {
+    if (!live(rec)) return false;
+    return upload(rec, runFilters(rec, source, fromOrder));
   }
 
   function wrapUpload(P, name) {
@@ -356,5 +369,15 @@
     pace.spent = pace.pixels = 0;
   }
 
-  ggs.tiles = { filter, upload, live, replay, repaint, preload, prerender, count: () => records.length };
+  ggs.tiles = {
+    filter,
+    upload,
+    reupload,
+    live,
+    replay,
+    repaint,
+    preload,
+    prerender,
+    count: () => records.length,
+  };
 })();

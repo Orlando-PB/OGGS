@@ -241,7 +241,7 @@
     t.recs = t.recs.filter(ggs.tiles.live);
     for (const r of t.recs) {
       try {
-        if (ggs.tiles.upload(r, t.canvas)) stats.edited++;
+        if (ggs.tiles.reupload(r, t.canvas, 1)) stats.edited++;
       } catch (err) {
         stats.failed++;
         if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err);

@@ -119,7 +119,7 @@
   function passThrough(id, entries) {
     for (const { rec, img } of entries) {
       try {
-        ggs.tiles.upload(rec, img);
+        ggs.tiles.reupload(rec, img, 0);
       } catch {}
     }
     if (active && bar.owner() === keyOf(id)) bar.hide();
@@ -350,7 +350,7 @@
   function reupload(g, m, { rec, img, tw, th }) {
     try {
       const k = rec.key;
-      if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
+      if (ggs.tiles.reupload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img, 0)) stats.swapped++;
     } catch (err) {
       ggs.log('redraw: re-upload failed', err);
     }

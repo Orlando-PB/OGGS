@@ -128,7 +128,7 @@
     new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
   function reupload(k, t, tiles) {
     try {
-      return ggs.tiles.upload(t.rec, melt(k, t.src, tiles));
+      return ggs.tiles.reupload(t.rec, melt(k, t.src, tiles), 2);
     } catch (err) {
       ggs.log('gradient: re-upload failed', err);
       return false;
