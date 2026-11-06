@@ -3,7 +3,8 @@
 // rows of the world (north to south), and along each row the country's land, gaps skipped, maps
 // to -180..180. So a pin in the west of Australia is a guess in the Americas. Clicks outside the
 // country take the pin off again. On Guess the pin moves to the world spot it stands for
-// (core/aid.js beforeGuess). The round timer running out guesses the unmoved pin.
+// (core/aid.js beforeGuess), and once the guess has gone the country view comes off. The round
+// timer running out guesses the unmoved pin. If the outlines don't load, it's off for the round.
 (() => {
   const ggs = globalThis.__ggs;
   // The world's latitudes that are squashed in: Tierra del Fuego to Greenland.
@@ -145,6 +146,47 @@
     return big[Math.floor(r * big.length)];
   }
 
+  function drawCountry(ctx, geo, want) {
+    const code = countryFor(geo, ctx.cfg);
+    const s = shape(geo, code);
+    ctx.layer?.setMap(null);
+    ctx.layer = new ctx.gm.Data({ map: ctx.map });
+    ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
+    ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
+    const b = s.bounds;
+    const padLat = (b.north - b.south) * 0.6;
+    const padLng = (b.east - b.west) * 0.6;
+    ctx.map.setOptions({
+      restriction: {
+        strictBounds: false,
+        latLngBounds: {
+          south: Math.max(-85, b.south - padLat),
+          north: Math.min(85, b.north + padLat),
+          west: wrap(b.west - padLng),
+          east: wrap(b.east + padLng),
+        },
+      },
+    });
+    ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
+    ctx.code = code;
+    ctx.shape = s;
+    ctx.drawn = want;
+  }
+
+  // The guess went out on the real world map, so the country view comes off.
+  function leave(ctx) {
+    ctx.guessed = true;
+    ctx.layer?.setMap(null);
+    ctx.map.setOptions({ restriction: null });
+  }
+
+  // Tried once a round, so a failed load isn't fetched again every tick.
+  function loadFailed(ctx) {
+    ctx.failedIn = ggs.game.roundKey();
+    ctx.note("Couldn't load the country outlines, Guess in a country is off this round");
+    ctx.status("Couldn't load the country outlines");
+  }
+
   ggs.scripts['in-country'] = ggs.aid('in-country', {
     usesLocation: false,
     attach(ctx) {
@@ -168,42 +210,18 @@
       }
     },
     tick(ctx) {
+      if (!ctx.guessed && ctx.shape && ggs.game.guessed()) leave(ctx);
       const want = `${ggs.game.roundKey()}|${ctx.cfg.country}|${ctx.cfg.world}`;
-      if (ctx.guessed || ctx.drawn === want || ctx.loading) return;
+      if (ctx.guessed || ctx.drawn === want || ctx.loading || ctx.failedIn === ggs.game.roundKey()) return;
       ctx.loading = true;
       ggs.aid.loadGeo().then(
         geo => {
           ctx.loading = false;
-          if (ctx.guessed || !ctx.map) return;
-          const code = countryFor(geo, ctx.cfg);
-          const s = shape(geo, code);
-          const gm = ctx.gm;
-          ctx.layer?.setMap(null);
-          ctx.layer = new gm.Data({ map: ctx.map });
-          ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
-          ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
-          const b = s.bounds;
-          const padLat = (b.north - b.south) * 0.6;
-          const padLng = (b.east - b.west) * 0.6;
-          ctx.map.setOptions({
-            restriction: {
-              strictBounds: false,
-              latLngBounds: {
-                south: Math.max(-85, b.south - padLat),
-                north: Math.min(85, b.north + padLat),
-                west: wrap(b.west - padLng),
-                east: wrap(b.east + padLng),
-              },
-            },
-          });
-          ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
-          ctx.code = code;
-          ctx.shape = s;
-          ctx.drawn = want;
+          if (!ctx.guessed && ctx.map) drawCountry(ctx, geo, want);
         },
         () => {
           ctx.loading = false;
-          ctx.status("Couldn't load the country outlines");
+          loadFailed(ctx);
         },
       );
     },
@@ -229,10 +247,7 @@
         ctx.note(`Put a pin inside ${names()[ctx.code] ?? ctx.code}`);
         return false;
       }
-      // the guess goes out on the real world map, so the country view comes off
-      ctx.guessed = true;
-      ctx.layer?.setMap(null);
-      ctx.map.setOptions({ restriction: null });
+      // the view stays until the guess has really gone (another script can hold it back)
       return ctx.pin;
     },
     stop(ctx) {
