@@ -71,6 +71,7 @@
     excludes: [
       'draw-guess',
       'flag-guess',
+      'jack-guess',
       'ocean',
       'guesses',
       'wobble',

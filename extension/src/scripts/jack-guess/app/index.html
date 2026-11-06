@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guess on Jack</title>
+<style>
+  :root { --bg: #f4efe6; --paper: #fffdf8; --ink: #1f2a44; --muted: #6b7280; --line: #e3dccd; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 10px;
+    user-select: none;
+  }
+  .board {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px;
+    box-shadow: 0 8px 24px -14px rgba(31, 42, 68, .25);
+  }
+  .head { display: flex; flex-direction: column; gap: 2px; min-height: 28px; margin-bottom: 8px; }
+  .head .tip { color: var(--muted); }
+  /* the photo is 1840x2000 */
+  .stage { position: relative; aspect-ratio: 1840 / 2000; overflow: hidden; border-radius: 8px; background: #1d4f80; }
+  #face { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  #face.panning { cursor: grabbing; }
+  .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .row .gap { flex: 1; }
+  .row .hint { color: var(--muted); font-size: 12px; }
+  button {
+    font: inherit;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  button:hover { border-color: #c9bfa9; }
+  button:disabled { opacity: .45; cursor: default; }
+  /* Looks like GeoGuessr's own Guess (green, bold italic capitals), as that one is hidden. */
+  .go {
+    background: linear-gradient(180deg, #8fd33c 0%, #6cb928 55%, #58a31d 100%);
+    border: 0;
+    color: #fff;
+    font-weight: 800;
+    font-style: italic;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 8px 22px;
+    box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, .25);
+  }
+  .go:hover:not(:disabled) { filter: brightness(1.07); }
+  .go:disabled { filter: saturate(.55); }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="head">
+    <span class="tip" id="tip">Loading Jack…</span>
+  </div>
+  <div class="stage"><canvas id="face"></canvas></div>
+  <div class="row">
+    <button type="button" id="fit" title="Zoom out (0)">Zoom out</button>
+    <span class="hint">Scroll to zoom, drag to move</span>
+    <span class="gap"></span>
+    <button type="button" class="go" id="guess" disabled>Guess</button>
+  </div>
+</div>
+<script src="../../in-country/rows.js"></script>
+<script src="face.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

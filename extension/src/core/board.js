@@ -1,4 +1,4 @@
-// Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess). An app page in an
+// Drawing boards over GeoGuessr's guess map (draw-guess, flag-guess, jack-guess). An app page in an
 // iframe sits where the guess map was. The real map stays in the page, invisible, and the
 // guess goes through it. This handles the hidden map, the frame and its messages, the
 // hover-to-expand size, a blank board each round, placing the pin and pressing Guess.

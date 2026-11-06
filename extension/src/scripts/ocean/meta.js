@@ -6,7 +6,7 @@
     section: 'guessing',
     defaultEnabled: false,
     // the boards guess through the button; extra pins and wobble put the guess back on land
-    excludes: ['draw-guess', 'flag-guess', 'guesses', 'wobble'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'guesses', 'wobble'],
     options: [],
   });
 })();

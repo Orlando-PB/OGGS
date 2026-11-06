@@ -16,6 +16,7 @@
       "!**/vendor",
       "!**/data",
       "!extension/src/scripts/flag-guess/app/flags.json",
+      "!extension/src/scripts/jack-guess/app/regions.json",
       "!extension/src/scripts/radio/shapes.js",
       "!extension/src/scripts/ghana-tape/ghana.js"
     ]
@@ -57,7 +58,7 @@
   },
   "overrides": [
     {
-      "includes": ["extension/src/scripts/flag-guess/app/*.js"],
+      "includes": ["extension/src/scripts/flag-guess/app/*.js", "extension/src/scripts/jack-guess/app/*.js"],
       "linter": {
         "rules": {
           "correctness": {

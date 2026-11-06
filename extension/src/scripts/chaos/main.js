@@ -17,7 +17,7 @@
   // Chance of a board per pick at a 30 s interval. It scales with the interval, so a board comes
   // up about once a game whatever the setting.
   const DRAW_CHANCE = 0.04;
-  const BOARDS = ['draw-guess', 'flag-guess'];
+  const BOARDS = ['draw-guess', 'flag-guess', 'jack-guess'];
   // Effects that need the guess map, which a board hides (or that press Guess themselves).
   const NEEDS_MAP = [
     'guesses',

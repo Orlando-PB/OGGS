@@ -5,7 +5,7 @@
     description: 'The guess map keeps sliding about.',
     section: 'guessing',
     defaultEnabled: false,
-    excludes: ['draw-guess', 'flag-guess'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess'],
     options: [
       // index into SPEED in main.js
       {

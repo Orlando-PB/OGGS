@@ -6,7 +6,7 @@
     section: 'guessing',
     defaultEnabled: false,
     // the boards hide the map, and wobble moves the pin after each click
-    excludes: ['draw-guess', 'flag-guess', 'wobble'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'wobble'],
     options: [
       // index into COUNTS in main.js
       {

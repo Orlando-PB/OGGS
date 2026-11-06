@@ -5,7 +5,7 @@
     description: 'The guess map goes blank.',
     section: 'guessing',
     defaultEnabled: false,
-    excludes: ['draw-guess', 'flag-guess', 'drift'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'drift'],
     options: [{ key: 'grid', label: 'Grid lines', type: 'checkbox', default: true }],
   });
 })();

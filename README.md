@@ -45,6 +45,7 @@ Adds a modifier lasting 30 seconds at set intervals.
 |---|---|
 | **Draw the country** | The guess map becomes a drawing board. Draw the country you think you're in and pin your spot. It snaps to the closest real country. |
 | **Draw the flag** | The guess map becomes a drawing board. Draw the flag, then click your spot in the outline of the country whose flag it matched. |
+| **Guess on Jack** | The guess map becomes a photo of JackSucksAtGeography. Every part of his face is a country (each tooth, his eyes, his ears...) and the background is the sea. Work out which is which and click. |
 | **Show latitude / Show longitude** | Shows the lat/long of the round's location. |
 | **Show area** | Shows an area around the round's location. |
 | **Show distance** | Each pin you drop shows how far it is from the spot. |

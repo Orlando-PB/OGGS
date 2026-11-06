@@ -56,6 +56,8 @@
         "src/scripts/draw-guess/main.js",
         "src/scripts/flag-guess/meta.js",
         "src/scripts/flag-guess/main.js",
+        "src/scripts/jack-guess/meta.js",
+        "src/scripts/jack-guess/main.js",
         "src/scripts/lat-band/meta.js",
         "src/scripts/lat-band/main.js",
         "src/scripts/lng-band/meta.js",
@@ -148,6 +150,8 @@
         "icons/icon-128.png",
         "src/scripts/draw-guess/app/*",
         "src/scripts/flag-guess/app/*",
+        "src/scripts/jack-guess/app/*",
+        "src/scripts/in-country/rows.js",
         "src/scripts/lying-signs/worker.js",
         "src/scripts/lying-signs/vendor/*"
       ]

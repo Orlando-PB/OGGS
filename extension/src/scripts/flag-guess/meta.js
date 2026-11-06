@@ -6,7 +6,7 @@
     section: 'guessing',
     defaultEnabled: false,
     // one board over the guess map at a time
-    excludes: ['draw-guess'],
+    excludes: ['draw-guess', 'jack-guess'],
     // the guess map is hidden, so its leftover Google bits go too
     turnsOn: [{ id: 'clean', key: 'google' }],
     options: [
