@@ -1,8 +1,9 @@
 // Extra guesses: every click on the guess map leaves a pin that looks just like GeoGuessr's own
 // (a copy of its pin element, with the original hidden), so you can't tell which is the guess.
-// On Guess, core/aid.js first moves the guess to the pin closest to the round's location. The
-// same happens if the script stops mid-round (Chaos mode). Without the location the guess stays
-// on the last click. Click a pin to take it back. With all pins down, a click moves the oldest.
+// GeoGuessr's hidden pin always sits on the newest pin. On Guess, core/aid.js first moves it to the
+// pin closest to the round's location. Stopping mid-round (Chaos mode) leaves it on the newest
+// pin, so toggling can't show which pin is closest. Click a pin to take it back, or shift-click
+// the map to take back the newest. With all pins down, a click moves the oldest.
 (() => {
   const ggs = globalThis.__ggs;
   // the boards' pin (marks.js)
@@ -97,12 +98,30 @@
     ctx.note(!n ? '' : max < Infinity ? `${n} of ${max} pins` : `${n} pin${n > 1 ? 's' : ''}`);
   };
 
+  // GeoGuessr's hidden pin goes to the newest pin left, or comes off with none left, so a pin
+  // taken back is never still the guess.
+  function follow(ctx) {
+    const last = ctx.pins.at(-1)?.getPosition();
+    try {
+      if (last) ggs.maps.placeGuess(last.lat(), last.lng(), { pan: false });
+      else ggs.maps.clearGuess();
+    } catch (err) {
+      ggs.log('could not move the guess', err);
+      ctx.note("Couldn't move the guess. Please tell Orlando");
+    }
+  }
+
+  function removePin(ctx, pin) {
+    ctx.remove(pin);
+    ctx.pins = ctx.pins.filter(p => p !== pin);
+    show(ctx);
+  }
+
   function addPin(ctx, latLng) {
     const pin = ctx.add(
       makePin(ctx, latLng, () => {
-        ctx.remove(pin);
-        ctx.pins = ctx.pins.filter(p => p !== pin);
-        show(ctx);
+        removePin(ctx, pin);
+        follow(ctx);
       }),
     );
     ctx.pins.push(pin);
@@ -129,6 +148,7 @@
       if (ctx.pins.length <= most(ctx.cfg)) return;
       while (ctx.pins.length > most(ctx.cfg)) ctx.remove(ctx.pins.pop());
       show(ctx);
+      follow(ctx);
     },
     click(latLng, ctx) {
       // full: the oldest pin makes way
@@ -136,11 +156,23 @@
       addPin(ctx, latLng);
       show(ctx);
     },
-    beforeGuess: closest,
-    // GeoGuessr's own pin moves to the closest one, so it's the guess that's left
-    stop(ctx) {
-      const best = ggs.maps.guessMapElement() && closest(ctx);
-      if (best) ggs.maps.placeGuess(best.lat, best.lng, { pan: false });
+    // GeoGuessr has taken its pin off, so the newest of ours goes with it. The pin left before it
+    // becomes the guess once GeoGuessr is done with the click.
+    unpin(ctx) {
+      const pin = ctx.pins.at(-1);
+      if (!pin) return;
+      removePin(ctx, pin);
+      if (ctx.pins.length) setTimeout(() => follow(ctx));
+    },
+    // Without the location yet, the first press is held so the player knows the guess would be
+    // their last pin, not the closest. The next press goes through as it is.
+    beforeGuess(ctx) {
+      if (ctx.loc || ctx.pins.length < 2) return closest(ctx);
+      const round = ggs.game.roundKey();
+      if (ctx.heldIn === round) return null;
+      ctx.heldIn = round;
+      ctx.note('Still finding the round, press Guess again to use your last pin');
+      return false;
     },
   });
 })();
