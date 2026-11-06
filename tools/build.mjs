@@ -6,9 +6,17 @@
 //   dev/store/vX.Y.Z/oggs-X.Y.Z-firefox.zip  Firefox Add-ons (manifest gets Firefox's extra keys)
 // Usage: node tools/build.mjs
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const src = join(root, 'extension');
@@ -66,11 +74,16 @@ writeFileSync(join(root, 'userscript', 'oggs.user.js'), userscript);
 console.log(join(root, 'userscript', 'oggs.user.js'));
 
 // ---- store zips ----
+// Only files git tracks (or has staged) go in, as they are on disk, so stray local files
+// (notes, test output) never ship. A new file needs a `git add` first.
+const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: src, encoding: 'utf8' })
+  .split('\0')
+  .filter(f => f && existsSync(join(src, f)));
 
 function zip(dir, name) {
   const file = join(out, name);
   rmSync(file, { force: true });
-  execFileSync('zip', ['-qr', file, '.', '-x', '*.DS_Store'], { cwd: dir });
+  execFileSync('zip', ['-q', file, '-@'], { cwd: dir, input: tracked.join('\n') });
   console.log(file);
 }
 
@@ -79,7 +92,10 @@ zip(src, `oggs-${manifest.version}-chrome.zip`);
 // Firefox: needs a fixed add-on id (never change it after the first upload) and the
 // data-collection declaration AMO requires, which sets the floor at 140 (142 on Android).
 const tmp = mkdtempSync(join(tmpdir(), 'oggs-firefox-'));
-cpSync(src, tmp, { recursive: true });
+for (const f of tracked) {
+  mkdirSync(dirname(join(tmp, f)), { recursive: true });
+  copyFileSync(join(src, f), join(tmp, f));
+}
 const firefox = {
   ...manifest,
   browser_specific_settings: {

@@ -2,6 +2,10 @@ Options -Indexes
 <FilesMatch "\.(sqlite|ini|md)$">
   Require all denied
 </FilesMatch>
+# dotfiles (.htaccess, .user.ini, or a stray .env) are never served
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
 
 # The boards (src/scripts/draw-guess/app/, src/scripts/flag-guess/app/) and the text
 # detector (src/scripts/lying-signs/) are served from here for the userscript; the extension
