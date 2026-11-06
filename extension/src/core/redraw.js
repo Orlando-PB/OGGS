@@ -40,7 +40,7 @@
     const j = await r.json().catch(() => ({ error: `Server error (HTTP ${r.status})` }));
     if (!r.ok || j.error) {
       const msg = j.error || `Server error (HTTP ${r.status})`;
-      throw Object.assign(new Error(msg), { code: j.code, shown: true });
+      throw Object.assign(new Error(msg), { code: j.code, until: j.until, shown: true });
     }
     return j;
   }
@@ -178,6 +178,7 @@
       const got = await server({});
       if (ask !== quotaAsk) return;
       caps = got;
+      notePauses(caps.paused);
       saveLog(caps.log);
     } catch (err) {
       if (ask !== quotaAsk) return;
@@ -185,9 +186,14 @@
       ggs.debug('redraw: caps', err);
     }
   }
+  // The server says until when each mode is paused (0 when it isn't).
+  function notePauses(until = {}) {
+    for (const m of ['normal', 'hq']) pausedUntil[m] = until[m] ?? 0;
+  }
   const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
-  // A mode whose AI account is out of credit is left alone until the server's pause is over,
-  // so the player gets the real Street View instead of a blue wait and an error each round.
+  // A mode whose AI account is out of credit (or rate limited) is left alone until the server's
+  // pause is over, so the player gets the real Street View instead of a blue wait and an error
+  // each round. PAUSE_MS is only for a server that doesn't say until when.
   const PAUSE_MS = 15 * 60 * 1000;
   const pausedUntil = { normal: 0, hq: 0 };
   const paused = mode => pausedUntil[mode] > Date.now();
@@ -266,7 +272,7 @@
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog();
       ggs.log(`${style}: generation failed`, err);
-      if (err.code === 'credit') pausedUntil[mode] = Date.now() + PAUSE_MS;
+      if (err.code === 'credit') pausedUntil[mode] = err.until ?? Date.now() + PAUSE_MS;
       bar.done(true, key, err.shown ? err.message : 'Could not redraw this round');
       // Puts the real tiles back.
       flush(g).then(() => ggs.tiles.repaint(id));
