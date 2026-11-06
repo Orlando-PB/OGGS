@@ -9,8 +9,10 @@
 // playing-now numbers only see those players.
 //
 // ~/oggs_private/stats.sqlite keeps time, kind and country per request: no IP, client id or user
-// agent. Pings keep one row per network per day, keyed by a salted hash. "Playing now" is
-// counted from the log on each rebuild and not stored. Countries come from the iptoasn.com
+// agent. Each row's id (which stops a log line being counted twice) is a hash salted with a
+// salt for that day, and the salts are deleted after SALT_KEEP, so old ids can't be traced back
+// to a network. Pings keep one row per network per day. "Playing now" is counted from the log
+// on each rebuild and not stored. Countries come from the iptoasn.com
 // ip2country table (public domain), refreshed monthly.
 //
 // The card is rebuilt at most every REFRESH seconds; in between the last PNG is served as is.
@@ -20,6 +22,8 @@ const REFRESH = 60;
 const LIVE_WINDOW = 300; // "playing now": seen in the last 5 min (2.0 pings every 2)
 const STORE_REFRESH = 6 * 3600;
 const GEO_REFRESH = 30 * 86400;
+const GEO_RETRY = 86400; // after a failed download of the country table
+const SALT_KEEP = 3 * 86400;
 const DOMAIN = 'oggs.orlandopb.com';
 const CHROME_URL = 'https://chromewebstore.google.com/detail/oggs-orlandos-geoguessr-s/lbnadihehgfemijnjmabooamfnppkkpa';
 const FIREFOX_API = 'https://addons.mozilla.org/api/v5/addons/addon/oggs/';
@@ -93,6 +97,10 @@ function fetchUrl(string $url): ?string {
 function refreshGeo(PDO $db): void {
   $done = kvGet($db, 'geo');
   if ($done && time() - $done['t'] < GEO_REFRESH) return;
+  // noted before trying, so a failing download is retried once a day, not on every rebuild
+  $tried = kvGet($db, 'geo_try');
+  if ($tried && time() - $tried['t'] < GEO_RETRY) return;
+  kvSet($db, 'geo_try', '');
   foreach (['4' => 'geo4', '6' => 'geo6'] as $v => $table) {
     $gz = fetchUrl("https://iptoasn.com/data/ip2country-v$v.tsv.gz");
     $tsv = $gz === null ? false : @gzdecode($gz);
@@ -143,8 +151,7 @@ function countryOf(PDO $db, string $ip): string {
 function ingestLogs(PDO $db, string $dir): int {
   $done = $db->query('SELECT name FROM logs_done')->fetchAll(PDO::FETCH_COLUMN);
   $ins = $db->prepare('INSERT OR IGNORE INTO events (id, t, kind, cc) VALUES (?, ?, ?, ?)');
-  $salt = kvGet($db, 'salt')['v'] ?? null;
-  if ($salt === null) kvSet($db, 'salt', $salt = bin2hex(random_bytes(16)));
+  forgetOldSalts($db);
   $seen = []; // ip -> last time, from the current log
   $end = 0;
   foreach (glob("$dir/access.log.*") ?: [] as $path) {
@@ -160,7 +167,8 @@ function ingestLogs(PDO $db, string $dir): int {
       if (!str_contains($line, ' ' . DOMAIN . ' ')) continue;
       $e = parseLine($line);
       if (!$e) continue;
-      $id = $e['kind'] === 'ping' ? hash('sha256', $salt . $e['ip'] . date('Y-m-d', $e['t'])) : md5($line);
+      $salt = daySalt($db, $e['t']);
+      $id = hash('sha256', $salt . ($e['kind'] === 'ping' ? $e['ip'] : $line));
       $ins->execute([$id, $e['t'], $e['kind'], countryOf($db, $e['ip'])]);
       if (!$gz) $seen[$e['ip']] = max($seen[$e['ip']] ?? 0, $e['t']);
     }
@@ -172,6 +180,28 @@ function ingestLogs(PDO $db, string $dir): int {
     if ($gz) $db->prepare('INSERT OR IGNORE INTO logs_done (name) VALUES (?)')->execute([$name]);
   }
   return count(array_filter($seen, fn($t) => $t > $end - LIVE_WINDOW));
+}
+
+// The random salt for the day of $t, made on first use.
+function daySalt(PDO $db, int $t): string {
+  static $salts = [];
+  $k = 'salt_' . date('Y-m-d', $t);
+  if (!isset($salts[$k])) {
+    $salts[$k] = kvGet($db, $k)['v'] ?? null;
+    if ($salts[$k] === null) kvSet($db, $k, $salts[$k] = bin2hex(random_bytes(16)));
+  }
+  return $salts[$k];
+}
+
+// Salts older than SALT_KEEP go. Ids from before day salts (an md5 of the line, or a hash with
+// one salt kept for good) are swapped once for random ones, and that salt is dropped too.
+function forgetOldSalts(PDO $db): void {
+  $db->prepare("DELETE FROM kv WHERE k LIKE 'salt\_%' ESCAPE '\' AND t < ?")->execute([time() - SALT_KEEP]);
+  if (!kvGet($db, 'salt')) return;
+  $db->beginTransaction();
+  $db->exec('UPDATE events SET id = lower(hex(randomblob(16)))');
+  $db->exec("DELETE FROM kv WHERE k = 'salt'");
+  $db->commit();
 }
 
 // IONOS format: ip - - [time] "METHOD path proto" status bytes host "referer" "agent" "-"
