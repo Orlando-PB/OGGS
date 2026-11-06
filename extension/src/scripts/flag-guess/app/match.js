@@ -7,43 +7,56 @@ let flagGrids = [];
 let geo = null;
 let SIM = [];
 let FAMILY = [];
-const ready = fetch('flags.json')
-  .then(r => r.json())
-  .then(d => {
-    data = d;
-    // Pixels as little-endian RGBA words, so a palette colour is one Uint32 compare.
-    pots = d.palette.map(p => {
-      const [r, g, b] = [1, 3, 5].map(i => parseInt(p.hex.slice(i, i + 2), 16));
-      return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
-    });
-    pots.forEach((c, i) => {
-      potIndex.set(c, i);
-    });
-    const at = name => d.palette.findIndex(p => p.name === name);
-    // Colours people mix up count for part of a match.
-    SIM = pots.map((_, i) => pots.map((_, j) => +(i === j)));
-    const MIXED_UP = [
-      ['Red', 'Maroon', 0.6],
-      ['Light blue', 'Blue', 0.6],
-      ['Orange', 'Yellow', 0.4],
-      ['Orange', 'Red', 0.3],
-    ];
-    for (const [a, b, s] of MIXED_UP) {
-      SIM[at(a)][at(b)] = SIM[at(b)][at(a)] = s;
-    }
-    FAMILY = d.palette.map((p, i) => ({ Maroon: at('Red'), Blue: at('Light blue') })[p.name] ?? i);
-    flagGrids = d.flags.map(f => prep(Uint8Array.from(f.grid, Number)));
-    buildPalette();
+// Each fetches its file once. After a failure the next call fetches again, and the failure's
+// message is for the board's tip.
+const loadFlags = loader('flags.json', 'the flags', useFlags);
+const loadGeo = loader('../../draw-guess/app/data/geo.json', 'the country outlines', g => {
+  geo = g;
+});
+
+function loader(url, what, use) {
+  let loading = null;
+  return () =>
+    (loading ??= fetch(url)
+      .then(r => r.json())
+      .then(use)
+      .catch(err => {
+        console.error(err);
+        loading = null;
+        throw new Error(`Couldn't load ${what}`);
+      }));
+}
+
+function useFlags(d) {
+  data = d;
+  // Pixels as little-endian RGBA words, so a palette colour is one Uint32 compare.
+  pots = d.palette.map(p => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(p.hex.slice(i, i + 2), 16));
+    return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
   });
+  pots.forEach((c, i) => {
+    potIndex.set(c, i);
+  });
+  const at = name => d.palette.findIndex(p => p.name === name);
+  // Colours people mix up count for part of a match.
+  SIM = pots.map((_, i) => pots.map((_, j) => +(i === j)));
+  const MIXED_UP = [
+    ['Red', 'Maroon', 0.6],
+    ['Light blue', 'Blue', 0.6],
+    ['Orange', 'Yellow', 0.4],
+    ['Orange', 'Red', 0.3],
+  ];
+  for (const [a, b, s] of MIXED_UP) {
+    SIM[at(a)][at(b)] = SIM[at(b)][at(a)] = s;
+  }
+  FAMILY = d.palette.map((p, i) => ({ Maroon: at('Red'), Blue: at('Light blue') })[p.name] ?? i);
+  flagGrids = d.flags.map(f => prep(Uint8Array.from(f.grid, Number)));
+  buildPalette();
+}
 const sprite = new Image();
 sprite.src = 'flags.png';
 // without the sprite the header just has no picture
 const spriteReady = sprite.decode().catch(() => {});
-const geoReady = fetch('../../draw-guess/app/data/geo.json')
-  .then(r => r.json())
-  .then(g => {
-    geo = g;
-  });
 
 // A country's real flag in flags.png (96x64 each, data.perRow to a row).
 const SPRITE_W = 96;

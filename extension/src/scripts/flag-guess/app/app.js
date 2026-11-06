@@ -2,9 +2,10 @@
 // and it's matched against every flag in flags.json (built by dev/tools/build_flags.mjs). The best
 // match's outline (draw-guess's geo.json) is then shown to click your guess into. The guess goes
 // up to the page (main.js), which puts it on GeoGuessr's hidden map and presses Guess.
-// Talks to the page only by postMessage. Up: 'ready', 'height', 'guess', and 'done' after the
-// zoom out to the right spot. Down: 'reset', 'answer', and 'strict' (guess must go inside the
-// matched country).
+// Talks to the page only by postMessage. Up: 'ready', 'height', 'guess', 'done' after the zoom
+// out to the right spot, and 'retry' after 'failed'. Down: 'reset', 'answer', 'placed' { ok }
+// after 'guess', 'failed' when GeoGuessr's Guess couldn't be pressed, and 'strict' (guess must
+// go inside the matched country).
 // Suggested by @Dilbot447 on YouTube.
 // Part 5 of 5: the stages and the wiring. paint.js, match.js, map.js and raise.js come first.
 let stage = 'draw';
@@ -14,17 +15,24 @@ let strict = true;
 // the round's real spot
 let answerLL = null;
 
-// draw -> raise (the flag goes up a pole) -> pick (click in the outline) -> done
-const TIPS = { draw: 'Paint the flag', raise: 'Raising your flag…', done: 'Guess placed' };
+// draw -> raise (the flag goes up a pole) -> pick (click in the outline) -> done, or failed
+// when GeoGuessr's Guess couldn't be pressed (Guess tries again, the pin stays put)
+const TIPS = {
+  draw: 'Paint the flag',
+  raise: 'Raising your flag…',
+  done: 'Guess placed',
+  failed: "Couldn't press GeoGuessr's Guess. Try again",
+};
 function setStage(s) {
   stage = s;
   const drawing = s === 'draw';
-  const named = s === 'pick' || s === 'done';
+  const named = s === 'pick' || s === 'done' || s === 'failed';
   for (const id of ['drawBar', 'palette', 'drawGo']) $(id).hidden = !drawing;
   paper.hidden = !drawing;
   pick.hidden = !named;
   pole.hidden = !(s === 'raise' || s === 'pick');
-  $('pickBar').hidden = s !== 'pick';
+  $('pickBar').hidden = s !== 'pick' && s !== 'failed';
+  if (s === 'failed') $('guess').disabled = false;
   for (const id of ['mini', 'name', 'yours']) $(id).hidden = !named;
   $('score').textContent = named ? `${chosen.score}% match` : '';
   $('tip').textContent = s === 'pick' ? pickTip() : TIPS[s];
@@ -61,12 +69,18 @@ function choose(r) {
 async function findCountry() {
   if ($('match').disabled) return;
   $('match').disabled = true;
-  await Promise.all([ready, geoReady, spriteReady]);
-  // a new round may have reset the board meanwhile, here and after raise()
-  if (stage !== 'draw') return;
+  // a new round may reset the board meanwhile, here and during raise()
+  const run = runId;
+  try {
+    await Promise.all([loadFlags(), loadGeo(), spriteReady]);
+  } catch (err) {
+    if (run === runId) showError(err.message);
+    return;
+  }
+  if (run !== runId || stage !== 'draw') return;
   const best = bestMatch();
   await raise(best);
-  if (stage !== 'raise') return;
+  if (run !== runId) return;
   choose(best);
   // the pole fades, uncovering the outline, then goes
   pole.classList.add('out');
@@ -91,11 +105,32 @@ pick.addEventListener('pointerdown', e => {
   drawPick();
 });
 
+function showError(text) {
+  $('tip').textContent = text;
+  show();
+}
+
 function submit() {
+  if (stage === 'failed') {
+    toParent({ ggs: 'retry' });
+    setStage('done');
+    return;
+  }
   if (stage !== 'pick' || !pin) return;
   toParent({ ggs: 'guess', guess: view.back(pin) });
   setStage('done');
-  showAnswer().then(ok => ok && toParent({ ggs: 'done' }));
+}
+
+// The answer shows only once the pin is down on GeoGuessr's map. If it didn't go down,
+// back to the outline to click again.
+function placed(ok) {
+  if (stage !== 'done') return;
+  if (ok) {
+    showAnswer().then(shown => shown && toParent({ ggs: 'done' }));
+    return;
+  }
+  setStage('pick');
+  $('tip').textContent = "Couldn't place the guess. Try again";
 }
 $('guess').addEventListener('click', submit);
 
@@ -120,9 +155,11 @@ window.addEventListener('message', e => {
   const d = e.data ?? {};
   if (d.ggs === 'reset') {
     runId++;
-    ready.then(clearPaper);
     setStage('draw');
+    loadFlags().then(clearPaper, err => showError(err.message));
   }
+  if (d.ggs === 'placed') placed(!!d.ok);
+  if (d.ggs === 'failed' && stage === 'done') setStage('failed');
   if (d.ggs === 'strict') strict = !!d.on;
   if (d.ggs === 'answer') answerLL = typeof d.lat === 'number' ? { lat: d.lat, lng: d.lng } : null;
 });
@@ -132,4 +169,7 @@ const board = document.querySelector('.board');
 const boardHeight = () => Math.ceil(board.getBoundingClientRect().height) + 20;
 new ResizeObserver(() => toParent({ ggs: 'height', h: boardHeight() })).observe(board);
 setStage('draw');
-ready.then(() => toParent({ ggs: 'ready' }));
+// ready even without the flags, so the page's messages arrive and the tip says what's wrong
+loadFlags()
+  .then(clearPaper, err => showError(err.message))
+  .then(() => toParent({ ggs: 'ready' }));

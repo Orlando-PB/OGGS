@@ -131,8 +131,10 @@ pole.addEventListener('pointerdown', () => {
   skipRaise = true;
 });
 // The scene fades in with the painted flag already at the top of the pole. It starts still,
-// picks up the wind, then turns into the matched country's flag.
+// picks up the wind, then turns into the matched country's flag. A reset (runId, map.js) stops
+// it, even when its frames were held back while the board was hidden.
 function raise(best) {
+  const run = runId;
   // otherwise last round's flag would show for a frame
   octx.clearRect(0, 0, pole.width, pole.height);
   setStage('raise');
@@ -150,6 +152,7 @@ function raise(best) {
   const t0 = performance.now();
   return new Promise(done => {
     const frame = now => {
+      if (run !== runId) return done();
       const t = now - t0;
       const secs = t / 1000;
       octx.globalAlpha = clamp01(t / 400);
