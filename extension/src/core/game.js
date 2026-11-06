@@ -39,9 +39,13 @@
     }
     return null;
   }
+  // A network or server failure is marked `transient`: worth trying again, not a sign that
+  // GeoGuessr's game data has changed.
   const fetchGame = async ctx => {
-    const r = await fetch(ctx.api, { credentials: 'include' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const r = await fetch(ctx.api, { credentials: 'include' }).catch(err => {
+      throw Object.assign(err, { transient: true });
+    });
+    if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { transient: true });
     return r.json();
   };
 
@@ -175,6 +179,7 @@
           },
           err => {
             roundCache.delete(key);
+            if (err.transient) return noRound("Couldn't reach GeoGuessr, trying again");
             return broken(`game data: ${err.message}`);
           },
         ),
@@ -225,7 +230,11 @@
 
   // The game data names the round, and its location must be where the Street View is. At a
   // round's start either can still be on the last round for a moment (and agree on it), so
-  // both are read again until they agree on a round not handed out before.
+  // both are read again until they agree on a round not handed out before. A round already
+  // handed out is taken again only after STALE_TRIES with the game data and a known Street
+  // View position both still on it: then it is this round, and the round key moved on
+  // without a new round (the guess map was remade).
+  const STALE_TRIES = 8;
   async function standardRound(ctx, key) {
     let r = null;
     for (let tries = 0; tries < TRIES; tries++) {
@@ -233,12 +242,17 @@
       if (roundKey() !== key) return noRound('Moved on while waiting');
       r = currentRound(await fetchGame(ctx));
       if (!r) return broken('standard game data has no current round');
-      if (agrees(r) && [undefined, key].includes(handedTo(ctx.token, r.n))) {
+      if (usable(r, ctx.token, key, tries)) {
         handOutTo(ctx.token, r.n, key);
         return r;
       }
     }
     return broken(`round ${r.n} is not where the Street View is`);
+  }
+  function usable(r, token, key, tries) {
+    const fresh = [undefined, key].includes(handedTo(token, r.n));
+    const settled = tries >= STALE_TRIES && !!streetViewSpot();
+    return agrees(r) && (fresh || settled);
   }
   // No Street View position to check against: the game data's own round number stands.
   function agrees(r) {
@@ -257,7 +271,8 @@
   // game, with every round's location listed up front. So the round is the listed one nearest
   // the Street View on screen. At a round's start the panorama can still be the last round's
   // for a moment, so a round already handed out for an earlier roundKey is waited on, up to
-  // TRIES times. After that there's no location rather than an old round's.
+  // TRIES times. If the Street View is still at that round's place after all that, it is this
+  // round (the round key moved on without a new round), so it's handed out again.
   async function duelRound(ctx, key) {
     let found = { why: 'no duel data' };
     let j;
@@ -279,7 +294,7 @@
 
   function handOut({ round, why, stale }, token, key) {
     if (!round) return broken(why);
-    if (stale) return broken(`duel round ${round.n} was already played`);
+    if (stale) ggs.log(`duel round ${round.n}: the Street View stayed on it, so it's this round`);
     handOutTo(token, round.n, key);
     return round;
   }
