@@ -15,11 +15,16 @@
     realFetch('data/prior.json')
       .then(r => r.json())
       .catch(() => null),
-  ]).then(([m, masks, g, prior]) => {
-    meta = m;
-    geo = g;
-    return DrawMatcher.create(meta, new Uint8Array(masks), geo, prior);
-  });
+  ])
+    .then(([m, masks, g, prior]) => {
+      meta = m;
+      geo = g;
+      return DrawMatcher.create(meta, new Uint8Array(masks), geo, prior);
+    })
+    .catch(err => {
+      console.error(err);
+      throw new Error("Couldn't load the country shapes");
+    });
 
   // A small, fixed lift for the round's real country (matcher.js). If it's within BOOST
   // percentage points of the best match it's lifted past it, further the closer it was. Its
@@ -78,7 +83,11 @@
   window.fetch = async (url, opts) => {
     switch (String(url)) {
       case '/api/world':
-        return realFetch('data/world.json');
+        return realFetch('data/world.json')
+          .then(r => (r.ok ? r : Promise.reject(new Error(r.status))))
+          .catch(() => {
+            throw new Error("Couldn't load the world map");
+          });
       case '/api/maps':
         return json((await matcher).maps());
       case '/api/match': {
@@ -169,14 +178,22 @@
     macedonia: 'MKD',
     burma: 'MMR',
   };
+  // "World without Russia", "Europe except UK": the countries named are left out, so it's world
+  // coverage. "No Move" and the like are game rules, not a country left out.
+  const LEFT_OUT = /\b(without|except|excluding|minus|no(?! (move|moving|pan|zoom)\b))\b/;
+  // Short names ("us", "uk", "uae") are everyday words too, so they count only as a whole word
+  // in capitals: "USA Roads", not "Explore the world with us".
+  const SHORT = 3;
+  const inCapitals = (raw, t) => new RegExp(`(^|[^A-Za-z])${t.toUpperCase()}([^A-Za-z]|$)`).test(raw);
   function countriesIn(name) {
+    if (LEFT_OUT.test(norm(name))) return [];
     const terms = { ...ALIASES };
     for (const e of meta.entries) terms[norm(e.name)] = e.code;
     let s = ` ${norm(name)} `;
     const codes = new Set();
     // Longest names first, blanked out once matched, so "Papua New Guinea" isn't also "Guinea".
     for (const t of Object.keys(terms).sort((a, b) => b.length - a.length)) {
-      if (!s.includes(` ${t} `)) continue;
+      if (!s.includes(` ${t} `) || (t.length <= SHORT && !inCapitals(name, t))) continue;
       codes.add(terms[t]);
       s = s.replaceAll(` ${t} `, ' | ');
     }
@@ -218,27 +235,31 @@
     });
   }
 
+  // name is null when the game's map couldn't be read, so last game's pool doesn't stay.
   async function selectMap(name) {
     const sel = await boardReady();
-    const n = norm(name);
-    let id = [...sel.options].find(o => o.value === n || norm(o.textContent).startsWith(n))?.value;
-    let how = 'region pool';
-    if (!id) {
-      const codes = countriesIn(name);
-      if (codes.length) {
-        meta.maps.game = { label: name, codes };
-        sel.querySelector('option[value="game"]')?.remove();
-        sel.add(new Option(name, 'game'));
-        id = 'game';
-        how = 'countries named in the map';
-      }
-    }
-    if (!id) {
-      id = meta.maps.world ? 'world' : sel.options[0].value;
-      how = 'no match, using world coverage';
-    }
-    gamePool = { id, how, map: name };
+    const world = {
+      id: meta.maps.world ? 'world' : sel.options[0].value,
+      how: name ? 'no match, using world coverage' : 'map not known, using world coverage',
+    };
+    const found = name ? (regionPool(sel, name) ?? namedPool(sel, name)) : null;
+    gamePool = { ...(found ?? world), map: name ?? '?' };
     applyPool();
+  }
+
+  function regionPool(sel, name) {
+    const n = norm(name);
+    const id = [...sel.options].find(o => o.value === n || norm(o.textContent).startsWith(n))?.value;
+    return id ? { id, how: 'region pool' } : null;
+  }
+
+  function namedPool(sel, name) {
+    const codes = countriesIn(name);
+    if (!codes.length) return null;
+    meta.maps.game = { label: name, codes };
+    sel.querySelector('option[value="game"]')?.remove();
+    sel.add(new Option(name, 'game'));
+    return { id: 'game', how: 'countries named in the map' };
   }
 
   window.addEventListener('message', e => {
@@ -249,7 +270,7 @@
         window.backToDraw?.(true);
         break;
       case 'map':
-        if (d.name) selectMap(d.name);
+        selectMap(d.name || null);
         break;
       case 'hard':
         hard = !!d.on;

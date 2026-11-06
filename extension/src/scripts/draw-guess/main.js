@@ -35,13 +35,13 @@
         lastToken = token;
         ggs.game
           .mapInfo()
-          .then(m =>
-            m?.name
-              ? board.post({ ggs: 'map', name: m.name })
-              : ggs.debug('draw-guess: no map name, using world coverage'),
-          )
+          .then(m => {
+            if (!m?.name) ggs.debug('draw-guess: no map name, using world coverage');
+            board.post({ ggs: 'map', name: m?.name ?? null });
+          })
           .catch(err => {
             ggs.log('draw-guess: could not read the map, using world coverage for now', err);
+            board.post({ ggs: 'map', name: null });
             // tried again shortly
             setTimeout(() => {
               if (lastToken === token) lastToken = undefined;
