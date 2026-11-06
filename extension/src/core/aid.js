@@ -281,7 +281,7 @@
           // Moved on, or stopped.
           if (round !== key) return;
           real = l;
-          ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
+          ctx.status(l ? '' : ggs.game.whyNoRound());
         });
       }
 

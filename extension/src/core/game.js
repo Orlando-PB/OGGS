@@ -136,7 +136,9 @@
   // boost, radio's station pick, core/aid.js) but never show it before the guess. Duels only
   // answer once competitive() has confirmed a friendly game, so ranked duels never get one.
   // One lookup per round, shared by every script so they all agree. A failed lookup isn't
-  // kept, so the next call tries again. whyNoRound() says why it failed.
+  // kept, so the next call tries again. whyNoRound() says why it failed, in words for the
+  // player. Nothing is guessed: a location that can't be confirmed is no location, since a
+  // wrong one would quietly spoil the round.
   // roundKey -> Promise<round | null>
   const roundCache = new Map();
   let noRoundWhy = '';
@@ -152,7 +154,7 @@
           },
           err => {
             roundCache.delete(key);
-            return noRound(`game data: ${err.message}`);
+            return broken(`game data: ${err.message}`);
           },
         ),
       );
@@ -165,8 +167,16 @@
     ggs.log(`no round location: ${why}`);
     return null;
   };
+  // Not one of the expected cases (not in a game, competitive...): GeoGuessr has most likely
+  // changed its game data, which needs a fix.
+  const broken = why => {
+    noRound("Couldn't read this round's location. GeoGuessr may have changed something, please tell Orlando");
+    ggs.log(`round location broken: ${why}`);
+    return null;
+  };
 
-  const DUEL_TRIES = 20;
+  // Lookups that wait on the Street View try once a second this many times.
+  const TRIES = 20;
   // token -> Map(round number -> the roundKey it was handed out for).
   const duelRounds = new Map();
   // GeoGuessr's Street View panoramas, to see where the player is.
@@ -180,33 +190,45 @@
 
   async function lookupRound(key) {
     const ctx = context();
-    if (!ctx) return noRound('not in a game');
-    if (ctx.mode === 'standard') return standardRound(ctx);
-    if (ctx.mode !== 'duels') return noRound(`${ctx.mode} games aren't supported`);
-    if ((await competitive()).competitive) return noRound('competitive game');
+    if (!ctx) return noRound('Not in a game');
+    if (ctx.mode === 'standard') return standardRound(ctx, key);
+    if (ctx.mode !== 'duels') return noRound(`Not available in ${ctx.mode} games`);
+    if ((await competitive()).competitive) return noRound('Off in competitive games');
     return duelRound(ctx, key);
   }
 
-  async function standardRound(ctx) {
+  // The game data names the round, and its location must be where the Street View is. At a
+  // round's start the panorama can still be the last round's for a moment, so it's waited on.
+  async function standardRound(ctx, key) {
     const j = await fetchGame(ctx);
-    const n = j?.round ?? j?.rounds?.length;
+    const n = j?.round;
     const cur = j?.rounds?.[n - 1];
-    if (!(n > 0)) return noRound('standard game data has no current round');
-    return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+    if (!(n > 0) || typeof cur?.lat !== 'number' || typeof cur?.lng !== 'number') {
+      return broken('standard game data has no current round');
+    }
+    for (let tries = 0; tries < TRIES; tries++) {
+      if (roundKey() !== key) return noRound('Moved on while waiting');
+      const spot = streetViewSpot();
+      // No Street View position to check against: the game data's own round number stands.
+      if (!spot || ggs.geo.distance(spot, cur) <= SAME_SPOT_KM) {
+        return { n, total: j.roundCount, lat: cur.lat, lng: cur.lng };
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    return broken(`round ${n} is not where the Street View is`);
   }
 
   // Duel rounds are found by place, not by currentRoundNumber. In party duels the game data
   // is a snapshot from when the game was made: status "Created" and currentRoundNumber 1 all
   // game, with every round's location listed up front. So the round is the listed one nearest
   // the Street View on screen. At a round's start the panorama can still be the last round's
-  // for a moment, so a round already handed out for an earlier roundKey is waited on. After
-  // DUEL_TRIES it's taken anyway, since the roundKey can move on mid-round (the guess map
-  // blinking out, a reload).
+  // for a moment, so a round already handed out for an earlier roundKey is waited on, up to
+  // TRIES times. After that there's no location rather than an old round's.
   async function duelRound(ctx, key) {
     let found = { why: 'no duel data' };
     let j;
-    for (let tries = 0; tries < DUEL_TRIES; tries++) {
-      if (roundKey() !== key) return noRound('moved on while waiting');
+    for (let tries = 0; tries < TRIES; tries++) {
+      if (roundKey() !== key) return noRound('Moved on while waiting');
       // The round list only needs fetching again if no round matched (a live duel lists
       // each round as it starts). Waiting on the Street View is then just a position check.
       if (!found.round) {
@@ -222,8 +244,8 @@
   }
 
   function handOut({ round, why, stale }, token, key) {
-    if (!round) return noRound(why);
-    if (stale) ggs.log(`duel round ${round.n} was already played, using it anyway`);
+    if (!round) return broken(why);
+    if (stale) return broken(`duel round ${round.n} was already played`);
     if (!duelRounds.has(token)) duelRounds.set(token, new Map());
     duelRounds.get(token).set(round.n, key);
     return round;

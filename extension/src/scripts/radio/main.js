@@ -287,7 +287,7 @@
       loc = found;
       if (!loc) {
         tuning = false;
-        return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
+        return setStatus(ggs.game.whyNoRound() || 'No location for this round');
       }
       const { list, failed } = await searchStations();
       if (round !== key) return;
