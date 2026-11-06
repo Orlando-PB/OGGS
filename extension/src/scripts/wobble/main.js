@@ -6,7 +6,8 @@
 
   ggs.scripts.wobble = ggs.aid('wobble', {
     usesLocation: false,
-    click(latLng, { cfg }) {
+    click(latLng, ctx) {
+      const { cfg } = ctx;
       // the square root spreads spots evenly over the disc
       const km = KM[cfg.size] * Math.sqrt(Math.random());
       const p = ggs.aid.destination(
@@ -17,7 +18,11 @@
       setTimeout(() => {
         try {
           ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
-        } catch {}
+        } catch (err) {
+          ggs.log('could not wobble the pin', err);
+          ctx.note("Couldn't wobble the pin. Please tell Orlando");
+          ctx.status("Couldn't wobble the pin. Please tell Orlando");
+        }
       });
     },
   });
