@@ -60,12 +60,14 @@
   }
 
   const RECHECK_MS = 5000;
-  // Single-page app, so watch the path. A game that might be competitive is blocked at
-  // once and only unblocked when the check says it's friendly.
+  // Single-page app, so watch the path and the game on it (party games change game under one
+  // path). A game that might be competitive is blocked at once and only unblocked when the
+  // check says it's friendly.
   function onPath() {
-    if (location.pathname === path) return;
-    path = location.pathname;
-    ggs.game.noteLobby(path);
+    const now = `${location.pathname}|${ggs.game.context()?.token ?? ''}`;
+    if (now === path) return;
+    path = now;
+    ggs.game.noteLobby(location.pathname);
     const ctx = ggs.game.context();
     const maybe = ctx && ctx.mode !== 'standard' && ctx.mode !== 'challenge';
     if (maybe && !blocked) {
