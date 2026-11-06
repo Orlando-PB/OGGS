@@ -1,6 +1,7 @@
 // Lying signs: the text detector. worker.js (PP-OCRv4 on onnxruntime-web) runs in a blob
 // worker, with its files fetched from ggs.extBase, and tiles wait in a queue that runs the
-// one nearest the view first. Shared on ggs.lyingSigns as loadDetector and detect.
+// one nearest the view first. Shared on ggs.lyingSigns as loadDetector, unloadDetector and
+// detect.
 (() => {
   const ggs = globalThis.__ggs;
   const ls = ggs.lyingSigns;
@@ -14,64 +15,82 @@
   let workerReady = null;
   let nextId = 0;
   const waiting = new Map(); // id -> resolve
-  // Blob URLs handed to the worker, freed once it has loaded them or failed.
-  let urls = [];
   // A failed load is tried again after RETRY_MS, at most LOAD_TRIES times a session, so a
   // broken detector doesn't download its files again and again.
   const RETRY_MS = 60000;
   const LOAD_TRIES = 3;
-  let loads = 0;
+  let failures = 0;
   let failedAt = -Infinity;
+  // Counts loads and unloads, so a load overtaken by an unload stops and leaves no worker.
+  let loadRun = 0;
+  // Rejects the worker's start while it's loading, so an unload can end it.
+  let abortInit = null;
 
   function loadDetector() {
     if (workerReady) return workerReady;
-    if (loads >= LOAD_TRIES || performance.now() - failedAt < RETRY_MS) {
+    if (failures >= LOAD_TRIES || performance.now() - failedAt < RETRY_MS) {
       return Promise.reject(new Error('text detector unavailable'));
     }
-    loads++;
-    workerReady = startWorker();
+    const run = ++loadRun;
+    workerReady = startWorker(run);
     workerReady.catch(err => {
+      // unloaded meanwhile: not a failure, and a newer load may be running
+      if (run !== loadRun) return;
+      failures++;
       ggs.log('lying-signs: text detector failed to load', err);
-      if (loads >= LOAD_TRIES) ggs.status('lying-signs', "Sign reading isn't working on this computer");
+      if (failures >= LOAD_TRIES) ggs.status('lying-signs', "Sign reading isn't working on this computer");
       failedAt = performance.now();
       stopWorker();
     });
     return workerReady;
   }
+  // The script is off: the worker and its model go, and tiles still waiting get nothing.
+  // The next loadDetector starts it again.
+  function unloadDetector() {
+    loadRun++;
+    for (const j of queue.splice(0)) j.res(null);
+    stopWorker();
+  }
   // Closes the worker (a half-started one too, so a retry doesn't leave it running) and
   // answers every waiting tile with nothing.
   function stopWorker() {
+    abortInit?.(new Error('text detector stopped'));
+    abortInit = null;
     worker?.terminate();
     worker = null;
     workerReady = null;
-    freeUrls();
     for (const id of [...waiting.keys()]) settle(id, null);
   }
-  function freeUrls() {
-    for (const u of urls) URL.revokeObjectURL(u);
-    urls = [];
-  }
-  async function startWorker() {
+  // Blob URLs handed to the worker are freed once it has loaded them or failed.
+  async function startWorker(run) {
     if (!ggs.extBase) throw new Error('extension base URL not known yet');
-    const files = await fetchFiles();
-    const src = URL.createObjectURL(new Blob([files.src], { type: 'text/javascript' }));
-    urls.push(src);
-    worker = new Worker(src);
-    worker.onmessage = onResult;
-    const backend = await initWorker(files);
-    // It's running now: a crash later gives up on the tiles it had and loads again on demand.
+    const urls = [];
+    try {
+      const files = await fetchFiles(urls);
+      if (run !== loadRun) throw new Error('text detector stopped');
+      const src = URL.createObjectURL(new Blob([files.src], { type: 'text/javascript' }));
+      urls.push(src);
+      worker = new Worker(src);
+      worker.onmessage = onResult;
+      const backend = await initWorker(files);
+      watchCrash();
+      stats.backend = backend;
+      ggs.debug(`lying-signs: text detector ready (${backend})`);
+    } finally {
+      for (const u of urls) URL.revokeObjectURL(u);
+    }
+  }
+  // It's running now: a crash later gives up on the tiles it had and loads again on demand.
+  function watchCrash() {
     worker.onerror = err => {
       ggs.log('lying-signs: text detector crashed', err.message);
       failedAt = performance.now();
       stopWorker();
     };
-    freeUrls();
-    stats.backend = backend;
-    ggs.debug(`lying-signs: text detector ready (${backend})`);
   }
   // The worker's source, and the runtime as blob URLs (a page can't hand a worker
   // chrome-extension:// URLs), and the model. A file that didn't come back fails the load.
-  async function fetchFiles() {
+  async function fetchFiles(urls) {
     const u = f => ggs.extBase + VENDOR + f;
     const get = async url => {
       const r = await fetch(url);
@@ -84,21 +103,27 @@
       urls.push(b);
       return b;
     };
-    const [src, ort, mjs, wasm, model] = await Promise.all([
+    // all settled before failing, so every blob URL made is in `urls` to be freed
+    const got = await Promise.allSettled([
       get(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
       blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
       blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
       blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
       get(u('ch_PP-OCRv4_det.onnx')).then(r => r.arrayBuffer()),
     ]);
+    const failed = got.find(r => r.status === 'rejected');
+    if (failed) throw failed.reason;
+    const [src, ort, mjs, wasm, model] = got.map(r => r.value);
     return { src, ort, mjs, wasm, model };
   }
   // Sends the files to the worker; resolves with the backend it got (webgpu or wasm), or fails
   // if the worker won't start or reports an error.
   function initWorker({ ort, mjs, wasm, model }) {
     return new Promise((res, rej) => {
+      abortInit = rej;
       const onmsg = e => {
         if (e.data.type === 'ready') {
+          abortInit = null;
           worker.removeEventListener('message', onmsg);
           worker.onerror = null;
           res(e.data.backend);
@@ -129,6 +154,11 @@
   }
   async function runDetector(img) {
     const bitmap = await createImageBitmap(img);
+    // unloaded while the picture was copied
+    if (!worker) {
+      bitmap.close();
+      return null;
+    }
     return new Promise(r => {
       const id = ++nextId;
       waiting.set(id, r);
@@ -257,5 +287,5 @@
   // queue sizes, for ggs.lyingSigns.debug()
   const queueState = () => ({ queue: queue.length, inflight, waiting: waiting.size });
 
-  Object.assign(ls, { loadDetector, detect, queueState });
+  Object.assign(ls, { loadDetector, unloadDetector, detect, queueState });
 })();

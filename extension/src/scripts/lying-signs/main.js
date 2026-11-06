@@ -294,15 +294,23 @@
     recent = [];
   }
 
+  // The detector (worker and model) goes a while after the script stops, so switching it
+  // straight back on (Chaos mode) doesn't load it again.
+  const UNLOAD_MS = 30000;
+  let unloadTimer = null;
+
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
+    clearTimeout(unloadTimer);
     loadDetector().catch(() => {}); // the detector says why itself
     ggs.tiles.replay();
     return {
       stop() {
         active = null;
         forgetAll();
+        clearTimeout(unloadTimer);
+        unloadTimer = setTimeout(ls.unloadDetector, UNLOAD_MS);
         ggs.tiles.replay();
       },
       update(next) {
