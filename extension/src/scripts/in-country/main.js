@@ -220,6 +220,9 @@
       clearTimeout(ctx.noteTimer);
       ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
     },
+    unpin(ctx) {
+      ctx.pin = null;
+    },
     beforeGuess(ctx) {
       if (!ctx.shape) return null;
       if (!ctx.pin) {

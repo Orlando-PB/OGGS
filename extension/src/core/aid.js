@@ -7,6 +7,7 @@
 //     attach(ctx) -> cleanup?: a guess map was found. GeoGuessr can make a new one mid-game.
 //     tick(ctx): every 300 ms while there's a guess map.
 //     click(latLng, ctx): the player clicked the guess map (not our own placeGuess).
+//     unpin(ctx): the player shift-clicked the guess map, which GeoGuessr takes as "remove the pin".
 //     beforeGuess(ctx) -> { lat, lng } | false | null: Guess was pressed. A point moves the guess
 //       there first, false stops it. ctx.loc may still be null.
 //     usesLocation: false when the script doesn't need the round's location, so it isn't fetched.
@@ -313,7 +314,9 @@
         listener?.remove();
         zoomListener?.remove();
         listener = gm().event.addListener(map, 'click', e => {
-          if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
+          if (ggs.maps.placing() || !e?.latLng) return;
+          if (e.domEvent?.shiftKey) hooks.unpin?.(ctx);
+          else hooks.click?.(e.latLng, ctx);
         });
         // At once, not on the next tick, so the swap doesn't trail the zoom.
         zoomListener = gm().event.addListener(map, 'zoom_changed', rings);

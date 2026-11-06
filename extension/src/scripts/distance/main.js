@@ -28,6 +28,10 @@
       ctx.at = { lat: latLng.lat(), lng: latLng.lng() };
       if (!ctx.loc) ctx.note('Distance not known yet');
     },
+    unpin(ctx) {
+      ctx.at = ctx.km = ctx.measured = ctx.shownKm = null;
+      ctx.note('');
+    },
     tick(ctx) {
       if (ctx.at && ctx.loc && (ctx.measured !== ctx.at || ctx.measuredFrom !== ctx.loc)) {
         ctx.measured = ctx.at;

@@ -31,6 +31,9 @@
         () => ctx.status("Couldn't load the country outlines"),
       );
     },
+    unpin(ctx) {
+      ctx.sea = false;
+    },
     beforeGuess(ctx) {
       if (ctx.sea) return null;
       ctx.note('Ocean only! Put a pin in the sea');
