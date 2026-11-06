@@ -6,8 +6,10 @@
   ggs.registry ??= [];
 
   // Puts our own markup into el as nodes, in place of innerHTML (the form, panels and boards
-  // build it from fixed strings, with outside text escaped by ggs.esc). DOMParser makes inert
-  // nodes; under an SVG element the markup is read as SVG.
+  // build it from fixed strings, with outside text escaped by ggs.esc). DOMParser's nodes are
+  // inert only until they're moved into el: <script>s stay dead, but on* attributes (an <img
+  // onerror>, say) then run. So the safety rests on every outside string going through ggs.esc.
+  // Under an SVG element the markup is read as SVG.
   ggs.html = (el, markup) => {
     const svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
     const body = new DOMParser().parseFromString(
