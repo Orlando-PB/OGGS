@@ -32,11 +32,13 @@ async function handle(m) {
     } else if (m.type === 'detect') {
       const t0 = performance.now();
       const boxes = await detect(m.bitmap, m.size, m.thresh, m.boxThresh);
-      m.bitmap.close();
       postMessage({ type: 'boxes', id: m.id, boxes, ms: performance.now() - t0 });
     }
   } catch (err) {
     postMessage({ type: 'error', id: m.id, message: String(err?.stack || err) });
+  } finally {
+    // a failed detection would otherwise keep the tile's pixels
+    m.bitmap?.close();
   }
 }
 
