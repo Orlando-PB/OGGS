@@ -103,8 +103,12 @@
     }, 150);
   }
   // The keyup after a swallowed Space press goes too (the player's, not our own pressSpace's).
+  // Leaving the window while it's held loses that keyup, so the wait is dropped then.
+  addEventListener('blur', () => {
+    swallowUp = false;
+  });
   function onKeyUp(e) {
-    if (!swallowUp || e.code !== 'Space' || !e.isTrusted) return;
+    if (!swallowUp || e.code !== 'Space' || !e.isTrusted || ggs.isTyping(e)) return;
     swallowUp = false;
     e.stopImmediatePropagation();
   }
