@@ -36,7 +36,8 @@
         ? err
         : Object.assign(new Error('Server not reachable'), { shown: true });
     });
-    const j = await r.json().catch(() => ({}));
+    // a page that isn't ours (a host error page, a PHP warning) counts as a server error
+    const j = await r.json().catch(() => ({ error: `Server error (HTTP ${r.status})` }));
     if (!r.ok || j.error) {
       const msg = j.error || `Server error (HTTP ${r.status})`;
       throw Object.assign(new Error(msg), { code: j.code, shown: true });
@@ -54,18 +55,18 @@
   // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
   const meta = new Map();
   const metaSync = new Map();
+  // A failed lookup isn't kept, so the next one tries again.
   function panoMeta(id) {
     if (!meta.has(id)) {
-      meta.set(
-        id,
-        new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
-          const worldWidth = data.tiles.worldSize.width;
-          const tileWidth = data.tiles.tileSize.width;
-          const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
-          metaSync.set(id, m);
-          return m;
-        }),
-      );
+      const p = new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
+        const worldWidth = data.tiles.worldSize.width;
+        const tileWidth = data.tiles.tileSize.width;
+        const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
+        metaSync.set(id, m);
+        return m;
+      });
+      p.catch(() => meta.delete(id));
+      meta.set(id, p);
     }
     return meta.get(id);
   }
