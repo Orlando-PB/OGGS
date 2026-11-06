@@ -58,26 +58,36 @@
 
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
-  const guessHooks = new Set();
+  // beforeGuess hook -> its script's id
+  const guessHooks = new Map();
   let passing = false;
   let swallowUp = false;
   function isGuessPress(e) {
     if (e.type === 'keydown') return e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement();
     return !!ggs.maps.guessButton()?.contains(e.target);
   }
-  // Any hook returning false blocks the guess. Otherwise the last point given wins.
+  // Any hook returning false blocks the guess. Otherwise the last point given wins, and `by`
+  // is the script that gave it.
   function askGuessHooks() {
     let point = null;
+    let by = null;
     let block = false;
-    for (const fn of guessHooks) {
+    for (const [fn, id] of guessHooks) {
       const r = fn();
       if (r === false) block = true;
-      else point = r ?? point;
+      else if (r) [point, by] = [r, id];
     }
-    return { point, block };
+    return { point, by, block };
   }
-  function guessAt(p) {
-    ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+  // The press was already held back, so a pin that can't be moved is said out loud.
+  function guessAt(p, by) {
+    try {
+      ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+    } catch (err) {
+      ggs.log('could not move the guess', err);
+      ggs.status(by, "Couldn't place the guess. GeoGuessr may have changed something, please tell Orlando");
+      return;
+    }
     passing = true;
     // Waits so GeoGuessr takes the new pin first.
     setTimeout(() => {
@@ -95,12 +105,12 @@
     if (passing || !guessHooks.size) return;
     if (e.type === 'keyup') return onKeyUp(e);
     if (!isGuessPress(e)) return;
-    const { point, block } = askGuessHooks();
+    const { point, by, block } = askGuessHooks();
     if (!point && !block) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.type === 'keydown') swallowUp = true;
-    if (!block) guessAt(point);
+    if (!block) guessAt(point, by);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -218,8 +228,25 @@
         },
         status: text => ggs.status(id, text),
       };
-      const guessHook = hooks.beforeGuess && (() => hooks.beforeGuess(ctx));
-      if (guessHook) guessHooks.add(guessHook);
+      // A hook that throws holds that press back and says so; on the next press of the round it
+      // stands aside, so the player is never stuck unable to guess.
+      let hookFailedIn = null;
+      const guessHook =
+        hooks.beforeGuess &&
+        (() => {
+          if (hookFailedIn === ggs.game.roundKey()) return null;
+          try {
+            return hooks.beforeGuess(ctx);
+          } catch (err) {
+            hookFailedIn = ggs.game.roundKey();
+            ggs.log(`${id} beforeGuess failed`, err);
+            const msg = `Something went wrong, press Guess again to guess without ${name()}`;
+            ctx.status(msg);
+            ctx.note(msg);
+            return false;
+          }
+        });
+      if (guessHook) guessHooks.set(guessHook, id);
       const css = hooks.css && Object.assign(document.createElement('style'), { textContent: hooks.css });
       if (css) document.head.append(css);
 
