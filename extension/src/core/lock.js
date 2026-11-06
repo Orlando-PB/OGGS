@@ -16,12 +16,19 @@
   };
   const owners = { zoom: new Set(), pan: new Set(), move: new Set() };
   const on = kind => owners[kind].size > 0;
-  // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo }, raw }
-  const panos = new Map();
+  // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo }, raw }.
+  // Weak, and walked through maps.js's list, which drops panoramas that left the page, so old
+  // ones aren't kept alive here.
+  const state = new WeakMap();
+  const panos = () =>
+    ggs.maps
+      .panoramas()
+      .filter(p => state.has(p))
+      .map(p => [p, state.get(p)]);
 
   ggs.maps.hook('StreetViewPanorama', (p, args) => {
     const st = { el: args[0], wanted: { ...(args[1] ?? {}) }, held: {}, raw: p.setOptions.bind(p) };
-    panos.set(p, st);
+    state.set(p, st);
     // Remembers what GeoGuessr wants so a lock can be undone, and keeps the locked values on top.
     const setOptions = st.raw;
     p.setOptions = o => {
@@ -90,6 +97,20 @@
       return () => restore(st, OPTS.move);
     },
   };
+  // For core/mirror.js: options a script sets, not taken for GeoGuessr's own wishes, and whether
+  // GeoGuessr itself allows an option (one it never set counts as allowed).
+  function setOwn(p, o) {
+    const st = state.get(p);
+    if (st) st.raw(o);
+    else p.setOptions(o);
+  }
+  const gameAllows = (p, key) => state.get(p)?.wanted[key] !== false;
+  // Puts clickToGo and the like back to what GeoGuessr asked for, unless a move lock holds them.
+  function giveBack(p, keys) {
+    const st = state.get(p);
+    if (st && !on('move')) restore(st, keys);
+  }
+
   function restore(st, keys) {
     const back = {};
     for (const k of Object.keys(keys)) {
@@ -111,7 +132,7 @@
     delete st.held[kind];
   }
   function apply(p) {
-    const st = panos.get(p);
+    const st = state.get(p);
     for (const kind of Object.keys(locks)) {
       if (on(kind) && !st.held[kind]) hold(p, st, kind);
       else if (!on(kind) && st.held[kind]) release(st, kind);
@@ -121,8 +142,7 @@
   // ---- input, swallowed at the window in the capture phase ----
   // Registered at document_start, so these run before GeoGuessr's and the Maps API's handlers.
   // Our own sheets over the panorama (core/view.js, scratch's foil) keep their input.
-  const inPano = t =>
-    !t?.closest?.('[data-ggs-view]') && [...panos.values()].some(st => st.el?.contains?.(t));
+  const inPano = t => !t?.closest?.('[data-ggs-view]') && panos().some(([, st]) => st.el?.contains?.(t));
   const stop = e => {
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -176,28 +196,28 @@
   const set = kind => (owner, want) => {
     if (want) owners[kind].add(owner);
     else owners[kind].delete(owner);
-    for (const p of panos.keys()) apply(p);
+    for (const [p] of panos()) apply(p);
   };
   // face(owner, heading | null): a pan lock that also turns every panorama to that heading.
   let facing = null;
   function face(owner, heading) {
     facing = heading;
     // Let go of each pan lock so it's held again below at the new heading.
-    for (const st of panos.values()) {
+    for (const [, st] of panos()) {
       if (st.held.pan) {
         st.held.pan();
         delete st.held.pan;
       }
     }
     set('pan')(owner, heading != null);
-    for (const p of panos.keys()) apply(p);
+    for (const [p] of panos()) apply(p);
   }
   // zoomTo(owner, level | null): a zoom lock that also sets every panorama to that zoom.
   // null puts each back to the zoom it had, so No zoom doesn't keep it there.
   let zoomAt = null;
   function zoomTo(owner, level) {
     zoomAt = level;
-    for (const [p, st] of panos) {
+    for (const [p, st] of panos()) {
       // Let go so it's held again below at the new level.
       if (st.held.zoom) {
         st.held.zoom();
@@ -212,5 +232,15 @@
     }
     set('zoom')(owner, level != null);
   }
-  ggs.lock = { zoom: set('zoom'), pan: set('pan'), move: set('move'), face, zoomTo, held: on };
+  ggs.lock = {
+    zoom: set('zoom'),
+    pan: set('pan'),
+    move: set('move'),
+    face,
+    zoomTo,
+    held: on,
+    setOwn,
+    gameAllows,
+    giveBack,
+  };
 })();

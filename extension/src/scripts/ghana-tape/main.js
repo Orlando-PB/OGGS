@@ -14,7 +14,8 @@
   const GEN4_WIDTH = 16384;
   const NEAR_DEG = 0.05; // ~5 km leeway at Ghana's coarse outline
 
-  const panos = new Map(); // pano -> container div (StreetViewPanorama has no getDiv())
+  // pano -> container div (StreetViewPanorama has no getDiv()); weak, so old ones can go
+  const panos = new WeakMap();
   let active = null;
   ggs.maps.hook('StreetViewPanorama', (p, args) => {
     if (!(args[0] instanceof HTMLElement)) return;
@@ -233,8 +234,17 @@
       draw(pano);
     }
 
+    // Panoramas that left the page let go of their canvas and listeners.
+    function detach(pano, st) {
+      for (const l of st.listeners) l.remove();
+      st.resize.disconnect();
+      st.canvas.remove();
+      attached.delete(pano);
+    }
+
     function attach(pano) {
       if (attached.has(pano)) return;
+      for (const [p, st] of attached) if (!panos.get(p)?.isConnected) detach(p, st);
       const div = panos.get(pano);
       const canvas = document.createElement('canvas');
       canvas.style.cssText =
@@ -264,7 +274,7 @@
     }
 
     active = { attach };
-    for (const p of panos.keys()) attach(p);
+    for (const [p, el] of ggs.maps.panoramaEls()) if (el instanceof HTMLElement) attach(p);
 
     return {
       update(next) {
@@ -274,12 +284,7 @@
       },
       stop() {
         active = null;
-        for (const st of attached.values()) {
-          for (const l of st.listeners) l.remove();
-          st.resize.disconnect();
-          st.canvas.remove();
-        }
-        attached.clear();
+        for (const [p, st] of attached) detach(p, st);
       },
     };
   }

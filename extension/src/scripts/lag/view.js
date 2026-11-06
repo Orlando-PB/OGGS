@@ -90,16 +90,15 @@
   };
 
   // ---- panoramas, for rubber-banding and stutter ----
-  const panos = new Map(); // StreetViewPanorama -> its element
   ggs.lag ??= {};
   ggs.lag.onMove = null; // the running script's pano_changed handler
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    panos.set(p, args[0]);
+  ggs.maps.hook('StreetViewPanorama', p => {
     window.google.maps.event.addListener(p, 'pano_changed', () => ggs.lag.onMove?.(p));
   });
   function pano() {
     const el = ggs.view.panoElement();
-    return el && [...panos].reverse().find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
+    const panos = ggs.maps.panoramaEls().reverse();
+    return el && panos.find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
   }
 
   Object.assign(ggs.lag, { inRound, panoRect, chunky, pano });

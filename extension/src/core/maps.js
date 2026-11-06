@@ -82,6 +82,8 @@
   // GeoGuessr's StreetViewPanoramas, oldest first. An old one can live on after a remount and
   // still answer, so the one on screen is the newest that has a panorama.
   const panoramas = () => made('StreetViewPanorama');
+  // [panorama, its container element] (StreetViewPanorama has no getDiv()).
+  const panoramaEls = () => (hooks.StreetViewPanorama?.made ?? []).map(([p, args]) => [p, args[0]]);
   function panorama() {
     for (const p of panoramas().reverse()) {
       try {
@@ -231,6 +233,7 @@
     pinRoot,
     panorama,
     panoramas,
+    panoramaEls,
     hook,
     debug,
   };
