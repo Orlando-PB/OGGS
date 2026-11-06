@@ -9,11 +9,7 @@
   // view.js's sheets over the panorama carry this.
   const HOST = 'data-ggs-view';
   const panoElement = () => ggs.view.panoElement();
-  // container element -> its StreetViewPanorama
-  const panoOf = new WeakMap();
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    if (args[0] instanceof Element) panoOf.set(args[0], p);
-  });
+  const panoAt = el => ggs.maps.panoramaAt(el);
 
   // ---- mirrored input ----
   // Street View input is caught at the window in the capture phase and swallowed. A changed copy
@@ -155,21 +151,13 @@
   }
   // Click-to-move with `move` flipped. Google's own is off (clickToGo), and a click that wasn't
   // a drag walks to the link pointing furthest from where you clicked.
-  // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
+  // pressAt is where the press was. Google's clickToGo is held off through ggs.lock, which keeps
+  // it off on new panoramas and puts GeoGuessr's own setting (off in No Move games) back after.
   let pressAt = null;
-  let noClickTo = null;
-  // Set through ggs.lock, so GeoGuessr's own setting (off in No Move games) comes back after.
-  function clickToGo() {
-    const p = panoOf.get(panoElement());
-    const off = want('move') ? p : null;
-    if (off === noClickTo) return;
-    if (noClickTo) ggs.lock.giveBack(noClickTo, { clickToGo: true });
-    if (off) ggs.lock.setOwn(off, { clickToGo: false });
-    noClickTo = off;
-  }
+  const clickToGo = () => ggs.lock.clickToGo('mirror', want('move'));
   function walkBack(x) {
     const el = panoElement();
-    const p = panoOf.get(el);
+    const p = panoAt(el);
     const links = p?.getLinks?.();
     // never in a game that doesn't let you move
     if (!links?.length || !ggs.lock.gameAllows(p, 'clickToGo')) return;
@@ -261,7 +249,6 @@
   // Added once, at document_start, so they run before GeoGuessr's and the Maps API's own
   // window listeners. They do nothing while no owner wants anything.
   for (const [t, fn] of LISTENERS) addEventListener(t, fn, { capture: true, passive: false });
-  let checking = null;
   function mirror(owner, m) {
     if (m) mirrors.set(owner, m);
     else mirrors.delete(owner);
@@ -270,9 +257,6 @@
       sent.clear();
     }
     clickToGo();
-    // GeoGuessr makes a new panorama now and then. Keep its clickToGo in step while any owner is on.
-    clearInterval(checking);
-    checking = mirrors.size ? setInterval(clickToGo, 500) : null;
   }
 
   ggs.viewMirror = { mirror, copyEvent };

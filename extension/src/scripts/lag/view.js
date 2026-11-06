@@ -95,11 +95,7 @@
   ggs.maps.hook('StreetViewPanorama', p => {
     window.google.maps.event.addListener(p, 'pano_changed', () => ggs.lag.onMove?.(p));
   });
-  function pano() {
-    const el = ggs.view.panoElement();
-    const panos = ggs.maps.panoramaEls().reverse();
-    return el && panos.find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
-  }
+  const pano = () => ggs.maps.panoramaAt(ggs.view.panoElement());
 
   Object.assign(ggs.lag, { inRound, panoRect, chunky, pano });
 })();

@@ -84,6 +84,27 @@
   const panoramas = () => made('StreetViewPanorama');
   // [panorama, its container element] (StreetViewPanorama has no getDiv()).
   const panoramaEls = () => (hooks.StreetViewPanorama?.made ?? []).map(([p, args]) => [p, args[0]]);
+  // The panorama shown in element el (its container, or inside or around it), newest first.
+  const panoramaAt = el =>
+    el
+      ? (panoramaEls()
+          .reverse()
+          .find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0] ?? null)
+      : null;
+
+  // StreetViewService data for a panorama id, shared by the scripts and kept for the last
+  // PANO_KEEP panoramas. A failed lookup isn't kept, so the next one tries again.
+  const PANO_KEEP = 100;
+  const panoCache = new Map();
+  function panoData(id) {
+    if (!panoCache.has(id)) {
+      const p = new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(r => r.data);
+      p.catch(() => panoCache.delete(id));
+      panoCache.set(id, p);
+      if (panoCache.size > PANO_KEEP) panoCache.delete(panoCache.keys().next().value);
+    }
+    return panoCache.get(id);
+  }
   function panorama() {
     for (const p of panoramas().reverse()) {
       try {
@@ -234,6 +255,8 @@
     panorama,
     panoramas,
     panoramaEls,
+    panoramaAt,
+    panoData,
     hook,
     debug,
   };

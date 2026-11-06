@@ -1,5 +1,6 @@
-// Locks on the Street View panorama, shared by the scripts: ggs.lock.zoom / pan / move
-// (owner, on). held(kind) says whether one holds. A lock holds while any owner asks for it,
+// Locks on the Street View panorama, shared by the scripts: ggs.lock.zoom / pan / move /
+// clickToGo (owner, on). clickToGo only turns Google's click-to-move off (mirror.js walks the
+// other way itself). held(kind) says whether one holds. A lock holds while any owner asks for it,
 // on every panorama, including ones made later. Each lock blocks the input (wheel, drag,
 // keys, arrows) before the Maps API or GeoGuessr see it, and puts the view back if a change
 // still gets through. setOptions is wrapped so GeoGuessr can't switch the controls back on.
@@ -13,8 +14,9 @@
   const OPTS = {
     zoom: { scrollwheel: false, zoomControl: false, disableDoubleClickZoom: true },
     move: { clickToGo: false, linksControl: false },
+    clickToGo: { clickToGo: false },
   };
-  const owners = { zoom: new Set(), pan: new Set(), move: new Set() };
+  const owners = { zoom: new Set(), pan: new Set(), move: new Set(), clickToGo: new Set() };
   const on = kind => owners[kind].size > 0;
   // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo }, raw }.
   // Weak, and walked through maps.js's list, which drops panoramas that left the page, so old
@@ -96,25 +98,23 @@
       st.raw(OPTS.move);
       return () => restore(st, OPTS.move);
     },
+    clickToGo(_p, st) {
+      st.raw(OPTS.clickToGo);
+      return () => restore(st, OPTS.clickToGo);
+    },
   };
-  // For core/mirror.js: options a script sets, not taken for GeoGuessr's own wishes, and whether
-  // GeoGuessr itself allows an option (one it never set counts as allowed).
-  function setOwn(p, o) {
-    const st = state.get(p);
-    if (st) st.raw(o);
-    else p.setOptions(o);
-  }
+  // Whether GeoGuessr itself allows an option on a panorama (one it never set counts as
+  // allowed), for core/mirror.js.
   const gameAllows = (p, key) => state.get(p)?.wanted[key] !== false;
-  // Puts clickToGo and the like back to what GeoGuessr asked for, unless a move lock holds them.
-  function giveBack(p, keys) {
-    const st = state.get(p);
-    if (st && !on('move')) restore(st, keys);
-  }
 
+  // A released lock puts its options back to what GeoGuessr asked for, except ones another
+  // lock still holds.
   function restore(st, keys) {
+    const held = {};
+    for (const kind of Object.keys(OPTS)) if (on(kind)) Object.assign(held, OPTS[kind]);
     const back = {};
     for (const k of Object.keys(keys)) {
-      back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
+      if (!(k in held)) back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
     }
     st.raw(back);
   }
@@ -236,11 +236,10 @@
     zoom: set('zoom'),
     pan: set('pan'),
     move: set('move'),
+    clickToGo: set('clickToGo'),
     face,
     zoomTo,
     held: on,
-    setOwn,
     gameAllows,
-    giveBack,
   };
 })();
