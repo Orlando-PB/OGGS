@@ -324,13 +324,14 @@
     };
   }
 
+  // Without game data nothing is confirmed, so it counts as competitive (and isn't kept, so
+  // the next check tries again).
   async function checkGame(ctx) {
     const lobby = readLobby();
     const j = await fetchGame(ctx).catch(() => null);
+    if (!j) return { competitive: true, why: `${ctx.mode}: no game data`, retry: true };
     const { rated, party } = gameSigns(j);
-    const why =
-      `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
-      (j ? '' : ' (no game data)');
+    const why = `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}`;
     if (rated) return { competitive: true, why };
     return { competitive: !(party || lobby === 'party'), why };
   }
@@ -346,7 +347,11 @@
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, checkGame(ctx));
+    if (!guardCache.has(ctx.token)) {
+      const check = checkGame(ctx);
+      guardCache.set(ctx.token, check);
+      check.then(c => c.retry && guardCache.delete(ctx.token));
+    }
     return guardCache.get(ctx.token);
   }
 
