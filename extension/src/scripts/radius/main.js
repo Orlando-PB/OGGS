@@ -32,10 +32,9 @@
       }
       const geo = await ggs.aid.loadGeo();
       const code = ggs.aid.countryAt(geo, loc);
-      if (!code) {
-        status('Not in any country this round');
-        return [];
-      }
+      // Far from any outline: the widest circle instead. Nothing drawn would give a lie away,
+      // since made-up spots are always on an outline.
+      if (!code) return hint.shapes({ loc, rand, cfg: { ...cfg, area: 6 }, status });
       const continent = Object.keys(geo).filter(c => ggs.CONTINENTS[c] === ggs.CONTINENTS[code]);
       const codes = continentOnly ? continent : [code, ...decoys(continent, code, 5 - area, rand())];
       // a continent is many countries: fill only, so its inner borders don't show
