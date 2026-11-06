@@ -283,6 +283,12 @@
       case 'answer':
         setAnswer(d);
         break;
+      case 'placed':
+        onPlaced(!!d.ok);
+        break;
+      case 'failed':
+        onFailed();
+        break;
     }
   });
 
@@ -298,8 +304,68 @@
 
   window.addEventListener('load', () => {
     oneStep();
+    matcher.catch(err => showError(err.message));
     toParent({ ggs: 'ready' });
   });
+
+  // Whether this reveal's pin went down on GeoGuessr's map. The answer waits for it, and if it
+  // didn't, the board goes back to drawing with the pin where it was.
+  let placedOk = false;
+  function onPlaced(ok) {
+    if (stage !== 'reveal') return;
+    placedOk = ok;
+    if (ok) return;
+    const pin = pinXY;
+    backToDraw(false);
+    pinXY = pin;
+    redraw();
+    showError("Couldn't place the guess. Try again");
+  }
+
+  // GeoGuessr's Guess couldn't be pressed. The board's Guess comes back to try again with the
+  // same pin: the answer is on screen by now, so the guess mustn't change.
+  function onFailed() {
+    if (stage !== 'reveal') return;
+    const btn = document.getElementById('guessBtn');
+    btn.hidden = false;
+    btn.disabled = false;
+    showError("Couldn't press GeoGuessr's Guess. Try again");
+  }
+
+  function retryGuess() {
+    document.getElementById('guessBtn').hidden = true;
+    toParent({ ggs: 'retry' });
+  }
+
+  // app.js puts errors in its side panel, which the board hides (embed.css), so they go on the
+  // tip until the next click.
+  let tipError = false;
+  function showError(text) {
+    const tip = document.getElementById('tip');
+    tip.textContent = text;
+    tip.hidden = false;
+    tipError = true;
+    nudgeTip();
+  }
+
+  function clearError() {
+    if (!tipError) return;
+    tipError = false;
+    pinTip();
+    document.getElementById('tip').hidden = true;
+    if (stage === 'draw') redraw();
+  }
+
+  // While drawing, the panel otherwise only gets its intro: a failed match or load is the rest.
+  function errorsToTip() {
+    const basePanel = sidePanel;
+    sidePanel = html => {
+      basePanel(html);
+      if (stage === 'draw' && html !== INTRO.draw)
+        showError(document.getElementById('results').textContent.trim());
+    };
+    window.addEventListener('pointerdown', clearError, true);
+  }
 
   // One step instead of the app's three (draw -> pin -> reveal): you draw, a click inside the
   // drawing drops the pin, and the only button is Guess. Runs on load, after app.js, and reuses
@@ -364,6 +430,9 @@
 
     keepPin(btn, tip);
     pointerTweaks();
+    errorsToTip();
+    // after 'failed' the same button presses GeoGuessr's Guess again
+    btn.onclick = () => (stage === 'reveal' ? retryGuess() : submitGuess());
     const layers = revealLayers();
     runnersCard(layers.real);
     revealExtras(layers);
@@ -419,7 +488,7 @@
         drawPin(pinXY);
       }
       btn.disabled = !pinXY;
-      tip.hidden = !!pinXY || !!current || !shapes().length;
+      tip.hidden = !tipError && (!!pinXY || !!current || !shapes().length);
     };
     // app.js registered the unwrapped redraw
     window.addEventListener('resize', () => redraw());
@@ -526,7 +595,7 @@
       baseShowCard(top, g);
       // Right or wrong, instead of "Your guess is in..." (the guess is locked in by now).
       const kicker = document.querySelector('#reveal .kicker');
-      const [cls, html] = verdict(matchData.target, top);
+      const [cls, html] = verdict(placedOk && matchData.target, top);
       kicker.className = `kicker${cls}`;
       setHtml(kicker, html);
       realLayer.querySelector('path')?.classList.add('pulse');
@@ -557,6 +626,7 @@
     const baseReveal = reveal;
     reveal = () => {
       layers.clear();
+      placedOk = false;
       const run = baseReveal();
       if (guess) toParent({ ggs: 'guess', guess });
       return run;
@@ -575,7 +645,7 @@
     // as the zoom starts.
     const baseFitBox = fitBox;
     fitBox = (box, screen, maxK) => {
-      if (stage === 'reveal' && answerLL && guess) {
+      if (stage === 'reveal' && placedOk && answerLL && guess) {
         box = widenForAnswer(box, layers.real);
         // keep everything above the result card, which covers roughly the bottom 36%
         if (screen) screen = [screen[0], screen[1], screen[2], Math.min(screen[3], W * 0.58)];
@@ -596,6 +666,7 @@
     const baseBackToDraw = backToDraw;
     backToDraw = (...args) => {
       layers.clear();
+      clearError();
       return baseBackToDraw(...args);
     };
   }
