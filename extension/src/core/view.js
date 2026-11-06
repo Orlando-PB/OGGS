@@ -218,28 +218,20 @@
               stroke-width="${look.width}" stroke-linejoin="round"/>
       </svg>`,
     );
-    const m = { last: null, pano: null, saved: null };
-
-    // Puts back the panorama's own isolation and position.
+    const m = { last: null, pano: null };
     function unpin() {
-      if (m.pano) Object.assign(m.pano.style, m.saved);
+      if (m.pano) unpinPano(m.pano);
       m.pano = null;
-    }
-
-    // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
-    // and GeoGuessr's HUD keeps drawing above it.
-    function pin(pano) {
-      m.pano = pano;
-      m.saved = { isolation: pano.style.isolation, position: pano.style.position };
-      pano.style.isolation = 'isolate';
-      if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
     }
 
     function moveInto(parent) {
       unpin();
       parent.append(host);
       m.last = null;
-      if (!screen) pin(parent);
+      if (!screen) {
+        m.pano = parent;
+        pinPano(parent);
+      }
     }
 
     function drawHoles() {
@@ -274,6 +266,25 @@
         unpin();
       },
     };
+  }
+
+  // A panorama with pano masks in it becomes its own stacking layer, so the sheets' z-index
+  // stays inside it and GeoGuessr's HUD keeps drawing above them. Masks share it: its own
+  // isolation and position come back when the last one leaves.
+  // panorama element -> { count, saved }
+  const pinned = new Map();
+  function pinPano(pano) {
+    const p = pinned.get(pano);
+    if (p) return p.count++;
+    pinned.set(pano, { count: 1, saved: { isolation: pano.style.isolation, position: pano.style.position } });
+    pano.style.isolation = 'isolate';
+    if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
+  }
+  function unpinPano(pano) {
+    const p = pinned.get(pano);
+    if (!p || --p.count > 0) return;
+    pinned.delete(pano);
+    Object.assign(pano.style, p.saved);
   }
 
   // ---- the loop ----
