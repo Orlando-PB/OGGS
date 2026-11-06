@@ -207,24 +207,26 @@
   }
 
   // The game data names the round, and its location must be where the Street View is. At a
-  // round's start the panorama can still be the last round's for a moment, so it's waited on.
+  // round's start either can still be on the last round for a moment, so both are read again
+  // until they agree.
   async function standardRound(ctx, key) {
-    const j = await fetchGame(ctx);
-    const n = j?.round;
-    const cur = j?.rounds?.[n - 1];
-    if (!(n > 0) || typeof cur?.lat !== 'number' || typeof cur?.lng !== 'number') {
-      return broken('standard game data has no current round');
-    }
+    let r = null;
     for (let tries = 0; tries < TRIES; tries++) {
+      if (tries) await new Promise(res => setTimeout(res, 1000));
       if (roundKey() !== key) return noRound('Moved on while waiting');
+      r = currentRound(await fetchGame(ctx));
+      if (!r) return broken('standard game data has no current round');
       const spot = streetViewSpot();
       // No Street View position to check against: the game data's own round number stands.
-      if (!spot || ggs.geo.distance(spot, cur) <= SAME_SPOT_KM) {
-        return { n, total: j.roundCount, lat: cur.lat, lng: cur.lng };
-      }
-      await new Promise(r => setTimeout(r, 1000));
+      if (!spot || ggs.geo.distance(spot, r) <= SAME_SPOT_KM) return r;
     }
-    return broken(`round ${n} is not where the Street View is`);
+    return broken(`round ${r.n} is not where the Street View is`);
+  }
+  function currentRound(j) {
+    const n = j?.round;
+    const cur = j?.rounds?.[n - 1];
+    if (!(n > 0) || typeof cur?.lat !== 'number' || typeof cur?.lng !== 'number') return null;
+    return { n, total: j.roundCount, lat: cur.lat, lng: cur.lng };
   }
 
   // Duel rounds are found by place, not by currentRoundNumber. In party duels the game data
