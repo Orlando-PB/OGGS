@@ -6,7 +6,8 @@
 // of Jack's nose is the north of its country.
 // Talks to the page only by postMessage. Up: 'ready', 'height', 'pick' { guess } on each click
 // (the page puts GeoGuessr's pin there) and 'go' on Guess. Down: 'reset' each round, 'placed'
-// { ok } after a pick, and 'pin' { src }, the picture in GeoGuessr's own pin.
+// { ok } after a pick, 'failed' when GeoGuessr's Guess couldn't be pressed, and 'pin' { src },
+// the picture in GeoGuessr's own pin.
 const { mercY, fromMercY, wrap, shapeOf, rowAt, alongRow } = countryRows;
 
 let geo = null;
@@ -101,6 +102,14 @@ function submit() {
   toParent({ ggs: 'go' });
 }
 $('guess').addEventListener('click', submit);
+
+// GeoGuessr's Guess couldn't be pressed: back to picking, so Guess can try again.
+function failed() {
+  if (stage !== 'done') return;
+  stage = 'pick';
+  $('guess').disabled = !pin;
+  $('tip').textContent = "Couldn't press GeoGuessr's Guess. Try again";
+}
 $('fit').addEventListener('click', fitView);
 
 window.addEventListener('keydown', e => {
@@ -115,6 +124,7 @@ window.addEventListener('message', e => {
   const d = e.data ?? {};
   if (d.ggs === 'reset') started.then(reset);
   if (d.ggs === 'placed') placed(!!d.ok);
+  if (d.ggs === 'failed') failed();
   if (d.ggs === 'pin') setPinPicture(d.src);
 });
 
