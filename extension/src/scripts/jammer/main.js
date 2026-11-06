@@ -128,6 +128,7 @@
         return;
       }
       audio = new AudioContext({ latencyHint: 'interactive' });
+      ggs.radio?.exempt?.(audio); // radio mode mustn't silence it
       graph(audio, stream);
       audio.addEventListener('statechange', onState);
       onState();

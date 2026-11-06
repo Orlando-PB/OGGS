@@ -7,10 +7,16 @@
   // ---- silence GeoGuessr's own music and sounds while radio mode is on ----
   // Wrapped at document_start so every AudioContext and media element the page makes is
   // seen. While `muting`, contexts are suspended and other <audio>/<video> elements muted.
+  // Only what radio itself suspended or muted is restored afterwards, and everything is held
+  // weakly so the page's contexts and elements can still be garbage collected.
   const RealAudioContext = window.AudioContext;
-  const contexts = new Set();
-  const ours = new WeakSet();
+  const contexts = weakList();
+  const ours = new WeakSet(); // radio's own, and other OGGS scripts' (see exempt)
+  const suspendedByUs = new WeakSet(); // contexts to resume when radio stops
+  let mutedByUs = weakList(); // media elements to unmute when radio stops
+  let howlerByUs = false;
   let muting = false;
+  const realSuspend = (RealAudioContext ?? window.webkitAudioContext)?.prototype.suspend;
   for (const name of ['AudioContext', 'webkitAudioContext']) {
     const Orig = window[name];
     if (!Orig) continue;
@@ -18,24 +24,79 @@
       constructor(...args) {
         super(...args);
         contexts.add(this);
-        if (muting) this.suspend().catch(() => {});
+        if (muting) hush(this);
       }
     };
-    const resume = Orig.prototype.resume;
+    const { resume, suspend } = Orig.prototype;
+    // While muting, the page's resume is held back and done when radio stops instead.
     Orig.prototype.resume = function (...args) {
-      return muting && !ours.has(this) ? Promise.resolve() : resume.apply(this, args);
+      if (!muting || ours.has(this)) return resume.apply(this, args);
+      suspendedByUs.add(this);
+      return Promise.resolve();
+    };
+    // A suspend the page asks for itself stays suspended after radio stops.
+    Orig.prototype.suspend = function (...args) {
+      suspendedByUs.delete(this);
+      return suspend.apply(this, args);
     };
   }
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function (...args) {
-    if (muting && !ours.has(this)) this.muted = true;
+    if (muting && !ours.has(this)) muteElement(this);
     return play.apply(this, args);
   };
+
+  function hush(ctx) {
+    if (ours.has(ctx) || ctx.state === 'closed') return;
+    suspendedByUs.add(ctx);
+    realSuspend.call(ctx).catch(() => {});
+  }
+  function muteElement(m) {
+    if (m.muted) return;
+    m.muted = true;
+    mutedByUs.add(m);
+  }
   function muteGame(on) {
     muting = on;
-    for (const c of contexts) (on ? c.suspend() : c.resume()).catch(() => {});
-    for (const m of document.querySelectorAll('audio, video')) if (!ours.has(m)) m.muted = on;
-    window.Howler?.mute?.(on);
+    if (on) muteAll();
+    else unmuteAll();
+  }
+  function muteAll() {
+    for (const c of contexts) if (c.state === 'running') hush(c);
+    for (const m of document.querySelectorAll('audio, video')) if (!ours.has(m)) muteElement(m);
+    howlerByUs = !!window.Howler && !window.Howler._muted;
+    if (howlerByUs) window.Howler.mute?.(true);
+  }
+  function unmuteAll() {
+    for (const c of contexts) if (suspendedByUs.has(c)) restore(c);
+    for (const m of mutedByUs) m.muted = false;
+    mutedByUs = weakList();
+    if (howlerByUs) window.Howler?.mute?.(false);
+    howlerByUs = false;
+  }
+  function restore(ctx) {
+    suspendedByUs.delete(ctx);
+    if (ctx.state !== 'closed') ctx.resume().catch(() => {});
+  }
+  // Another OGGS script's context (Speech jammer, Scream to look): never silenced by radio.
+  function exempt(ctx) {
+    ours.add(ctx);
+    if (suspendedByUs.has(ctx)) restore(ctx);
+  }
+
+  // A set that doesn't keep its members alive; iterating skips (and forgets) collected ones.
+  function weakList() {
+    const refs = new Set();
+    return {
+      add: o => refs.add(new WeakRef(o)),
+      *[Symbol.iterator]() {
+        for (const r of refs) {
+          const o = r.deref();
+          if (o) yield o;
+          else refs.delete(r);
+        }
+      },
+    };
   }
 
   // ---- our own output: the station's <audio>, through an analyser and a gain ----
@@ -168,5 +229,5 @@
   }
 
   ggs.radio ??= {};
-  Object.assign(ggs.radio, { muteGame, output, musicCheck });
+  Object.assign(ggs.radio, { muteGame, output, musicCheck, exempt });
 })();

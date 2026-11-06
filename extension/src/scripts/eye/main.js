@@ -85,6 +85,7 @@
 
     function listen() {
       audio = new AudioContext();
+      ggs.radio?.exempt?.(audio); // radio mode mustn't silence it
       const a = audio.createAnalyser();
       a.fftSize = buf.length;
       audio.createMediaStreamSource(stream).connect(a);
