@@ -350,21 +350,23 @@
         if (!l && tries < LOCATION_TRIES) setTimeout(() => findLocation(key, tries + 1), RETRY_MS);
       }
 
-      // Tosses this round's coin, the first time the real location is known.
+      // Tosses this round's coin, the first time the real location is known. With lies on, the
+      // made-up spots are waited for even when telling the truth, so a lie isn't drawn any later.
       function tossCoin(key) {
-        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
+        const canLie = !!(hooks.lies || cfg.lies);
+        const lie = canLie && seed('lie', real)() < 0.5;
         if (lie === lying) return;
         lying = lie;
         lies = null;
-        loc = lie ? null : real;
+        loc = canLie ? null : real;
         shapesKey = '';
-        if (!lie) return;
+        if (!canLie) return;
         const current = () => round === key && lying === lie;
         fakes(seed('fake', real)).then(
           list => {
             if (!current()) return;
-            lies = list;
-            loc = list[0];
+            lies = lie ? list : null;
+            loc = lie ? list[0] : real;
           },
           () => {
             // No outlines to lie with, so tell the truth.
