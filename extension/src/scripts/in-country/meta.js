@@ -67,7 +67,8 @@
     description: 'The whole world is squashed into one country. Guess inside it.',
     section: 'guessing',
     defaultEnabled: false,
-    // the boards hide the map; the others move, add or score pins on the real world map
+    // the boards hide the map; the others move, add or score pins on the real world map, and
+    // Blind map keeps snapping the view back to the whole world
     excludes: [
       'draw-guess',
       'flag-guess',
@@ -81,6 +82,7 @@
       'lng-band',
       'radius',
       'liar',
+      'blind',
     ],
     options: [
       {
