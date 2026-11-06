@@ -37,8 +37,14 @@
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists.
   // Callbacks also get the instances made before they registered.
-  // name -> { fns, made: [[instance, args]] }
+  // name -> { fns, made: [[instance, args]] }. An instance whose element has left the page is
+  // dropped from `made` when the next one is made, apart from the newest few (an element can
+  // be put on the page after its map is made).
   const hooks = {};
+  const KEEP = 5;
+  const onPage = ([, args]) => !(args[0] instanceof Element) || args[0].isConnected;
+  const tidy = made => made.filter((e, i) => i >= made.length - KEEP || onPage(e));
+  const made = name => (hooks[name]?.made ?? []).map(([inst]) => inst);
   function hook(name, fn) {
     hooks[name] ??= { fns: [], made: [] };
     const h = hooks[name];
@@ -57,6 +63,7 @@
         gm[name] = class extends Orig {
           constructor(...args) {
             super(...args);
+            h.made = tidy(h.made);
             h.made.push([this, args]);
             for (const fn of h.fns) {
               try {
@@ -72,24 +79,21 @@
       }
     }
   }, 10);
-  // Every StreetViewPanorama GeoGuessr made, oldest first. An old one can live on after a
-  // remount and still answer, so the one on screen is the newest that has a panorama.
-  const panoramas = [];
-  hook('StreetViewPanorama', p => panoramas.push(p));
+  // GeoGuessr's StreetViewPanoramas, oldest first. An old one can live on after a remount and
+  // still answer, so the one on screen is the newest that has a panorama.
+  const panoramas = () => made('StreetViewPanorama');
   function panorama() {
-    for (let i = panoramas.length - 1; i >= 0; i--) {
+    for (const p of panoramas().reverse()) {
       try {
-        if (panoramas[i].getPano()) return panoramas[i];
+        if (p.getPano()) return p;
       } catch {}
     }
     return null;
   }
-  const created = [];
   // The last spot clicked on any map this round, by the player or placeGuess, so a script
   // switched on mid-round knows where the pin already is. A shift-click takes it off.
   let last = null;
   hook('Map', m => {
-    created.push(m);
     window.google.maps.event.addListener(m, 'click', e => {
       if (!e?.latLng) return;
       last = e.domEvent?.shiftKey
@@ -132,7 +136,9 @@
   function findGuessMap() {
     const el = guessMapElement();
     if (!el) return null;
-    return mapFromFiber(el) ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null;
+    return (
+      mapFromFiber(el) ?? made('Map').find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null
+    );
   }
 
   // placing() is true during our own click, so map-click listeners (core/aid.js) can tell
@@ -193,7 +199,7 @@
       googleMapsLoaded: !!window.google?.maps?.Map,
       guessMapElement: el,
       mapViaFiber: el && mapFromFiber(el),
-      mapsSeenByHook: created.length,
+      mapsSeenByHook: made('Map').length,
       guessButton: guessButton(),
       guessPin: first(GUESS_PIN_SELECTORS),
       buttonsNearMap:
@@ -224,7 +230,7 @@
     GUESS_PIN_SELECTORS,
     pinRoot,
     panorama,
-    panoramas: () => panoramas,
+    panoramas,
     hook,
     debug,
   };
