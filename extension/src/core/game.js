@@ -100,10 +100,14 @@
 
   // The guess map coming back is a new round, except in a duel the player has already guessed
   // in. There it's back from spectating the other player, so the round only moves on once the
-  // Street View is at a different round of the game.
+  // Street View is at a different round of the game. While the Street View has no position
+  // (it's being remade) that can't be told, so it waits, up to UNSURE_MS.
+  const UNSURE_MS = 5000;
   let holding = false;
+  let backAt = 0;
   function onMap() {
     if (hadMap && !holding) return;
+    if (!hadMap) backAt = Date.now();
     const held = sameGuessedRound();
     if (!hadMap) holding = held;
     if (held) return;
@@ -115,7 +119,11 @@
   // The round the player guessed in: { key, n } (n is the duel round, when known).
   let guessedIn = null;
   const guessed = () => guessedIn?.key === roundKey();
-  const sameGuessedRound = () => guessed() && guessedIn.n != null && spotRound() === guessedIn.n;
+  function sameGuessedRound() {
+    if (!guessed() || guessedIn.n == null) return false;
+    if (!streetViewSpot()) return Date.now() - backAt < UNSURE_MS;
+    return spotRound() === guessedIn.n;
+  }
 
   // A guess: GeoGuessr's Guess button clicked (by the player or a board), or Space with a
   // pin down. Disabled buttons get no clicks. Heard as the event bubbles out, so a press that
@@ -189,8 +197,14 @@
 
   // Lookups that wait on the Street View try once a second this many times.
   const TRIES = 20;
-  // token -> Map(round number -> the roundKey it was handed out for).
-  const duelRounds = new Map();
+  // token -> Map(round number -> the roundKey it was handed out for), so a round already
+  // handed out to an earlier roundKey is never handed out again as a new one.
+  const handedOut = new Map();
+  const handedTo = (token, n) => handedOut.get(token)?.get(n);
+  function handOutTo(token, n, key) {
+    if (!handedOut.has(token)) handedOut.set(token, new Map());
+    handedOut.get(token).set(n, key);
+  }
   // How far the Street View can be from a round's location and still be that round
   // (the player may have moved a little before the lookup).
   const SAME_SPOT_KM = 50;
@@ -202,13 +216,15 @@
     if (!ctx) return noRound('Not in a game');
     if (ctx.mode === 'standard') return standardRound(ctx, key);
     if (ctx.mode !== 'duels') return noRound(`Not available in ${ctx.mode} games`);
-    if ((await competitive()).competitive) return noRound('Off in competitive games');
+    const c = await competitive();
+    if (c.competitive)
+      return noRound(c.retry ? "Couldn't check this game yet, trying again" : 'Off in competitive games');
     return duelRound(ctx, key);
   }
 
   // The game data names the round, and its location must be where the Street View is. At a
-  // round's start either can still be on the last round for a moment, so both are read again
-  // until they agree.
+  // round's start either can still be on the last round for a moment (and agree on it), so
+  // both are read again until they agree on a round not handed out before.
   async function standardRound(ctx, key) {
     let r = null;
     for (let tries = 0; tries < TRIES; tries++) {
@@ -216,11 +232,17 @@
       if (roundKey() !== key) return noRound('Moved on while waiting');
       r = currentRound(await fetchGame(ctx));
       if (!r) return broken('standard game data has no current round');
-      const spot = streetViewSpot();
-      // No Street View position to check against: the game data's own round number stands.
-      if (!spot || ggs.geo.distance(spot, r) <= SAME_SPOT_KM) return r;
+      if (agrees(r) && [undefined, key].includes(handedTo(ctx.token, r.n))) {
+        handOutTo(ctx.token, r.n, key);
+        return r;
+      }
     }
     return broken(`round ${r.n} is not where the Street View is`);
+  }
+  // No Street View position to check against: the game data's own round number stands.
+  function agrees(r) {
+    const spot = streetViewSpot();
+    return !spot || ggs.geo.distance(spot, r) <= SAME_SPOT_KM;
   }
   function currentRound(j) {
     const n = j?.round;
@@ -257,8 +279,7 @@
   function handOut({ round, why, stale }, token, key) {
     if (!round) return broken(why);
     if (stale) return broken(`duel round ${round.n} was already played`);
-    if (!duelRounds.has(token)) duelRounds.set(token, new Map());
-    duelRounds.get(token).set(round.n, key);
+    handOutTo(token, round.n, key);
     return round;
   }
 
@@ -282,7 +303,7 @@
     if (!spot) return { why: 'no Street View position yet' };
     const best = nearestRound(spot, j?.rounds ?? []);
     if (!best || best.km > SAME_SPOT_KM) return { why: 'no duel round near the Street View' };
-    const was = duelRounds.get(token)?.get(best.n);
+    const was = handedTo(token, best.n);
     const stale = was !== undefined && was !== key;
     return { round: { n: best.n, total: null, lat: best.lat, lng: best.lng }, stale };
   }
