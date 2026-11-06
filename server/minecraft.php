@@ -8,7 +8,9 @@
 //        -> { normal, hq, codeOk, log: { normal: [ms timestamps], hq: [...] } }
 //   POST pano=<panorama id> worldWidth=<px> tileWidth=<px> mode=normal|hq
 //        style=minecraft client=<id> code=<code>
-//        -> { image: "data:image/jpeg;base64,...", usage, ms, log } or { error }
+//        -> { image: "data:image/jpeg;base64,...", usage, ms, log } or { error, code? }
+//        code 'credit': the API account for that mode is out of credit (or rate limited), so it
+//        is paused for PAUSE seconds and the page stops asking until then.
 //
 // What comes in: a panorama id (public, the same string Google's own tile URLs carry), the
 // panorama's size, the mode, a random per-install client id and an optional code. No account
@@ -29,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
 $private = dirname(__DIR__) . '/oggs_private';
 $config = @include "$private/config.php";
 if (!is_array($config) || empty($config['OPENAI_API_KEY']) || empty($config['GEMINI_API_KEY'])) {
-  fail(500, 'server not configured');
+  fail(500, 'Server not set up');
 }
 
 // Normal: OpenAI flare at low with a 1024 px input (the fewest input tokens it charges), about
@@ -58,6 +60,9 @@ const IP_CAPS = ['normal' => 900, 'hq' => 100];
 // everyone together
 const GLOBAL_CAPS = ['normal' => 1500, 'hq' => 200];
 const DAY = 86400;
+// after the API says the account is out of credit or over its rate limit
+const PAUSE = 900;
+const NO_CREDIT = 'Out of AI credit for now, try again later';
 // tile zoom to stitch: 2048x1024 on Gen 4, a bit less on older coverage
 const ZOOM = 2;
 const MAX_TILES = 64;
@@ -82,14 +87,14 @@ function promptFor(): string {
   return PROMPTS['minecraft'];
 }
 
-function fail(int $status, string $msg): never {
+function fail(int $status, string $msg, ?string $code = null): never {
   http_response_code($status);
-  echo json_encode(['error' => $msg]);
+  echo json_encode(['error' => $msg] + ($code ? ['code' => $code] : []));
   exit;
 }
 
 $client = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($_REQUEST['client'] ?? ''));
-if (strlen($client) < 8 || strlen($client) > 64) fail(400, 'bad client id');
+if (strlen($client) < 8 || strlen($client) > 64) fail(400, 'Bad client id');
 $code = trim((string)($_REQUEST['code'] ?? ''));
 $codeOk = $code !== '' && !empty($config['HQ_CODE']) && hash_equals((string)$config['HQ_CODE'], $code);
 $ip = $_SERVER['REMOTE_ADDR'] ?? '?';
@@ -139,24 +144,28 @@ if (isset($_GET['caps']) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 // ---- generate ----
 $mode = (string)($_POST['mode'] ?? 'normal');
-if (!isset(MODES[$mode])) fail(400, 'unknown mode');
+if (!isset(MODES[$mode])) fail(400, 'Unknown mode');
 $style = (string)($_POST['style'] ?? 'minecraft');
-if ($style !== 'minecraft') fail(400, 'unknown style');
+if ($style !== 'minecraft') fail(400, 'Unknown style');
 $pano = (string)($_POST['pano'] ?? '');
-if (!preg_match('/^[A-Za-z0-9_=-]{8,128}$/', $pano)) fail(400, 'bad panorama id');
+if (!preg_match('/^[A-Za-z0-9_=-]{8,128}$/', $pano)) fail(400, 'Bad panorama id');
 $worldWidth = (int)($_POST['worldWidth'] ?? 0);
 $tileWidth = (int)($_POST['tileWidth'] ?? 0);
 if ($tileWidth < 128 || $tileWidth > 2048 || $worldWidth < $tileWidth || $worldWidth > 65536) {
-  fail(400, 'bad panorama size');
+  fail(400, 'Bad panorama size');
 }
 
-if ($used[$mode] >= $caps[$mode]) fail(429, 'limit reached for today');
+if ($used[$mode] >= $caps[$mode]) fail(429, 'Limit reached for today');
 if (countWhere($db, 'ip = ? AND mode = ?', [$ip, $mode]) >= IP_CAPS[$mode]) {
-  fail(429, 'limit reached for today');
+  fail(429, 'Limit reached for today');
 }
 if (countWhere($db, 'mode = ?', [$mode]) >= GLOBAL_CAPS[$mode]) {
   fail(503, 'Fully booked today, try again tomorrow');
 }
+
+// A mode whose API account ran dry stays off for a while, without stitching or calling it.
+$pauseFile = "$private/paused-$mode";
+if ((int)@file_get_contents($pauseFile) > time()) fail(503, NO_CREDIT, 'credit');
 
 set_time_limit(300);
 $t0 = microtime(true);
@@ -168,7 +177,7 @@ $ins = $db->prepare('INSERT INTO usage_log (t, client, ip, mode) VALUES (?, ?, ?
 $ins->execute([time(), $client, $ip, $mode]);
 $rowId = (int)$db->lastInsertId();
 
-[$b64, $usage, $err] = $m['api'] === 'gemini'
+[$b64, $usage, $err, $noCredit] = $m['api'] === 'gemini'
   ? viaGemini($m, $jpeg, $config['GEMINI_API_KEY'])
   : viaOpenAI($m, $jpeg, $config['OPENAI_API_KEY']);
 @unlink($jpeg);
@@ -177,6 +186,10 @@ if (!$b64) {
   $db->prepare('UPDATE usage_log SET ok = 0, err = ? WHERE rowid = ?')
     ->execute([substr($err, 0, 300), $rowId]);
   error_log("oggs $style: $err");
+  if ($noCredit) {
+    file_put_contents($pauseFile, (string)(time() + PAUSE));
+    fail(503, NO_CREDIT, 'credit');
+  }
   fail(502, 'Not available right now, try again later');
 }
 echo json_encode([
@@ -187,7 +200,13 @@ echo json_encode([
 ]);
 
 // ---- image APIs ----
-// Each returns [base64 JPEG or null, the API's usage report, error text].
+// Each returns [base64 JPEG or null, the API's usage report, error text, out of credit?].
+// Out of credit is HTTP 402/429 or OpenAI's quota codes: billing, not a bad picture.
+function noCredit(int $status, ?array $j): bool {
+  $code = $j['error']['code'] ?? $j['error']['type'] ?? '';
+  return $status === 402 || $status === 429
+    || in_array($code, ['insufficient_quota', 'billing_hard_limit_reached', 'RESOURCE_EXHAUSTED'], true);
+}
 function viaOpenAI(array $m, string $jpeg, string $key): array {
   $ch = curl_init('https://api.openai.com/v1/images/edits');
   curl_setopt_array($ch, [
@@ -210,7 +229,7 @@ function viaOpenAI(array $m, string $jpeg, string $key): array {
   $j = is_string($body) ? json_decode($body, true) : null;
   $b64 = $status === 200 ? ($j['data'][0]['b64_json'] ?? null) : null;
   $err = $j['error']['message'] ?? (curl_error($ch) ?: "OpenAI HTTP $status");
-  return [$b64, $j['usage'] ?? null, $err];
+  return [$b64, $j['usage'] ?? null, $err, !$b64 && noCredit($status, $j)];
 }
 
 // Gemini answers at 16:9. The picture is stretched back to 2:1 here, so the page gets the same
@@ -243,15 +262,15 @@ function viaGemini(array $m, string $jpeg, string $key): array {
   }
   $noImage = 'Gemini gave no image (' . ($j['candidates'][0]['finishReason'] ?? "HTTP $status") . ')';
   $err = $j['error']['message'] ?? (curl_error($ch) ?: ($data ? '' : $noImage));
-  if ($status !== 200 || !$data) return [null, null, $err];
+  if ($status !== 200 || !$data) return [null, null, $err, noCredit($status, $j)];
   $img = @imagecreatefromstring(base64_decode($data));
-  if (!$img) return [null, null, 'Gemini image would not decode'];
+  if (!$img) return [null, null, 'Gemini image would not decode', false];
   $h = imagesy($img);
   $out = imagecreatetruecolor(2 * $h, $h);
   imagecopyresampled($out, $img, 0, 0, 0, 0, 2 * $h, $h, imagesx($img), $h);
   ob_start();
   imagejpeg($out, null, 90);
-  return [base64_encode(ob_get_clean()), $j['usageMetadata'] ?? null, ''];
+  return [base64_encode(ob_get_clean()), $j['usageMetadata'] ?? null, '', false];
 }
 
 // ---- stitching ----
@@ -265,13 +284,13 @@ function stitch(string $pano, int $worldWidth, int $tileWidth, int $inputWidth, 
   $H = (int)ceil($W / 2);
   $cols = (int)ceil($W / $tileWidth);
   $rows = (int)ceil($H / $tileWidth);
-  if ($cols * $rows > MAX_TILES) fail(400, 'panorama too large');
+  if ($cols * $rows > MAX_TILES) fail(400, 'Panorama too large');
 
   $tiles = fetchTiles($pano, $zoom, $cols, $rows);
   $canvas = imagecreatetruecolor($W, $H);
   foreach ($tiles as [$x, $y, $data]) {
     $img = @imagecreatefromstring($data);
-    if (!$img) fail(502, 'bad tile from Street View');
+    if (!$img) fail(502, 'Bad tile from Street View');
     imagecopy($canvas, $img, $x * $tileWidth, $y * $tileWidth, 0, 0, imagesx($img), imagesy($img));
   }
   $inputHeight = $inputHeight ?: intdiv($inputWidth, 2);
@@ -321,6 +340,6 @@ function fetchTiles(string $pano, int $zoom, int $cols, int $rows): array {
     curl_multi_close($multi);
     $want = $left;
   }
-  if ($want) fail(502, 'could not fetch the panorama');
+  if ($want) fail(502, "Couldn't fetch this panorama");
   return $got;
 }

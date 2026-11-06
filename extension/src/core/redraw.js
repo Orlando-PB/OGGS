@@ -27,13 +27,20 @@
     return id;
   }
   const code = () => active?.cfg.code || ggs.settings?.minecraft?.code || '';
+  // Its errors have `shown` (a message fit for the player) and the server's code ('credit').
   async function server(fields, post = false, signal) {
     const body = new URLSearchParams({ ...fields, client: clientId(), code: code() });
-    const r = post
-      ? await fetch(SERVER, { method: 'POST', body, signal })
-      : await fetch(`${SERVER}?caps=1&${body}`);
+    const req = post ? fetch(SERVER, { method: 'POST', body, signal }) : fetch(`${SERVER}?caps=1&${body}`);
+    const r = await req.catch(err => {
+      throw err.name === 'AbortError'
+        ? err
+        : Object.assign(new Error('Server not reachable'), { shown: true });
+    });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.error) throw new Error(j.error || `server HTTP ${r.status}`);
+    if (!r.ok || j.error) {
+      const msg = j.error || `Server error (HTTP ${r.status})`;
+      throw Object.assign(new Error(msg), { code: j.code, shown: true });
+    }
     return j;
   }
 
@@ -181,12 +188,17 @@
       caps = await server({});
       saveLog(caps.log);
     } catch (err) {
-      if (active) ggs.status(active.id, 'Server not reachable');
+      if (active) ggs.status(active.id, err.shown ? err.message : 'Server not reachable');
       ggs.debug('redraw: caps', err);
     }
   }
   const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
-  const allowed = mode => Q.left(log, mode, caps[mode]).left > 0;
+  // A mode whose AI account is out of credit is left alone until the server's pause is over,
+  // so the player gets the real Street View instead of a blue wait and an error each round.
+  const PAUSE_MS = 15 * 60 * 1000;
+  const pausedUntil = { normal: 0, hq: 0 };
+  const paused = mode => pausedUntil[mode] > Date.now();
+  const allowed = mode => !paused(mode) && Q.left(log, mode, caps[mode]).left > 0;
   const stats = { uploads: 0, tiles: 0, swapped: 0 };
   ggs.redraw = {
     debug: () => ({
@@ -258,7 +270,8 @@
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog();
       ggs.log(`${style}: generation failed`, err);
-      bar.done(true, key);
+      if (err.code === 'credit') pausedUntil[mode] = Date.now() + PAUSE_MS;
+      bar.done(true, key, err.shown ? err.message : 'Could not redraw this round');
       // Puts the real tiles back.
       flush(g).then(() => ggs.tiles.repaint(id));
     });
@@ -307,12 +320,15 @@
     return tileFrom(g, entry);
   }, 0);
 
-  // Today's limit is used up: says so once per panorama, and the real tiles go up.
+  // Today's limit is used up, or the AI account is out of credit: says so once per panorama,
+  // and the real tiles go up.
   function showLimit(id, mode) {
     if (limitShownFor === id) return;
     limitShownFor = id;
-    const { resetAt } = Q.left(log, mode, caps[mode]);
     const what = active.cfg.hq ? 'High quality' : active.label;
+    if (paused(mode))
+      return bar.notice(`${what} is out of AI credit for now · back in ${Q.until(pausedUntil[mode])}`);
+    const { resetAt } = Q.left(log, mode, caps[mode]);
     bar.notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
   }
 

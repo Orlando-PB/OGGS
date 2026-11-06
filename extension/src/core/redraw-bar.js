@@ -2,7 +2,8 @@
 // towards 90% over the last rounds' time and fills when the tiles are swapped.
 //   ggs.redrawBar.show() puts it on the page (hidden until a start or notice), remove() takes it off.
 //   start(seconds, key, t0): a generation started. Already showing this key does nothing.
-//   done(failed, key): that generation finished. Another key's bar is left alone.
+//   done(failed, key, message): that generation finished (message: why it failed). Another
+//     key's bar is left alone.
 //   hide(), notice(message) (a message with no bar for a few seconds), owner() -> key | null.
 (() => {
   const ggs = globalThis.__ggs;
@@ -68,14 +69,14 @@
       fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
     }, 100);
   }
-  function done(failed, key) {
+  function done(failed, key, message = 'Could not redraw this round') {
     if (!overlay || (key && key !== owner)) return;
     owner = null;
     clearInterval(progressTimer);
     overlay.fill.style.width = '100%';
     if (failed) {
       overlay.fill.style.background = '#e03131';
-      overlay.text.textContent = 'Could not redraw this round';
+      overlay.text.textContent = message;
     }
     clearTimeout(hideTimer);
     hideTimer = setTimeout(
