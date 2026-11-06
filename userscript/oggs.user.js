@@ -242,8 +242,10 @@ section.flat .status:empty { display: none; }
   ggs.registry ??= [];
 
   // Puts our own markup into el as nodes, in place of innerHTML (the form, panels and boards
-  // build it from fixed strings, with outside text escaped by ggs.esc). DOMParser makes inert
-  // nodes; under an SVG element the markup is read as SVG.
+  // build it from fixed strings, with outside text escaped by ggs.esc). DOMParser's nodes are
+  // inert only until they're moved into el: <script>s stay dead, but on* attributes (an <img
+  // onerror>, say) then run. So the safety rests on every outside string going through ggs.esc.
+  // Under an SVG element the markup is read as SVG.
   ggs.html = (el, markup) => {
     const svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
     const body = new DOMParser().parseFromString(
@@ -454,8 +456,14 @@ section.flat .status:empty { display: none; }
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists.
   // Callbacks also get the instances made before they registered.
-  // name -> { fns, made: [[instance, args]] }
+  // name -> { fns, made: [[instance, args]] }. An instance whose element has left the page is
+  // dropped from `made` when the next one is made, apart from the newest few (an element can
+  // be put on the page after its map is made).
   const hooks = {};
+  const KEEP = 5;
+  const onPage = ([, args]) => !(args[0] instanceof Element) || args[0].isConnected;
+  const tidy = made => made.filter((e, i) => i >= made.length - KEEP || onPage(e));
+  const made = name => (hooks[name]?.made ?? []).map(([inst]) => inst);
   function hook(name, fn) {
     hooks[name] ??= { fns: [], made: [] };
     const h = hooks[name];
@@ -474,6 +482,7 @@ section.flat .status:empty { display: none; }
         gm[name] = class extends Orig {
           constructor(...args) {
             super(...args);
+            h.made = tidy(h.made);
             h.made.push([this, args]);
             for (const fn of h.fns) {
               try {
@@ -489,12 +498,44 @@ section.flat .status:empty { display: none; }
       }
     }
   }, 10);
-  const created = [];
+  // GeoGuessr's StreetViewPanoramas, oldest first. An old one can live on after a remount and
+  // still answer, so the one on screen is the newest that has a panorama.
+  const panoramas = () => made('StreetViewPanorama');
+  // [panorama, its container element] (StreetViewPanorama has no getDiv()).
+  const panoramaEls = () => (hooks.StreetViewPanorama?.made ?? []).map(([p, args]) => [p, args[0]]);
+  // The panorama shown in element el (its container, or inside or around it), newest first.
+  const panoramaAt = el =>
+    el
+      ? (panoramaEls()
+          .reverse()
+          .find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0] ?? null)
+      : null;
+
+  // StreetViewService data for a panorama id, shared by the scripts and kept for the last
+  // PANO_KEEP panoramas. A failed lookup isn't kept, so the next one tries again.
+  const PANO_KEEP = 100;
+  const panoCache = new Map();
+  function panoData(id) {
+    if (!panoCache.has(id)) {
+      const p = new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(r => r.data);
+      p.catch(() => panoCache.delete(id));
+      panoCache.set(id, p);
+      if (panoCache.size > PANO_KEEP) panoCache.delete(panoCache.keys().next().value);
+    }
+    return panoCache.get(id);
+  }
+  function panorama() {
+    for (const p of panoramas().reverse()) {
+      try {
+        if (p.getPano()) return p;
+      } catch {}
+    }
+    return null;
+  }
   // The last spot clicked on any map this round, by the player or placeGuess, so a script
   // switched on mid-round knows where the pin already is. A shift-click takes it off.
   let last = null;
   hook('Map', m => {
-    created.push(m);
     window.google.maps.event.addListener(m, 'click', e => {
       if (!e?.latLng) return;
       last = e.domEvent?.shiftKey
@@ -537,7 +578,9 @@ section.flat .status:empty { display: none; }
   function findGuessMap() {
     const el = guessMapElement();
     if (!el) return null;
-    return mapFromFiber(el) ?? created.find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null;
+    return (
+      mapFromFiber(el) ?? made('Map').find(m => el.contains(m.getDiv()) || m.getDiv().contains(el)) ?? null
+    );
   }
 
   // placing() is true during our own click, so map-click listeners (core/aid.js) can tell
@@ -598,7 +641,7 @@ section.flat .status:empty { display: none; }
       googleMapsLoaded: !!window.google?.maps?.Map,
       guessMapElement: el,
       mapViaFiber: el && mapFromFiber(el),
-      mapsSeenByHook: created.length,
+      mapsSeenByHook: made('Map').length,
       guessButton: guessButton(),
       guessPin: first(GUESS_PIN_SELECTORS),
       buttonsNearMap:
@@ -628,14 +671,20 @@ section.flat .status:empty { display: none; }
     GUESS_AREA,
     GUESS_PIN_SELECTORS,
     pinRoot,
+    panorama,
+    panoramas,
+    panoramaEls,
+    panoramaAt,
+    panoData,
     hook,
     debug,
   };
 })();
 
 // ==================== src/core/lock.js ============================================
-// Locks on the Street View panorama, shared by the scripts: ggs.lock.zoom / pan / move
-// (owner, on). held(kind) says whether one holds. A lock holds while any owner asks for it,
+// Locks on the Street View panorama, shared by the scripts: ggs.lock.zoom / pan / move /
+// clickToGo (owner, on). clickToGo only turns Google's click-to-move off (mirror.js walks the
+// other way itself). held(kind) says whether one holds. A lock holds while any owner asks for it,
 // on every panorama, including ones made later. Each lock blocks the input (wheel, drag,
 // keys, arrows) before the Maps API or GeoGuessr see it, and puts the view back if a change
 // still gets through. setOptions is wrapped so GeoGuessr can't switch the controls back on.
@@ -649,15 +698,23 @@ section.flat .status:empty { display: none; }
   const OPTS = {
     zoom: { scrollwheel: false, zoomControl: false, disableDoubleClickZoom: true },
     move: { clickToGo: false, linksControl: false },
+    clickToGo: { clickToGo: false },
   };
-  const owners = { zoom: new Set(), pan: new Set(), move: new Set() };
+  const owners = { zoom: new Set(), pan: new Set(), move: new Set(), clickToGo: new Set() };
   const on = kind => owners[kind].size > 0;
-  // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo }, raw }
-  const panos = new Map();
+  // panorama -> { el, wanted: options GeoGuessr last asked for, held: { kind: undo }, raw }.
+  // Weak, and walked through maps.js's list, which drops panoramas that left the page, so old
+  // ones aren't kept alive here.
+  const state = new WeakMap();
+  const panos = () =>
+    ggs.maps
+      .panoramas()
+      .filter(p => state.has(p))
+      .map(p => [p, state.get(p)]);
 
   ggs.maps.hook('StreetViewPanorama', (p, args) => {
     const st = { el: args[0], wanted: { ...(args[1] ?? {}) }, held: {}, raw: p.setOptions.bind(p) };
-    panos.set(p, st);
+    state.set(p, st);
     // Remembers what GeoGuessr wants so a lock can be undone, and keeps the locked values on top.
     const setOptions = st.raw;
     p.setOptions = o => {
@@ -725,11 +782,23 @@ section.flat .status:empty { display: none; }
       st.raw(OPTS.move);
       return () => restore(st, OPTS.move);
     },
+    clickToGo(_p, st) {
+      st.raw(OPTS.clickToGo);
+      return () => restore(st, OPTS.clickToGo);
+    },
   };
+  // Whether GeoGuessr itself allows an option on a panorama (one it never set counts as
+  // allowed), for core/mirror.js.
+  const gameAllows = (p, key) => state.get(p)?.wanted[key] !== false;
+
+  // A released lock puts its options back to what GeoGuessr asked for, except ones another
+  // lock still holds.
   function restore(st, keys) {
+    const held = {};
+    for (const kind of Object.keys(OPTS)) if (on(kind)) Object.assign(held, OPTS[kind]);
     const back = {};
     for (const k of Object.keys(keys)) {
-      back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
+      if (!(k in held)) back[k] = st.wanted[k] ?? k !== 'disableDoubleClickZoom';
     }
     st.raw(back);
   }
@@ -747,7 +816,7 @@ section.flat .status:empty { display: none; }
     delete st.held[kind];
   }
   function apply(p) {
-    const st = panos.get(p);
+    const st = state.get(p);
     for (const kind of Object.keys(locks)) {
       if (on(kind) && !st.held[kind]) hold(p, st, kind);
       else if (!on(kind) && st.held[kind]) release(st, kind);
@@ -757,8 +826,7 @@ section.flat .status:empty { display: none; }
   // ---- input, swallowed at the window in the capture phase ----
   // Registered at document_start, so these run before GeoGuessr's and the Maps API's handlers.
   // Our own sheets over the panorama (core/view.js, scratch's foil) keep their input.
-  const inPano = t =>
-    !t?.closest?.('[data-ggs-view]') && [...panos.values()].some(st => st.el?.contains?.(t));
+  const inPano = t => !t?.closest?.('[data-ggs-view]') && panos().some(([, st]) => st.el?.contains?.(t));
   const stop = e => {
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -812,28 +880,28 @@ section.flat .status:empty { display: none; }
   const set = kind => (owner, want) => {
     if (want) owners[kind].add(owner);
     else owners[kind].delete(owner);
-    for (const p of panos.keys()) apply(p);
+    for (const [p] of panos()) apply(p);
   };
   // face(owner, heading | null): a pan lock that also turns every panorama to that heading.
   let facing = null;
   function face(owner, heading) {
     facing = heading;
     // Let go of each pan lock so it's held again below at the new heading.
-    for (const st of panos.values()) {
+    for (const [, st] of panos()) {
       if (st.held.pan) {
         st.held.pan();
         delete st.held.pan;
       }
     }
     set('pan')(owner, heading != null);
-    for (const p of panos.keys()) apply(p);
+    for (const [p] of panos()) apply(p);
   }
   // zoomTo(owner, level | null): a zoom lock that also sets every panorama to that zoom.
   // null puts each back to the zoom it had, so No zoom doesn't keep it there.
   let zoomAt = null;
   function zoomTo(owner, level) {
     zoomAt = level;
-    for (const [p, st] of panos) {
+    for (const [p, st] of panos()) {
       // Let go so it's held again below at the new level.
       if (st.held.zoom) {
         st.held.zoom();
@@ -848,7 +916,16 @@ section.flat .status:empty { display: none; }
     }
     set('zoom')(owner, level != null);
   }
-  ggs.lock = { zoom: set('zoom'), pan: set('pan'), move: set('move'), face, zoomTo, held: on };
+  ggs.lock = {
+    zoom: set('zoom'),
+    pan: set('pan'),
+    move: set('move'),
+    clickToGo: set('clickToGo'),
+    face,
+    zoomTo,
+    held: on,
+    gameAllows,
+  };
 })();
 
 // ==================== src/core/game.js ============================================
@@ -893,9 +970,13 @@ section.flat .status:empty { display: none; }
     }
     return null;
   }
+  // A network or server failure is marked `transient`: worth trying again, not a sign that
+  // GeoGuessr's game data has changed.
   const fetchGame = async ctx => {
-    const r = await fetch(ctx.api, { credentials: 'include' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const r = await fetch(ctx.api, { credentials: 'include' }).catch(err => {
+      throw Object.assign(err, { transient: true });
+    });
+    if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { transient: true });
     return r.json();
   };
 
@@ -914,7 +995,12 @@ section.flat .status:empty { display: none; }
   function mapInfo() {
     const ctx = context();
     if (!ctx) return Promise.resolve(null);
-    if (!mapCache.has(ctx.token)) mapCache.set(ctx.token, fetchGame(ctx).then(pickMap));
+    if (!mapCache.has(ctx.token)) {
+      const p = fetchGame(ctx).then(pickMap);
+      // a failed lookup isn't kept, so the next one tries again
+      p.catch(() => mapCache.delete(ctx.token));
+      mapCache.set(ctx.token, p);
+    }
     return mapCache.get(ctx.token);
   }
 
@@ -934,6 +1020,7 @@ section.flat .status:empty { display: none; }
       entries = 0;
       hadMap = false;
       holding = false;
+      forgetOtherGames(token);
       ggs.debug(`round key reset: token ${token}`);
     }
     if (hasMap) {
@@ -949,10 +1036,14 @@ section.flat .status:empty { display: none; }
 
   // The guess map coming back is a new round, except in a duel the player has already guessed
   // in. There it's back from spectating the other player, so the round only moves on once the
-  // Street View is at a different round of the game.
+  // Street View is at a different round of the game. While the Street View has no position
+  // (it's being remade) that can't be told, so it waits, up to UNSURE_MS.
+  const UNSURE_MS = 5000;
   let holding = false;
+  let backAt = 0;
   function onMap() {
     if (hadMap && !holding) return;
+    if (!hadMap) backAt = Date.now();
     const held = sameGuessedRound();
     if (!hadMap) holding = held;
     if (held) return;
@@ -964,7 +1055,11 @@ section.flat .status:empty { display: none; }
   // The round the player guessed in: { key, n } (n is the duel round, when known).
   let guessedIn = null;
   const guessed = () => guessedIn?.key === roundKey();
-  const sameGuessedRound = () => guessed() && guessedIn.n != null && spotRound() === guessedIn.n;
+  function sameGuessedRound() {
+    if (!guessed() || guessedIn.n == null) return false;
+    if (!streetViewSpot()) return Date.now() - backAt < UNSURE_MS;
+    return spotRound() === guessedIn.n;
+  }
 
   // A guess: GeoGuessr's Guess button clicked (by the player or a board), or Space with a
   // pin down. Disabled buttons get no clicks. Heard as the event bubbles out, so a press that
@@ -975,14 +1070,21 @@ section.flat .status:empty { display: none; }
   addEventListener('keydown', e => {
     if (e.code === 'Space' && !ggs.isTyping(e) && ggs.maps.lastGuess()) noteGuess();
   });
+  // In a duel the round guessed in has to be known, or coming back from spectating would look
+  // like a new round. With no round list yet (no script has asked for the location) it's
+  // fetched, a few times if need be. A failed fetch leaves the last list alone.
+  const GUESS_TRIES = 3;
   async function noteGuess() {
     const key = roundKey();
     guessedIn = { key, n: spotRound() };
     const ctx = context();
-    if (guessedIn.n != null || ctx?.mode !== 'duels') return;
-    // No round list yet (no script has asked for the location), so fetch it.
-    duelList = { token: ctx.token, rounds: (await fetchGame(ctx).catch(() => null))?.rounds ?? [] };
-    if (guessedIn.key === key) guessedIn.n = spotRound();
+    if (ctx?.mode !== 'duels') return;
+    for (let tries = 0; tries < GUESS_TRIES && guessedIn.key === key && guessedIn.n == null; tries++) {
+      if (tries) await new Promise(r => setTimeout(r, 1000));
+      const j = await fetchGame(ctx).catch(() => null);
+      if (j?.rounds) duelList = { token: ctx.token, rounds: j.rounds };
+      if (guessedIn.key === key) guessedIn.n = spotRound();
+    }
   }
 
   // { n, total, lat, lng } in standard games and friendly party duels. total is null in duels,
@@ -990,7 +1092,9 @@ section.flat .status:empty { display: none; }
   // boost, radio's station pick, core/aid.js) but never show it before the guess. Duels only
   // answer once competitive() has confirmed a friendly game, so ranked duels never get one.
   // One lookup per round, shared by every script so they all agree. A failed lookup isn't
-  // kept, so the next call tries again. whyNoRound() says why it failed.
+  // kept, so the next call tries again. whyNoRound() says why it failed, in words for the
+  // player. Nothing is guessed: a location that can't be confirmed is no location, since a
+  // wrong one would quietly spoil the round.
   // roundKey -> Promise<round | null>
   const roundCache = new Map();
   let noRoundWhy = '';
@@ -1006,7 +1110,8 @@ section.flat .status:empty { display: none; }
           },
           err => {
             roundCache.delete(key);
-            return noRound(`game data: ${err.message}`);
+            if (err.transient) return noRound("Couldn't reach GeoGuessr, trying again");
+            return broken(`game data: ${err.message}`);
           },
         ),
       );
@@ -1019,13 +1124,24 @@ section.flat .status:empty { display: none; }
     ggs.log(`no round location: ${why}`);
     return null;
   };
+  // Not one of the expected cases (not in a game, competitive...): GeoGuessr has most likely
+  // changed its game data, which needs a fix.
+  const broken = why => {
+    noRound("Couldn't read this round's location. GeoGuessr may have changed something, please tell Orlando");
+    ggs.log(`round location broken: ${why}`);
+    return null;
+  };
 
-  const DUEL_TRIES = 20;
-  // token -> Map(round number -> the roundKey it was handed out for).
-  const duelRounds = new Map();
-  // GeoGuessr's Street View panoramas, to see where the player is.
-  const panos = [];
-  ggs.maps.hook('StreetViewPanorama', p => panos.push(p));
+  // Lookups that wait on the Street View try once a second this many times.
+  const TRIES = 20;
+  // token -> Map(round number -> the roundKey it was handed out for), so a round already
+  // handed out to an earlier roundKey is never handed out again as a new one.
+  const handedOut = new Map();
+  const handedTo = (token, n) => handedOut.get(token)?.get(n);
+  function handOutTo(token, n, key) {
+    if (!handedOut.has(token)) handedOut.set(token, new Map());
+    handedOut.get(token).set(n, key);
+  }
   // How far the Street View can be from a round's location and still be that round
   // (the player may have moved a little before the lookup).
   const SAME_SPOT_KM = 50;
@@ -1034,33 +1150,65 @@ section.flat .status:empty { display: none; }
 
   async function lookupRound(key) {
     const ctx = context();
-    if (!ctx) return noRound('not in a game');
-    if (ctx.mode === 'standard') return standardRound(ctx);
-    if (ctx.mode !== 'duels') return noRound(`${ctx.mode} games aren't supported`);
-    if ((await competitive()).competitive) return noRound('competitive game');
+    if (!ctx) return noRound('Not in a game');
+    if (ctx.mode === 'standard') return standardRound(ctx, key);
+    if (ctx.mode !== 'duels') return noRound(`Not available in ${ctx.mode} games`);
+    const c = await competitive();
+    if (c.competitive)
+      return noRound(c.retry ? "Couldn't check this game yet, trying again" : 'Off in competitive games');
     return duelRound(ctx, key);
   }
 
-  async function standardRound(ctx) {
-    const j = await fetchGame(ctx);
-    const n = j?.round ?? j?.rounds?.length;
+  // The game data names the round, and its location must be where the Street View is. At a
+  // round's start either can still be on the last round for a moment (and agree on it), so
+  // both are read again until they agree on a round not handed out before. A round already
+  // handed out is taken again only after STALE_TRIES with the game data and a known Street
+  // View position both still on it: then it is this round, and the round key moved on
+  // without a new round (the guess map was remade).
+  const STALE_TRIES = 8;
+  async function standardRound(ctx, key) {
+    let r = null;
+    for (let tries = 0; tries < TRIES; tries++) {
+      if (tries) await new Promise(res => setTimeout(res, 1000));
+      if (roundKey() !== key) return noRound('Moved on while waiting');
+      r = currentRound(await fetchGame(ctx));
+      if (!r) return broken('standard game data has no current round');
+      if (usable(r, ctx.token, key, tries)) {
+        handOutTo(ctx.token, r.n, key);
+        return r;
+      }
+    }
+    return broken(`round ${r.n} is not where the Street View is`);
+  }
+  function usable(r, token, key, tries) {
+    const fresh = [undefined, key].includes(handedTo(token, r.n));
+    const settled = tries >= STALE_TRIES && !!streetViewSpot();
+    return agrees(r) && (fresh || settled);
+  }
+  // No Street View position to check against: the game data's own round number stands.
+  function agrees(r) {
+    const spot = streetViewSpot();
+    return !spot || ggs.geo.distance(spot, r) <= SAME_SPOT_KM;
+  }
+  function currentRound(j) {
+    const n = j?.round;
     const cur = j?.rounds?.[n - 1];
-    if (!(n > 0)) return noRound('standard game data has no current round');
-    return { n, total: j.roundCount, lat: cur?.lat ?? null, lng: cur?.lng ?? null };
+    if (!(n > 0) || typeof cur?.lat !== 'number' || typeof cur?.lng !== 'number') return null;
+    return { n, total: j.roundCount, lat: cur.lat, lng: cur.lng };
   }
 
   // Duel rounds are found by place, not by currentRoundNumber. In party duels the game data
   // is a snapshot from when the game was made: status "Created" and currentRoundNumber 1 all
   // game, with every round's location listed up front. So the round is the listed one nearest
   // the Street View on screen. At a round's start the panorama can still be the last round's
-  // for a moment, so a round already handed out for an earlier roundKey is waited on. After
-  // DUEL_TRIES it's taken anyway, since the roundKey can move on mid-round (the guess map
-  // blinking out, a reload).
+  // for a moment, so a round already handed out for an earlier roundKey is waited on, up to
+  // TRIES times. If the Street View is still at that round's place after all that, it is this
+  // round (the round key moved on without a new round), so it's handed out again.
   async function duelRound(ctx, key) {
     let found = { why: 'no duel data' };
     let j;
-    for (let tries = 0; tries < DUEL_TRIES; tries++) {
-      if (roundKey() !== key) return noRound('moved on while waiting');
+    for (let tries = 0; tries < TRIES; tries++) {
+      if (roundKey() !== key) return noRound('Moved on while waiting');
       // The round list only needs fetching again if no round matched (a live duel lists
       // each round as it starts). Waiting on the Street View is then just a position check.
       if (!found.round) {
@@ -1076,14 +1224,12 @@ section.flat .status:empty { display: none; }
   }
 
   function handOut({ round, why, stale }, token, key) {
-    if (!round) return noRound(why);
-    if (stale) ggs.log(`duel round ${round.n} was already played, using it anyway`);
-    if (!duelRounds.has(token)) duelRounds.set(token, new Map());
-    duelRounds.get(token).set(round.n, key);
+    if (!round) return broken(why);
+    if (stale) ggs.log(`duel round ${round.n}: the Street View stayed on it, so it's this round`);
+    handOutTo(token, round.n, key);
     return round;
   }
 
-  // Where the Street View is: the newest panorama that has a position.
   // The duel round the Street View is at, from the round list, or null.
   function spotRound() {
     const spot = streetViewSpot();
@@ -1092,12 +1238,10 @@ section.flat .status:empty { display: none; }
     return best && best.km <= SAME_SPOT_KM ? best.n : null;
   }
 
+  // Where the Street View on screen is.
   function streetViewSpot() {
-    for (let i = panos.length - 1; i >= 0; i--) {
-      const p = panos[i].getPosition?.();
-      if (p) return { lat: p.lat(), lng: p.lng() };
-    }
-    return null;
+    const p = ggs.maps.panorama()?.getPosition();
+    return p ? { lat: p.lat(), lng: p.lng() } : null;
   }
 
   // The listed duel round nearest the Street View: { round, stale } or { why }. stale means
@@ -1106,7 +1250,7 @@ section.flat .status:empty { display: none; }
     if (!spot) return { why: 'no Street View position yet' };
     const best = nearestRound(spot, j?.rounds ?? []);
     if (!best || best.km > SAME_SPOT_KM) return { why: 'no duel round near the Street View' };
-    const was = duelRounds.get(token)?.get(best.n);
+    const was = handedTo(token, best.n);
     const stale = was !== undefined && was !== key;
     return { round: { n: best.n, total: null, lat: best.lat, lng: best.lng }, stale };
   }
@@ -1129,16 +1273,20 @@ section.flat .status:empty { display: none; }
   // ---- competitive guard ----
   // Party and ranked duels share /duels/<id> URLs, so two signals decide. One is the lobby you
   // came through (/party or /join vs matchmaking pages), the other is party/rated fields in the
-  // game data. Anything not clearly friendly counts as competitive.
+  // game data. Anything not clearly friendly counts as competitive. The lobby only counts for
+  // games reached straight from it: any other page (home, profile...) on the way forgets it, so
+  // a ranked duel opened later from a link isn't taken for the party's.
   const COMPETITIVE_PAGES = /^\/(multiplayer|competitive|ranked|quick-play|matchmaking)(\/|$)/;
   const PARTY_PAGES = /^\/(party|join)(\/|$)/;
   const LOBBY_KEY = 'ggs-lobby';
 
   function noteLobby(path = location.pathname) {
     const lobby = PARTY_PAGES.test(path) ? 'party' : COMPETITIVE_PAGES.test(path) ? 'competitive' : null;
-    if (!lobby) return;
+    // a game page keeps the lobby it came from
+    if (!lobby && ROUTES.some(([re]) => re.test(path))) return;
     try {
-      sessionStorage.setItem(LOBBY_KEY, lobby);
+      if (lobby) sessionStorage.setItem(LOBBY_KEY, lobby);
+      else sessionStorage.removeItem(LOBBY_KEY);
     } catch {}
   }
 
@@ -1162,13 +1310,14 @@ section.flat .status:empty { display: none; }
     };
   }
 
+  // Without game data nothing is confirmed, so it counts as competitive (and isn't kept, so
+  // the next check tries again).
   async function checkGame(ctx) {
     const lobby = readLobby();
     const j = await fetchGame(ctx).catch(() => null);
+    if (!j) return { competitive: true, why: `${ctx.mode}: no game data`, retry: true };
     const { rated, party } = gameSigns(j);
-    const why =
-      `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}` +
-      (j ? '' : ' (no game data)');
+    const why = `${ctx.mode}: lobby=${lobby ?? '?'} party-field=${party} rated-field=${rated}`;
     if (rated) return { competitive: true, why };
     return { competitive: !(party || lobby === 'party'), why };
   }
@@ -1184,8 +1333,20 @@ section.flat .status:empty { display: none; }
     if (!ctx || ctx.mode === 'standard' || ctx.mode === 'challenge') {
       return Promise.resolve({ competitive: false, why: ctx ? `${ctx.mode} game` : 'not in a game' });
     }
-    if (!guardCache.has(ctx.token)) guardCache.set(ctx.token, checkGame(ctx));
+    if (!guardCache.has(ctx.token)) {
+      const check = checkGame(ctx);
+      guardCache.set(ctx.token, check);
+      check.then(c => c.retry && guardCache.delete(ctx.token));
+    }
     return guardCache.get(ctx.token);
+  }
+
+  // A new game: what was kept about earlier ones goes, so a long session doesn't pile it up.
+  function forgetOtherGames(token) {
+    roundCache.clear();
+    for (const cache of [mapCache, handedOut, guardCache]) {
+      for (const t of [...cache.keys()]) if (t !== token) cache.delete(t);
+    }
   }
 
   ggs.game = { context, roundKey, guessed, whyNoRound, mapInfo, roundLocation, competitive, noteLobby };
@@ -1289,7 +1450,9 @@ section.flat .status:empty { display: none; }
 // Each tile upload gets a record ({ gl, name, args, url, key, img, tex, ... }). The registered
 // filters (redraw, lying-signs, gradient) then get a turn, in order, to swap the source for a
 // canvas. A filter that needs time can keep the record and push a new source into the same
-// texture later with upload(rec, source). Other uploads pass straight through.
+// texture later with reupload(rec, source, order): the filters after its own order get their
+// turn on it first, so a late tile still gets every later effect. Other uploads pass straight
+// through.
 // The API never re-uploads a tile already on screen. So replay() loads every remembered tile
 // again (from the browser cache) and runs it through the same path. That's how switching a
 // script on or off mid-round takes effect.
@@ -1359,8 +1522,12 @@ section.flat .status:empty { display: none; }
   // What goes into WebGL right now for this upload.
   function handle(rec) {
     remember(rec);
-    let source = rec.img;
+    return runFilters(rec, rec.img);
+  }
+  // The filters after order `after` on this source, in order.
+  function runFilters(rec, source, after = -Infinity) {
     for (const f of filters) {
+      if (f.order <= after) continue;
       try {
         source = f.fn(rec, source) ?? source;
       } catch (err) {
@@ -1394,6 +1561,13 @@ section.flat .status:empty { display: none; }
       gl.bindTexture(rec.target, prevTex);
     }
     return true;
+  }
+  // A filter's late result for a record: the filters after `fromOrder` run on it, then it goes
+  // up. Those filters see the same record again, as on a replay, and may keep it to send their
+  // own late result the same way.
+  function reupload(rec, source, fromOrder) {
+    if (!live(rec)) return false;
+    return upload(rec, runFilters(rec, source, fromOrder));
   }
 
   function wrapUpload(P, name) {
@@ -1438,9 +1612,6 @@ section.flat .status:empty { display: none; }
 
   // The renderer only redraws on a view change, so nudge it after an upload. It gets a heading
   // change held for a frame and a mouse move over the canvas, since either alone can be swallowed.
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
-
   async function repaint(panoId) {
     const nudged = nudge(panoId);
     await new Promise(r => requestAnimationFrame(r));
@@ -1454,7 +1625,7 @@ section.flat .status:empty { display: none; }
   // Turns each panorama (or only panoId) a touch. Returns [panorama, its pov before].
   function nudge(panoId) {
     const nudged = [];
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       try {
         if (panoId && p.getPano() !== panoId) continue;
         const pov = p.getPov();
@@ -1643,7 +1814,17 @@ section.flat .status:empty { display: none; }
     pace.spent = pace.pixels = 0;
   }
 
-  ggs.tiles = { filter, upload, live, replay, repaint, preload, prerender, count: () => records.length };
+  ggs.tiles = {
+    filter,
+    upload,
+    reupload,
+    live,
+    replay,
+    repaint,
+    preload,
+    prerender,
+    count: () => records.length,
+  };
 })();
 
 // ==================== src/core/redraw-bar.js ======================================
@@ -1651,7 +1832,8 @@ section.flat .status:empty { display: none; }
 // towards 90% over the last rounds' time and fills when the tiles are swapped.
 //   ggs.redrawBar.show() puts it on the page (hidden until a start or notice), remove() takes it off.
 //   start(seconds, key, t0): a generation started. Already showing this key does nothing.
-//   done(failed, key): that generation finished. Another key's bar is left alone.
+//   done(failed, key, message): that generation finished (message: why it failed). Another
+//     key's bar is left alone.
 //   hide(), notice(message) (a message with no bar for a few seconds), owner() -> key | null.
 (() => {
   const ggs = globalThis.__ggs;
@@ -1717,14 +1899,14 @@ section.flat .status:empty { display: none; }
       fill.style.width = `${Math.min(90, 100 * (1 - Math.exp(-2.3 * x)))}%`;
     }, 100);
   }
-  function done(failed, key) {
+  function done(failed, key, message = 'Could not redraw this round') {
     if (!overlay || (key && key !== owner)) return;
     owner = null;
     clearInterval(progressTimer);
     overlay.fill.style.width = '100%';
     if (failed) {
       overlay.fill.style.background = '#e03131';
-      overlay.text.textContent = 'Could not redraw this round';
+      overlay.text.textContent = message;
     }
     clearTimeout(hideTimer);
     hideTimer = setTimeout(
@@ -1790,13 +1972,21 @@ section.flat .status:empty { display: none; }
     return id;
   }
   const code = () => active?.cfg.code || ggs.settings?.minecraft?.code || '';
+  // Its errors have `shown` (a message fit for the player) and the server's code ('credit').
   async function server(fields, post = false, signal) {
     const body = new URLSearchParams({ ...fields, client: clientId(), code: code() });
-    const r = post
-      ? await fetch(SERVER, { method: 'POST', body, signal })
-      : await fetch(`${SERVER}?caps=1&${body}`);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.error) throw new Error(j.error || `server HTTP ${r.status}`);
+    const req = post ? fetch(SERVER, { method: 'POST', body, signal }) : fetch(`${SERVER}?caps=1&${body}`);
+    const r = await req.catch(err => {
+      throw err.name === 'AbortError'
+        ? err
+        : Object.assign(new Error('Server not reachable'), { shown: true });
+    });
+    // a page that isn't ours (a host error page, a PHP warning) counts as a server error
+    const j = await r.json().catch(() => ({ error: `Server error (HTTP ${r.status})` }));
+    if (!r.ok || j.error) {
+      const msg = j.error || `Server error (HTTP ${r.status})`;
+      throw Object.assign(new Error(msg), { code: j.code, until: j.until, shown: true });
+    }
     return j;
   }
 
@@ -1807,23 +1997,19 @@ section.flat .status:empty { display: none; }
   const etaOf = (style, mode) => eta[etaKey(style, mode)] ?? ETA_DEFAULT[mode];
   const keyOf = id => `${id}/${active.style}/${modeOf(active.cfg)}`;
 
-  // panoId -> Promise<{ worldWidth, tileWidth, zmax }>. metaSync holds the resolved values.
-  const meta = new Map();
+  // panoId -> { worldWidth, tileWidth, zmax } once known, for the last META_KEEP panoramas.
+  // The lookup itself is maps.js's shared panoData.
+  const META_KEEP = 100;
   const metaSync = new Map();
-  function panoMeta(id) {
-    if (!meta.has(id)) {
-      meta.set(
-        id,
-        new window.google.maps.StreetViewService().getPanorama({ pano: id }).then(({ data }) => {
-          const worldWidth = data.tiles.worldSize.width;
-          const tileWidth = data.tiles.tileSize.width;
-          const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
-          metaSync.set(id, m);
-          return m;
-        }),
-      );
-    }
-    return meta.get(id);
+  async function panoMeta(id) {
+    const data = await ggs.maps.panoData(id);
+    const worldWidth = data.tiles.worldSize.width;
+    const tileWidth = data.tiles.tileSize.width;
+    const m = { worldWidth, tileWidth, zmax: Math.ceil(Math.log2(worldWidth / tileWidth)) };
+    metaSync.delete(id);
+    metaSync.set(id, m);
+    if (metaSync.size > META_KEEP) metaSync.delete(metaSync.keys().next().value);
+    return m;
   }
   const widthAt = (m, zoom) => Math.ceil(m.worldWidth / 2 ** (m.zmax - zoom));
 
@@ -1832,17 +2018,7 @@ section.flat .status:empty { display: none; }
   // active is { id, style, label, cfg } while a script is on.
   let active = null;
   const bar = ggs.redrawBar;
-  const panos = new Set();
-  ggs.maps.hook('StreetViewPanorama', p => panos.add(p));
-  function shownPano() {
-    for (const p of panos) {
-      try {
-        const id = p.getPano();
-        if (id) return id;
-      } catch {}
-    }
-    return null;
-  }
+  const shownPano = () => ggs.maps.panorama()?.getPano() ?? null;
 
   // Tiles of a panorama with no generation yet wait here, blue on screen, until the view has
   // stayed on one panorama for SETTLE ms. Then that panorama is generated and the others get
@@ -1888,7 +2064,7 @@ section.flat .status:empty { display: none; }
   function passThrough(id, entries) {
     for (const { rec, img } of entries) {
       try {
-        ggs.tiles.upload(rec, img);
+        ggs.tiles.reupload(rec, img, 0);
       } catch {}
     }
     if (active && bar.owner() === keyOf(id)) bar.hide();
@@ -1937,19 +2113,36 @@ section.flat .status:empty { display: none; }
     const hq = part('high quality', Q.left(log, 'hq', caps.hq));
     ggs.status(active.id, `Today: ${normal} · ${hq}${caps.codeOk ? ' · code accepted' : ''}`);
   }
+  // Only the newest ask counts, so a slow answer for a half-typed code can't win.
+  let quotaAsk = 0;
   async function loadQuota() {
+    const ask = ++quotaAsk;
     serverLog = ggs.store.get(QKEY, {});
     saveLog();
     try {
-      caps = await server({});
+      const got = await server({});
+      if (ask !== quotaAsk) return;
+      caps = got;
+      notePauses(caps.paused);
       saveLog(caps.log);
     } catch (err) {
-      if (active) ggs.status(active.id, 'Server not reachable');
+      if (ask !== quotaAsk) return;
+      if (active) ggs.status(active.id, err.shown ? err.message : 'Server not reachable');
       ggs.debug('redraw: caps', err);
     }
   }
+  // The server says until when each mode is paused (0 when it isn't).
+  function notePauses(until = {}) {
+    for (const m of ['normal', 'hq']) pausedUntil[m] = until[m] ?? 0;
+  }
   const modeOf = cfg => (cfg.hq ? 'hq' : 'normal');
-  const allowed = mode => Q.left(log, mode, caps[mode]).left > 0;
+  // A mode whose AI account is out of credit (or rate limited) is left alone until the server's
+  // pause is over, so the player gets the real Street View instead of a blue wait and an error
+  // each round. PAUSE_MS is only for a server that doesn't say until when.
+  const PAUSE_MS = 15 * 60 * 1000;
+  const pausedUntil = { normal: 0, hq: 0 };
+  const paused = mode => pausedUntil[mode] > Date.now();
+  const allowed = mode => !paused(mode) && Q.left(log, mode, caps[mode]).left > 0;
   const stats = { uploads: 0, tiles: 0, swapped: 0 };
   ggs.redraw = {
     debug: () => ({
@@ -2005,7 +2198,10 @@ section.flat .status:empty { display: none; }
       const img = new Image();
       img.src = r.image;
       await img.decode();
-      g.image = await createImageBitmap(img);
+      const bitmap = await createImageBitmap(img);
+      // cancelled while it decoded: dropped, so it can't touch a newer generation's bar
+      if (g.error) return bitmap.close();
+      g.image = bitmap;
       ggs.debug(`${style}: generated ${id} (${mode}) in ${(r.ms / 1000).toFixed(1)} s`);
       await flush(g);
       await ggs.tiles.repaint(id);
@@ -2021,7 +2217,8 @@ section.flat .status:empty { display: none; }
       inFlight[mode] = inFlight[mode].filter(t => t !== t0);
       saveLog();
       ggs.log(`${style}: generation failed`, err);
-      bar.done(true, key);
+      if (err.code === 'credit') pausedUntil[mode] = err.until ?? Date.now() + PAUSE_MS;
+      bar.done(true, key, err.shown ? err.message : 'Could not redraw this round');
       // Puts the real tiles back.
       flush(g).then(() => ggs.tiles.repaint(id));
     });
@@ -2070,12 +2267,15 @@ section.flat .status:empty { display: none; }
     return tileFrom(g, entry);
   }, 0);
 
-  // Today's limit is used up: says so once per panorama, and the real tiles go up.
+  // Today's limit is used up, or the AI account is out of credit: says so once per panorama,
+  // and the real tiles go up.
   function showLimit(id, mode) {
     if (limitShownFor === id) return;
     limitShownFor = id;
-    const { resetAt } = Q.left(log, mode, caps[mode]);
     const what = active.cfg.hq ? 'High quality' : active.label;
+    if (paused(mode))
+      return bar.notice(`${what} can't be used right now · try again in ${Q.until(pausedUntil[mode])}`);
+    const { resetAt } = Q.left(log, mode, caps[mode]);
     bar.notice(`${what} limit reached for today · back in ${Q.until(resetAt)}`);
   }
 
@@ -2101,7 +2301,7 @@ section.flat .status:empty { display: none; }
   function reupload(g, m, { rec, img, tw, th }) {
     try {
       const k = rec.key;
-      if (ggs.tiles.upload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img)) stats.swapped++;
+      if (ggs.tiles.reupload(rec, m ? crop(g, m, k.x, k.y, k.z, tw, th) : img, 0)) stats.swapped++;
     } catch (err) {
       ggs.log('redraw: re-upload failed', err);
     }
@@ -2193,10 +2393,13 @@ section.flat .status:empty { display: none; }
 //   'ready', 'height' { h }
 //   'guess' { guess: { lat, lng } } when its Guess is pressed. The pin goes down at once.
 //   'done' once its animation is over. GeoGuessr's Guess is pressed guessDelay ms later.
+//   'retry' to press GeoGuessr's Guess again after 'failed', with the same pin.
 //   anything else goes to onMessage.
 // Messages down to the app:
 //   'reset' each round
 //   'answer' { lat, lng } each round when `answer` is set (lat null until it's known)
+//   'placed' { ok } after each 'guess': whether the pin went down. Show the answer only when ok.
+//   'failed' { why } when GeoGuessr's Guess couldn't be pressed
 //   plus whatever the script posts.
 (() => {
   const ggs = globalThis.__ggs;
@@ -2226,6 +2429,9 @@ section.flat .status:empty { display: none; }
   const TRIES = 10;
   // The guess map gone this long means a result screen, so the board clears.
   const AWAY_MS = 1500;
+  // Lookups of the round's location for the board, ANSWER_RETRY_MS apart.
+  const ANSWER_TRIES = 3;
+  const ANSWER_RETRY_MS = 5000;
 
   ggs.board = ({ id, app, size, guessDelay, answer, onMessage, onTick }) => {
     const origin = new URL(ggs.extBase).origin;
@@ -2242,7 +2448,10 @@ section.flat .status:empty { display: none; }
     let awaySince = 0;
     let placed = false;
     let answerRound;
-    let lastGuess = null;
+    // The app's guess ('guess'), on the map but maybe not sent in yet. The app may be
+    // showing the answer by then, so stop() sends it in before the real map comes back.
+    let boardGuess = null;
+    let answerTimer = 0;
     // Where the board sits. Measured once per round and window size.
     let spot = null;
     let spotKey = '';
@@ -2251,7 +2460,8 @@ section.flat .status:empty { display: none; }
     hideMap.textContent = HIDE_MAP_CSS;
     (document.head ?? document.documentElement).append(hideMap);
 
-    const post = msg => (ready ? frame.contentWindow.postMessage(msg, origin) : queued.push(msg));
+    // contentWindow is null once the frame is gone (after stop)
+    const post = msg => (ready ? frame.contentWindow?.postMessage(msg, origin) : queued.push(msg));
     const status = text => {
       if (statusEl) statusEl.textContent = text ?? '';
     };
@@ -2317,11 +2527,15 @@ section.flat .status:empty { display: none; }
         if (host.style.width) layout();
       },
       guess(d) {
-        lastGuess = place(d.guess) ? d.guess : null;
+        const ok = place(d.guess);
+        boardGuess = ok ? d.guess : null;
+        post({ ggs: 'placed', ok });
       },
       done() {
-        if (lastGuess) press(lastGuess, guessDelay);
-        lastGuess = null;
+        if (boardGuess) press(boardGuess, guessDelay);
+      },
+      retry() {
+        if (boardGuess) press(boardGuess, 0);
       },
     };
     const onFrameMessage = e => {
@@ -2350,23 +2564,28 @@ section.flat .status:empty { display: none; }
     // So keep trying for a few seconds, and put the pin down again once in case it was missed.
     // With no button on the page at all (some layouts only show it on hover), press Space.
     // A new round clears pressTimer (tick below), so this never presses into the next round.
-    function press(guess, wait, n = 1) {
+    // then() runs once it's over, pressed or not.
+    function press(guess, wait, n = 1, then) {
       clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
-        if (tryPress(guess, n)) return;
-        if (n < TRIES) return press(guess, RETRY_MS, n + 1);
+        if (tryPress(guess, n)) return then?.();
+        if (n < TRIES) return press(guess, RETRY_MS, n + 1, then);
         const why = ggs.maps.guessButton() ? 'button stayed disabled' : 'no Guess button found';
         status(`Guess placed, but couldn't press Guess (${why})`);
+        post({ ggs: 'failed', why });
         ggs.maps.debug();
+        then?.();
       }, wait);
     }
 
     // Try n at pressing Guess. True once there's nothing left to do: guessed or moved on.
     // A press can be held back (core/aid.js beforeGuess hooks), so pressing alone isn't done.
+    // A script holding the press back (Ocean only on land) says why itself, so the board stops.
     function tryPress(guess, n) {
       if (!ggs.maps.guessMapElement() || ggs.game.guessed()) return true;
+      const t = performance.now();
       if (!ggs.maps.submitGuess()) pressAnotherWay(guess, n);
-      return false;
+      return ggs.aid.heldSince(t);
     }
 
     // The button wasn't there or was disabled: put the pin down again once, then try Space.
@@ -2379,23 +2598,29 @@ section.flat .status:empty { display: none; }
       if (n >= 3 && !ggs.maps.guessButton()) ggs.maps.pressSpace();
     }
 
-    // The round's real location, for boards that show it once the guess is in.
+    // The round's real location, for boards that show it once the guess is in. A failed
+    // lookup is tried again a few times, then the reason shows on the board.
     function sendAnswer(round) {
       if (round === answerRound) return;
       answerRound = round;
       post({ ggs: 'answer', lat: null });
-      ggs.game
-        .roundLocation()
-        .then(
-          loc => loc && ggs.game.roundKey() === round && post({ ggs: 'answer', lat: loc.lat, lng: loc.lng }),
-        )
-        .catch(() => {});
+      findAnswer(round);
+    }
+    function findAnswer(round, tries = 1) {
+      ggs.game.roundLocation().then(loc => {
+        if (ggs.game.roundKey() !== round || answerRound !== round) return;
+        if (loc) return post({ ggs: 'answer', lat: loc.lat, lng: loc.lng });
+        if (tries < ANSWER_TRIES)
+          answerTimer = setTimeout(() => findAnswer(round, tries + 1), ANSWER_RETRY_MS);
+        else status(ggs.game.whyNoRound());
+      });
     }
 
     function clearBoard() {
       post({ ggs: 'reset' });
       clearTimeout(pressTimer);
       placed = false;
+      boardGuess = null;
       status('');
     }
 
@@ -2436,9 +2661,13 @@ section.flat .status:empty { display: none; }
         clearInterval(tick);
         clearTimeout(collapseTimer);
         clearTimeout(pressTimer);
+        clearTimeout(answerTimer);
         window.removeEventListener('message', onFrameMessage);
         host?.remove();
-        hideMap.remove();
+        // Switching off mid-reveal would bring the map back with the pin still movable and the
+        // answer just seen, so the guess goes in first.
+        if (boardGuess && !ggs.game.guessed()) press(boardGuess, 0, 1, () => hideMap.remove());
+        else hideMap.remove();
       },
     };
   };
@@ -2676,6 +2905,7 @@ section.flat .status:empty { display: none; }
 //     attach(ctx) -> cleanup?: a guess map was found. GeoGuessr can make a new one mid-game.
 //     tick(ctx): every 300 ms while there's a guess map.
 //     click(latLng, ctx): the player clicked the guess map (not our own placeGuess).
+//     unpin(ctx): the player shift-clicked the guess map, which GeoGuessr takes as "remove the pin".
 //     beforeGuess(ctx) -> { lat, lng } | false | null: Guess was pressed. A point moves the guess
 //       there first, false stops it. ctx.loc may still be null.
 //     usesLocation: false when the script doesn't need the round's location, so it isn't fetched.
@@ -2727,26 +2957,43 @@ section.flat .status:empty { display: none; }
 
   // Guess presses (the button's click or Space), caught before GeoGuessr sees them, for the
   // scripts with a beforeGuess hook. `passing` lets our own press afterwards through.
-  const guessHooks = new Set();
+  // beforeGuess hook -> its script's id
+  const guessHooks = new Map();
   let passing = false;
   let swallowUp = false;
   function isGuessPress(e) {
     if (e.type === 'keydown') return e.code === 'Space' && !ggs.isTyping(e) && !!ggs.maps.guessMapElement();
     return !!ggs.maps.guessButton()?.contains(e.target);
   }
-  // Any hook returning false blocks the guess. Otherwise the last point given wins.
+  // A hook that threw answers this: the press is held back once (see guessHook below).
+  const ERRORED = Symbol('errored');
+  // Any hook returning false blocks the guess. Otherwise the last point given wins, and `by`
+  // is the script that gave it. errored: a hook threw.
   function askGuessHooks() {
     let point = null;
+    let by = null;
     let block = false;
-    for (const fn of guessHooks) {
+    let errored = false;
+    for (const [fn, id] of guessHooks) {
       const r = fn();
-      if (r === false) block = true;
-      else point = r ?? point;
+      if (r === false || r === ERRORED) block = true;
+      else if (r) [point, by] = [r, id];
+      errored ||= r === ERRORED;
     }
-    return { point, block };
+    return { point, by, block, errored };
   }
-  function guessAt(p) {
-    ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+  // The press was already held back, so a pin that can't be moved is said out loud, and for
+  // the rest of the round presses go through as they are, so the player can still guess.
+  let guessFailedIn = null;
+  function guessAt(p, by) {
+    try {
+      ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
+    } catch (err) {
+      ggs.log('could not move the guess', err);
+      guessFailedIn = ggs.game.roundKey();
+      ggs.status(by, "Couldn't move the guess, press Guess again to guess as it is. Please tell Orlando");
+      return;
+    }
     passing = true;
     // Waits so GeoGuessr takes the new pin first.
     setTimeout(() => {
@@ -2754,22 +3001,41 @@ section.flat .status:empty { display: none; }
       passing = false;
     }, 150);
   }
-  // The keyup after a swallowed Space press goes too.
+  // The keyup after a swallowed Space press goes too (the player's, not our own pressSpace's).
+  // Leaving the window while it's held loses that keyup, so the wait is dropped then.
+  addEventListener('blur', () => {
+    swallowUp = false;
+  });
   function onKeyUp(e) {
-    if (!swallowUp || e.code !== 'Space') return;
+    if (!swallowUp || e.code !== 'Space' || !e.isTrusted || ggs.isTyping(e)) return;
     swallowUp = false;
     e.stopImmediatePropagation();
   }
+  // When a hook last held a press back on purpose (performance.now()), for boards pressing
+  // Guess. A hook that threw doesn't count: the board's next press goes past it.
+  let heldAt = -1;
+  // Space held down repeats; only the first press counts, so repeats can't slip past a hook.
+  function swallowRepeat(e) {
+    if (!(e.type === 'keydown' && e.repeat && isGuessPress(e))) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return true;
+  }
+  // Our own press going through, or the pin couldn't be moved this round.
+  const standingAside = () => passing || guessFailedIn === ggs.game.roundKey();
   function onPress(e) {
-    if (passing || !guessHooks.size) return;
     if (e.type === 'keyup') return onKeyUp(e);
-    if (!isGuessPress(e)) return;
-    const { point, block } = askGuessHooks();
-    if (!point && !block) return;
+    if (!guessHooks.size || swallowRepeat(e) || standingAside() || !isGuessPress(e)) return;
+    const asked = askGuessHooks();
+    if (asked.point || asked.block) holdBack(e, asked);
+  }
+  // The press is swallowed, then moved to the hooks' point or stopped.
+  function holdBack(e, { point, by, block, errored }) {
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.type === 'keydown') swallowUp = true;
-    if (!block) guessAt(point);
+    if (block && !errored) heldAt = performance.now();
+    if (!block) guessAt(point, by);
   }
   for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, onPress, true);
 
@@ -2777,6 +3043,9 @@ section.flat .status:empty { display: none; }
   // the round is over. A guess is Guess clicked or Space with a pin down (board guesses press
   // the same button). Over is the guess map gone OVER_MS, and the note stays on the results map.
   const OVER_MS = 1500;
+  // Lookups of the round's location, RETRY_MS apart.
+  const LOCATION_TRIES = 3;
+  const RETRY_MS = 5000;
   // Each running aid's own-up, called on a guess.
   const owners = new Set();
   const guessed = () => {
@@ -2887,8 +3156,25 @@ section.flat .status:empty { display: none; }
         },
         status: text => ggs.status(id, text),
       };
-      const guessHook = hooks.beforeGuess && (() => hooks.beforeGuess(ctx));
-      if (guessHook) guessHooks.add(guessHook);
+      // A hook that throws holds that press back and says so; on the next press of the round it
+      // stands aside, so the player is never stuck unable to guess.
+      let hookFailedIn = null;
+      const guessHook =
+        hooks.beforeGuess &&
+        (() => {
+          if (hookFailedIn === ggs.game.roundKey()) return null;
+          try {
+            return hooks.beforeGuess(ctx);
+          } catch (err) {
+            hookFailedIn = ggs.game.roundKey();
+            ggs.log(`${id} beforeGuess failed`, err);
+            const msg = `Something went wrong, press Guess again to guess without ${name()}`;
+            ctx.status(msg);
+            ctx.note(msg);
+            return ERRORED;
+          }
+        });
+      if (guessHook) guessHooks.set(guessHook, id);
       const css = hooks.css && Object.assign(document.createElement('style'), { textContent: hooks.css });
       if (css) document.head.append(css);
 
@@ -2926,7 +3212,9 @@ section.flat .status:empty { display: none; }
         listener?.remove();
         zoomListener?.remove();
         listener = gm().event.addListener(map, 'click', e => {
-          if (!ggs.maps.placing() && e?.latLng) hooks.click?.(e.latLng, ctx);
+          if (ggs.maps.placing() || !e?.latLng) return;
+          if (e.domEvent?.shiftKey) hooks.unpin?.(ctx);
+          else hooks.click?.(e.latLng, ctx);
         });
         // At once, not on the next tick, so the swap doesn't trail the zoom.
         zoomListener = gm().event.addListener(map, 'zoom_changed', rings);
@@ -2945,30 +3233,38 @@ section.flat .status:empty { display: none; }
         shapesKey = '';
         ctx.note('');
         hooks.round?.(ctx);
-        if (hooks.usesLocation === false) return;
-        ggs.game.roundLocation().then(l => {
-          // Moved on, or stopped.
-          if (round !== key) return;
-          real = l;
-          ctx.status(l ? '' : `Not this round (${ggs.game.whyNoRound()})`);
-        });
+        if (hooks.usesLocation !== false) findLocation(key);
       }
 
-      // Tosses this round's coin, the first time the real location is known.
+      // A failed lookup (a network blip) is tried again a few times before giving up.
+      function findLocation(key, tries = 1) {
+        ggs.game.roundLocation().then(l => gotLocation(key, l, tries));
+      }
+      function gotLocation(key, l, tries) {
+        // Moved on, or stopped.
+        if (round !== key) return;
+        real = l;
+        ctx.status(l ? '' : ggs.game.whyNoRound());
+        if (!l && tries < LOCATION_TRIES) setTimeout(() => findLocation(key, tries + 1), RETRY_MS);
+      }
+
+      // Tosses this round's coin, the first time the real location is known. With lies on, the
+      // made-up spots are waited for even when telling the truth, so a lie isn't drawn any later.
       function tossCoin(key) {
-        const lie = !!(hooks.lies || cfg.lies) && seed('lie', real)() < 0.5;
+        const canLie = !!(hooks.lies || cfg.lies);
+        const lie = canLie && seed('lie', real)() < 0.5;
         if (lie === lying) return;
         lying = lie;
         lies = null;
-        loc = lie ? null : real;
+        loc = canLie ? null : real;
         shapesKey = '';
-        if (!lie) return;
+        if (!canLie) return;
         const current = () => round === key && lying === lie;
         fakes(seed('fake', real)).then(
           list => {
             if (!current()) return;
-            lies = list;
-            loc = list[0];
+            lies = lie ? list : null;
+            loc = lie ? list[0] : real;
           },
           () => {
             // No outlines to lie with, so tell the truth.
@@ -2978,13 +3274,22 @@ section.flat .status:empty { display: none; }
       }
 
       // The shapes for the current spot. When lying, made-up spots are tried until the shapes
-      // miss the real one. loc stays on the one it settled on, for the other hooks too.
+      // miss the real one. loc stays on the one it settled on, for the other hooks too. If none
+      // misses it (a huge area), the truth is told, so a "lie" is never secretly the truth.
+      // loc is only moved while this draw is still the current one.
       async function draw(want) {
-        let specs = await hooks.shapes(ctx);
-        for (let i = 1; lies && i < lies.length && covers(specs, real); i++) {
+        const current = () => shapesKey === want;
+        const specs = await hooks.shapes(ctx);
+        const lie = lies ? await nextLie(specs, current) : specs;
+        if (!current()) return null;
+        if (!lies || !covers(lie, real)) return lie;
+        loc = real;
+        return hooks.shapes(ctx);
+      }
+      async function nextLie(specs, current) {
+        for (let i = 1; i < lies.length && covers(specs, real) && current(); i++) {
           loc = lies[i];
           specs = await hooks.shapes(ctx);
-          if (shapesKey !== want) return null;
         }
         return specs;
       }
@@ -3077,8 +3382,8 @@ section.flat .status:empty { display: none; }
       };
     },
   });
-  // Scripts use the geometry helpers from here.
-  Object.assign(ggs.aid, ggs.geo, { hints: {} });
+  // Scripts use the geometry helpers from here. heldSince(t): a hook held a press back since t.
+  Object.assign(ggs.aid, ggs.geo, { hints: {}, heldSince: t => heldAt >= t });
 })();
 
 // ==================== src/core/mirror.js ==========================================
@@ -3093,11 +3398,7 @@ section.flat .status:empty { display: none; }
   // view.js's sheets over the panorama carry this.
   const HOST = 'data-ggs-view';
   const panoElement = () => ggs.view.panoElement();
-  // container element -> its StreetViewPanorama
-  const panoOf = new WeakMap();
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    if (args[0] instanceof Element) panoOf.set(args[0], p);
-  });
+  const panoAt = el => ggs.maps.panoramaAt(el);
 
   // ---- mirrored input ----
   // Street View input is caught at the window in the capture phase and swallowed. A changed copy
@@ -3239,22 +3540,16 @@ section.flat .status:empty { display: none; }
   }
   // Click-to-move with `move` flipped. Google's own is off (clickToGo), and a click that wasn't
   // a drag walks to the link pointing furthest from where you clicked.
-  // pressAt is where the press was. noClickTo is the panorama whose clickToGo is off.
+  // pressAt is where the press was. Google's clickToGo is held off through ggs.lock, which keeps
+  // it off on new panoramas and puts GeoGuessr's own setting (off in No Move games) back after.
   let pressAt = null;
-  let noClickTo = null;
-  function clickToGo() {
-    const p = panoOf.get(panoElement());
-    const off = want('move') ? p : null;
-    if (off === noClickTo) return;
-    noClickTo?.setOptions({ clickToGo: true });
-    off?.setOptions({ clickToGo: false });
-    noClickTo = off;
-  }
+  const clickToGo = () => ggs.lock.clickToGo('mirror', want('move'));
   function walkBack(x) {
     const el = panoElement();
-    const p = panoOf.get(el);
+    const p = panoAt(el);
     const links = p?.getLinks?.();
-    if (!links?.length) return;
+    // never in a game that doesn't let you move
+    if (!links?.length || !ggs.lock.gameAllows(p, 'clickToGo')) return;
     const r = el.getBoundingClientRect();
     const pov = p.getPov();
     const fov = 180 / 2 ** (p.getZoom?.() ?? 1);
@@ -3343,7 +3638,6 @@ section.flat .status:empty { display: none; }
   // Added once, at document_start, so they run before GeoGuessr's and the Maps API's own
   // window listeners. They do nothing while no owner wants anything.
   for (const [t, fn] of LISTENERS) addEventListener(t, fn, { capture: true, passive: false });
-  let checking = null;
   function mirror(owner, m) {
     if (m) mirrors.set(owner, m);
     else mirrors.delete(owner);
@@ -3352,9 +3646,6 @@ section.flat .status:empty { display: none; }
       sent.clear();
     }
     clickToGo();
-    // GeoGuessr makes a new panorama now and then. Keep its clickToGo in step while any owner is on.
-    clearInterval(checking);
-    checking = mirrors.size ? setInterval(clickToGo, 500) : null;
   }
 
   ggs.viewMirror = { mirror, copyEvent };
@@ -3374,6 +3665,8 @@ section.flat .status:empty { display: none; }
 //     part swallows clicks, wheel and drags. The holes let them through.
 //   ggs.view.mirror(owner, flips | null) and ggs.view.copyEvent(e, change): see core/mirror.js.
 //   ggs.view.shape.rect / circle / poly build that path data.
+//   ggs.view.pinPano(el) / unpinPano(el): the panorama as its own stacking layer while
+//     something sits in it (counted, shared with the masks).
 //   guessArea() is the guess map's rect with its Guess button (null outside a round).
 //   lastTile() is when the last Street View tile reached the screen (performance.now()).
 (() => {
@@ -3581,28 +3874,20 @@ section.flat .status:empty { display: none; }
               stroke-width="${look.width}" stroke-linejoin="round"/>
       </svg>`,
     );
-    const m = { last: null, pano: null, saved: null };
-
-    // Puts back the panorama's own isolation and position.
+    const m = { last: null, pano: null };
     function unpin() {
-      if (m.pano) Object.assign(m.pano.style, m.saved);
+      if (m.pano) unpinPano(m.pano);
       m.pano = null;
-    }
-
-    // The panorama becomes its own stacking layer, so the sheet's z-index stays inside it
-    // and GeoGuessr's HUD keeps drawing above it.
-    function pin(pano) {
-      m.pano = pano;
-      m.saved = { isolation: pano.style.isolation, position: pano.style.position };
-      pano.style.isolation = 'isolate';
-      if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
     }
 
     function moveInto(parent) {
       unpin();
       parent.append(host);
       m.last = null;
-      if (!screen) pin(parent);
+      if (!screen) {
+        m.pano = parent;
+        pinPano(parent);
+      }
     }
 
     function drawHoles() {
@@ -3639,6 +3924,25 @@ section.flat .status:empty { display: none; }
     };
   }
 
+  // A panorama with pano masks in it becomes its own stacking layer, so the sheets' z-index
+  // stays inside it and GeoGuessr's HUD keeps drawing above them. Masks share it: its own
+  // isolation and position come back when the last one leaves.
+  // panorama element -> { count, saved }
+  const pinned = new Map();
+  function pinPano(pano) {
+    const p = pinned.get(pano);
+    if (p) return p.count++;
+    pinned.set(pano, { count: 1, saved: { isolation: pano.style.isolation, position: pano.style.position } });
+    pano.style.isolation = 'isolate';
+    if (getComputedStyle(pano).position === 'static') pano.style.position = 'relative';
+  }
+  function unpinPano(pano) {
+    const p = pinned.get(pano);
+    if (!p || --p.count > 0) return;
+    pinned.delete(pano);
+    Object.assign(pano.style, p.saved);
+  }
+
   // ---- the loop ----
   let raf = 0;
   function run() {
@@ -3657,7 +3961,18 @@ section.flat .status:empty { display: none; }
     raf = requestAnimationFrame(frame);
   }
 
-  ggs.view = { panoElement, guessArea, lastTile, effect, script, mask, shape, ...ggs.viewMirror };
+  ggs.view = {
+    panoElement,
+    guessArea,
+    lastTile,
+    effect,
+    script,
+    mask,
+    shape,
+    pinPano,
+    unpinPano,
+    ...ggs.viewMirror,
+  };
 })();
 
 // ==================== src/form-parts.js ===========================================
@@ -4402,6 +4717,7 @@ section.flat .status:empty { display: none; }
   const ggs = globalThis.__ggs;
   const MAX_H = 640;
   const AUTO_GUESS_MS = 6000;
+  const MAP_RETRY_MS = 5000;
 
   function start(cfg) {
     let lastToken;
@@ -4430,12 +4746,18 @@ section.flat .status:empty { display: none; }
         lastToken = token;
         ggs.game
           .mapInfo()
-          .then(m =>
-            m?.name
-              ? board.post({ ggs: 'map', name: m.name })
-              : ggs.debug('draw-guess: no map name, using world coverage'),
-          )
-          .catch(err => ggs.log('draw-guess: could not read the map, using world coverage', err));
+          .then(m => {
+            if (!m?.name) ggs.debug('draw-guess: no map name, using world coverage');
+            board.post({ ggs: 'map', name: m?.name ?? null });
+          })
+          .catch(err => {
+            ggs.log('draw-guess: could not read the map, using world coverage for now', err);
+            board.post({ ggs: 'map', name: null });
+            // tried again shortly
+            setTimeout(() => {
+              if (lastToken === token) lastToken = undefined;
+            }, MAP_RETRY_MS);
+          });
       },
     });
     board.post({ ggs: 'hard', on: !!cfg.hardMode });
@@ -4773,10 +5095,9 @@ section.flat .status:empty { display: none; }
       }
       const geo = await ggs.aid.loadGeo();
       const code = ggs.aid.countryAt(geo, loc);
-      if (!code) {
-        status('Not in any country this round');
-        return [];
-      }
+      // Far from any outline: the widest circle instead. Nothing drawn would give a lie away,
+      // since made-up spots are always on an outline.
+      if (!code) return hint.shapes({ loc, rand, cfg: { ...cfg, area: 6 }, status });
       const continent = Object.keys(geo).filter(c => ggs.CONTINENTS[c] === ggs.CONTINENTS[code]);
       const codes = continentOnly ? continent : [code, ...decoys(continent, code, 5 - area, rand())];
       // a continent is many countries: fill only, so its inner borders don't show
@@ -4821,9 +5142,10 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/guesses/main.js =================================
 // Extra guesses: every click on the guess map leaves a pin that looks just like GeoGuessr's own
 // (a copy of its pin element, with the original hidden), so you can't tell which is the guess.
-// On Guess, core/aid.js first moves the guess to the pin closest to the round's location. The
-// same happens if the script stops mid-round (Chaos mode). Without the location the guess stays
-// on the last click. Click a pin to take it back. With all pins down, a click moves the oldest.
+// GeoGuessr's hidden pin always sits on the newest pin. On Guess, core/aid.js first moves it to the
+// pin closest to the round's location. Stopping mid-round (Chaos mode) leaves it on the newest
+// pin, so toggling can't show which pin is closest. Click a pin to take it back, or shift-click
+// the map to take back the newest. With all pins down, a click moves the oldest.
 (() => {
   const ggs = globalThis.__ggs;
   // the boards' pin (marks.js)
@@ -4918,12 +5240,30 @@ section.flat .status:empty { display: none; }
     ctx.note(!n ? '' : max < Infinity ? `${n} of ${max} pins` : `${n} pin${n > 1 ? 's' : ''}`);
   };
 
+  // GeoGuessr's hidden pin goes to the newest pin left, or comes off with none left, so a pin
+  // taken back is never still the guess.
+  function follow(ctx) {
+    const last = ctx.pins.at(-1)?.getPosition();
+    try {
+      if (last) ggs.maps.placeGuess(last.lat(), last.lng(), { pan: false });
+      else ggs.maps.clearGuess();
+    } catch (err) {
+      ggs.log('could not move the guess', err);
+      ctx.note("Couldn't move the guess. Please tell Orlando");
+    }
+  }
+
+  function removePin(ctx, pin) {
+    ctx.remove(pin);
+    ctx.pins = ctx.pins.filter(p => p !== pin);
+    show(ctx);
+  }
+
   function addPin(ctx, latLng) {
     const pin = ctx.add(
       makePin(ctx, latLng, () => {
-        ctx.remove(pin);
-        ctx.pins = ctx.pins.filter(p => p !== pin);
-        show(ctx);
+        removePin(ctx, pin);
+        follow(ctx);
       }),
     );
     ctx.pins.push(pin);
@@ -4950,6 +5290,7 @@ section.flat .status:empty { display: none; }
       if (ctx.pins.length <= most(ctx.cfg)) return;
       while (ctx.pins.length > most(ctx.cfg)) ctx.remove(ctx.pins.pop());
       show(ctx);
+      follow(ctx);
     },
     click(latLng, ctx) {
       // full: the oldest pin makes way
@@ -4957,11 +5298,23 @@ section.flat .status:empty { display: none; }
       addPin(ctx, latLng);
       show(ctx);
     },
-    beforeGuess: closest,
-    // GeoGuessr's own pin moves to the closest one, so it's the guess that's left
-    stop(ctx) {
-      const best = ggs.maps.guessMapElement() && closest(ctx);
-      if (best) ggs.maps.placeGuess(best.lat, best.lng, { pan: false });
+    // GeoGuessr has taken its pin off, so the newest of ours goes with it. The pin left before it
+    // becomes the guess once GeoGuessr is done with the click.
+    unpin(ctx) {
+      const pin = ctx.pins.at(-1);
+      if (!pin) return;
+      removePin(ctx, pin);
+      if (ctx.pins.length) setTimeout(() => follow(ctx));
+    },
+    // Without the location yet, the first press is held so the player knows the guess would be
+    // their last pin, not the closest. The next press goes through as it is.
+    beforeGuess(ctx) {
+      if (ctx.loc || ctx.pins.length < 2) return closest(ctx);
+      const round = ggs.game.roundKey();
+      if (ctx.heldIn === round) return null;
+      ctx.heldIn = round;
+      ctx.note('Still finding the round, press Guess again to use your last pin');
+      return false;
     },
   });
 })();
@@ -5020,6 +5373,10 @@ section.flat .status:empty { display: none; }
       ctx.at = { lat: latLng.lat(), lng: latLng.lng() };
       if (!ctx.loc) ctx.note('Distance not known yet');
     },
+    unpin(ctx) {
+      ctx.at = ctx.km = ctx.measured = ctx.shownKm = null;
+      ctx.note('');
+    },
     tick(ctx) {
       if (ctx.at && ctx.loc && (ctx.measured !== ctx.at || ctx.measuredFrom !== ctx.loc)) {
         ctx.measured = ctx.at;
@@ -5066,7 +5423,8 @@ section.flat .status:empty { display: none; }
 
   ggs.scripts.wobble = ggs.aid('wobble', {
     usesLocation: false,
-    click(latLng, { cfg }) {
+    click(latLng, ctx) {
+      const { cfg } = ctx;
       // the square root spreads spots evenly over the disc
       const km = KM[cfg.size] * Math.sqrt(Math.random());
       const p = ggs.aid.destination(
@@ -5077,7 +5435,11 @@ section.flat .status:empty { display: none; }
       setTimeout(() => {
         try {
           ggs.maps.placeGuess(p.lat, p.lng, { pan: false });
-        } catch {}
+        } catch (err) {
+          ggs.log('could not wobble the pin', err);
+          ctx.note("Couldn't wobble the pin. Please tell Orlando");
+          ctx.status("Couldn't wobble the pin. Please tell Orlando");
+        }
       });
     },
   });
@@ -5133,16 +5495,27 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/ocean/main.js ===================================
 // Ocean only: a click inside any country's outline (draw-guess's geo.json, simplified coastlines)
 // takes the pin straight off again, as does switching it on. With no sea pin down, pressing Guess
-// does nothing (core/aid.js). The round timer can still guess.
+// does nothing (core/aid.js). The round timer can still guess. If the outlines don't load, it's
+// off for the round and says so, rather than block every guess.
 (() => {
   const ggs = globalThis.__ggs;
+
+  function off(ctx) {
+    ctx.off = true;
+    ctx.note("Couldn't load the country outlines, Ocean only is off this round");
+    ctx.status("Couldn't load the country outlines");
+  }
 
   ggs.scripts.ocean = ggs.aid('ocean', {
     usesLocation: false,
     round(ctx) {
       ctx.sea = false;
+      ctx.off = false;
       // fetch the outlines before the first click
-      ggs.aid.loadGeo().catch(() => {});
+      ggs.aid.loadGeo().then(
+        () => ctx.status(''),
+        () => off(ctx),
+      );
       // switched on mid-round: a pin already down may be on land, so it comes off
       if (!ctx.cleared) {
         ctx.cleared = true;
@@ -5150,6 +5523,7 @@ section.flat .status:empty { display: none; }
       }
     },
     click(latLng, ctx) {
+      if (ctx.off) return;
       const p = { lat: latLng.lat(), lng: latLng.lng() };
       ggs.aid.loadGeo().then(
         geo => {
@@ -5161,11 +5535,14 @@ section.flat .status:empty { display: none; }
           clearTimeout(ctx.noteTimer);
           ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
         },
-        () => ctx.status("Couldn't load the country outlines"),
+        () => off(ctx),
       );
     },
+    unpin(ctx) {
+      ctx.sea = false;
+    },
     beforeGuess(ctx) {
-      if (ctx.sea) return null;
+      if (ctx.sea || ctx.off) return null;
       ctx.note('Ocean only! Put a pin in the sea');
       return false;
     },
@@ -5242,7 +5619,8 @@ section.flat .status:empty { display: none; }
     description: 'The whole world is squashed into one country. Guess inside it.',
     section: 'guessing',
     defaultEnabled: false,
-    // the boards hide the map; the others move, add or score pins on the real world map
+    // the boards hide the map; the others move, add or score pins on the real world map, and
+    // Blind map keeps snapping the view back to the whole world
     excludes: [
       'draw-guess',
       'flag-guess',
@@ -5256,6 +5634,7 @@ section.flat .status:empty { display: none; }
       'lng-band',
       'radius',
       'liar',
+      'blind',
     ],
     options: [
       {
@@ -5401,7 +5780,8 @@ section.flat .status:empty { display: none; }
 // rows of the world (north to south), and along each row the country's land, gaps skipped, maps
 // to -180..180. So a pin in the west of Australia is a guess in the Americas. Clicks outside the
 // country take the pin off again. On Guess the pin moves to the world spot it stands for
-// (core/aid.js beforeGuess). The round timer running out guesses the unmoved pin.
+// (core/aid.js beforeGuess), and once the guess has gone the country view comes off. The round
+// timer running out guesses the unmoved pin. If the outlines don't load, it's off for the round.
 (() => {
   const ggs = globalThis.__ggs;
   // The world's latitudes that are squashed in: Tierra del Fuego to Greenland.
@@ -5543,6 +5923,47 @@ section.flat .status:empty { display: none; }
     return big[Math.floor(r * big.length)];
   }
 
+  function drawCountry(ctx, geo, want) {
+    const code = countryFor(geo, ctx.cfg);
+    const s = shape(geo, code);
+    ctx.layer?.setMap(null);
+    ctx.layer = new ctx.gm.Data({ map: ctx.map });
+    ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
+    ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
+    const b = s.bounds;
+    const padLat = (b.north - b.south) * 0.6;
+    const padLng = (b.east - b.west) * 0.6;
+    ctx.map.setOptions({
+      restriction: {
+        strictBounds: false,
+        latLngBounds: {
+          south: Math.max(-85, b.south - padLat),
+          north: Math.min(85, b.north + padLat),
+          west: wrap(b.west - padLng),
+          east: wrap(b.east + padLng),
+        },
+      },
+    });
+    ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
+    ctx.code = code;
+    ctx.shape = s;
+    ctx.drawn = want;
+  }
+
+  // The guess went out on the real world map, so the country view comes off.
+  function leave(ctx) {
+    ctx.guessed = true;
+    ctx.layer?.setMap(null);
+    ctx.map.setOptions({ restriction: null });
+  }
+
+  // Tried once a round, so a failed load isn't fetched again every tick.
+  function loadFailed(ctx) {
+    ctx.failedIn = ggs.game.roundKey();
+    ctx.note("Couldn't load the country outlines, Guess in a country is off this round");
+    ctx.status("Couldn't load the country outlines");
+  }
+
   ggs.scripts['in-country'] = ggs.aid('in-country', {
     usesLocation: false,
     attach(ctx) {
@@ -5566,42 +5987,18 @@ section.flat .status:empty { display: none; }
       }
     },
     tick(ctx) {
+      if (!ctx.guessed && ctx.shape && ggs.game.guessed()) leave(ctx);
       const want = `${ggs.game.roundKey()}|${ctx.cfg.country}|${ctx.cfg.world}`;
-      if (ctx.guessed || ctx.drawn === want || ctx.loading) return;
+      if (ctx.guessed || ctx.drawn === want || ctx.loading || ctx.failedIn === ggs.game.roundKey()) return;
       ctx.loading = true;
       ggs.aid.loadGeo().then(
         geo => {
           ctx.loading = false;
-          if (ctx.guessed || !ctx.map) return;
-          const code = countryFor(geo, ctx.cfg);
-          const s = shape(geo, code);
-          const gm = ctx.gm;
-          ctx.layer?.setMap(null);
-          ctx.layer = new gm.Data({ map: ctx.map });
-          ctx.layer.addGeoJson(features(geo, s, ctx.cfg.world));
-          ctx.layer.setStyle(f => ({ ...STYLES[f.getProperty('kind')], clickable: false }));
-          const b = s.bounds;
-          const padLat = (b.north - b.south) * 0.6;
-          const padLng = (b.east - b.west) * 0.6;
-          ctx.map.setOptions({
-            restriction: {
-              strictBounds: false,
-              latLngBounds: {
-                south: Math.max(-85, b.south - padLat),
-                north: Math.min(85, b.north + padLat),
-                west: wrap(b.west - padLng),
-                east: wrap(b.east + padLng),
-              },
-            },
-          });
-          ctx.map.fitBounds({ south: b.south, north: b.north, west: wrap(b.west), east: wrap(b.east) }, 10);
-          ctx.code = code;
-          ctx.shape = s;
-          ctx.drawn = want;
+          if (!ctx.guessed && ctx.map) drawCountry(ctx, geo, want);
         },
         () => {
           ctx.loading = false;
-          ctx.status("Couldn't load the country outlines");
+          loadFailed(ctx);
         },
       );
     },
@@ -5618,16 +6015,16 @@ section.flat .status:empty { display: none; }
       clearTimeout(ctx.noteTimer);
       ctx.noteTimer = setTimeout(() => ctx.note(''), 2000);
     },
+    unpin(ctx) {
+      ctx.pin = null;
+    },
     beforeGuess(ctx) {
       if (!ctx.shape) return null;
       if (!ctx.pin) {
         ctx.note(`Put a pin inside ${names()[ctx.code] ?? ctx.code}`);
         return false;
       }
-      // the guess goes out on the real world map, so the country view comes off
-      ctx.guessed = true;
-      ctx.layer?.setMap(null);
-      ctx.map.setOptions({ restriction: null });
+      // the view stays until the guess has really gone (another script can hold it back)
       return ctx.pin;
     },
     stop(ctx) {
@@ -5646,7 +6043,7 @@ section.flat .status:empty { display: none; }
     description: 'The guess map goes blank.',
     section: 'guessing',
     defaultEnabled: false,
-    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'drift'],
+    excludes: ['draw-guess', 'flag-guess', 'jack-guess', 'drift', 'in-country'],
     options: [{ key: 'grid', label: 'Grid lines', type: 'checkbox', default: true }],
   });
 })();
@@ -5839,10 +6236,16 @@ section.flat .status:empty { display: none; }
   // ---- silence GeoGuessr's own music and sounds while radio mode is on ----
   // Wrapped at document_start so every AudioContext and media element the page makes is
   // seen. While `muting`, contexts are suspended and other <audio>/<video> elements muted.
+  // Only what radio itself suspended or muted is restored afterwards, and everything is held
+  // weakly so the page's contexts and elements can still be garbage collected.
   const RealAudioContext = window.AudioContext;
-  const contexts = new Set();
-  const ours = new WeakSet();
+  const contexts = weakList();
+  const ours = new WeakSet(); // radio's own, and other OGGS scripts' (see exempt)
+  const suspendedByUs = new WeakSet(); // contexts to resume when radio stops
+  let mutedByUs = weakList(); // media elements to unmute when radio stops
+  let howlerByUs = false;
   let muting = false;
+  const realSuspend = (RealAudioContext ?? window.webkitAudioContext)?.prototype.suspend;
   for (const name of ['AudioContext', 'webkitAudioContext']) {
     const Orig = window[name];
     if (!Orig) continue;
@@ -5850,24 +6253,79 @@ section.flat .status:empty { display: none; }
       constructor(...args) {
         super(...args);
         contexts.add(this);
-        if (muting) this.suspend().catch(() => {});
+        if (muting) hush(this);
       }
     };
-    const resume = Orig.prototype.resume;
+    const { resume, suspend } = Orig.prototype;
+    // While muting, the page's resume is held back and done when radio stops instead.
     Orig.prototype.resume = function (...args) {
-      return muting && !ours.has(this) ? Promise.resolve() : resume.apply(this, args);
+      if (!muting || ours.has(this)) return resume.apply(this, args);
+      suspendedByUs.add(this);
+      return Promise.resolve();
+    };
+    // A suspend the page asks for itself stays suspended after radio stops.
+    Orig.prototype.suspend = function (...args) {
+      suspendedByUs.delete(this);
+      return suspend.apply(this, args);
     };
   }
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function (...args) {
-    if (muting && !ours.has(this)) this.muted = true;
+    if (muting && !ours.has(this)) muteElement(this);
     return play.apply(this, args);
   };
+
+  function hush(ctx) {
+    if (ours.has(ctx) || ctx.state === 'closed') return;
+    suspendedByUs.add(ctx);
+    realSuspend.call(ctx).catch(() => {});
+  }
+  function muteElement(m) {
+    if (m.muted) return;
+    m.muted = true;
+    mutedByUs.add(m);
+  }
   function muteGame(on) {
     muting = on;
-    for (const c of contexts) (on ? c.suspend() : c.resume()).catch(() => {});
-    for (const m of document.querySelectorAll('audio, video')) if (!ours.has(m)) m.muted = on;
-    window.Howler?.mute?.(on);
+    if (on) muteAll();
+    else unmuteAll();
+  }
+  function muteAll() {
+    for (const c of contexts) if (c.state === 'running') hush(c);
+    for (const m of document.querySelectorAll('audio, video')) if (!ours.has(m)) muteElement(m);
+    howlerByUs = !!window.Howler && !window.Howler._muted;
+    if (howlerByUs) window.Howler.mute?.(true);
+  }
+  function unmuteAll() {
+    for (const c of contexts) if (suspendedByUs.has(c)) restore(c);
+    for (const m of mutedByUs) m.muted = false;
+    mutedByUs = weakList();
+    if (howlerByUs) window.Howler?.mute?.(false);
+    howlerByUs = false;
+  }
+  function restore(ctx) {
+    suspendedByUs.delete(ctx);
+    if (ctx.state !== 'closed') ctx.resume().catch(() => {});
+  }
+  // Another OGGS script's context (Speech jammer, Scream to look): never silenced by radio.
+  function exempt(ctx) {
+    ours.add(ctx);
+    if (suspendedByUs.has(ctx)) restore(ctx);
+  }
+
+  // A set that doesn't keep its members alive; iterating skips (and forgets) collected ones.
+  function weakList() {
+    const refs = new Set();
+    return {
+      add: o => refs.add(new WeakRef(o)),
+      *[Symbol.iterator]() {
+        for (const r of refs) {
+          const o = r.deref();
+          if (o) yield o;
+          else refs.delete(r);
+        }
+      },
+    };
   }
 
   // ---- our own output: the station's <audio>, through an analyser and a gain ----
@@ -6000,7 +6458,7 @@ section.flat .status:empty { display: none; }
   }
 
   ggs.radio ??= {};
-  Object.assign(ggs.radio, { muteGame, output, musicCheck });
+  Object.assign(ggs.radio, { muteGame, output, musicCheck, exempt });
 })();
 
 // ==================== src/scripts/radio/stations.js ===============================
@@ -6657,6 +7115,7 @@ section.flat .status:empty { display: none; }
     let loc = null;
     let stations = [];
     let idx = 0;
+    let stopped = false;
 
     const setStatus = t => ui.setStatus(t);
     const stationLine = () => `Station ${idx + 1} of ${stations.length}`;
@@ -6760,6 +7219,7 @@ section.flat .status:empty { display: none; }
     // With CORS first (so the sound can be read); if the stream refuses, again without.
     function load(url, cors, startPaused = false) {
       drop();
+      if (stopped) return;
       const a = out.element(volume);
       audio = a;
       node = cors ? out.connect(a) : null;
@@ -6800,7 +7260,7 @@ section.flat .status:empty { display: none; }
     }
 
     function tune(i, { paused = false } = {}) {
-      if (!stations.length) return;
+      if (stopped || !stations.length) return;
       idx = ((i % stations.length) + stations.length) % stations.length;
       resetStation(paused);
       if (cfg.streamerMode && !paused && notActivated()) {
@@ -6904,15 +7364,16 @@ section.flat .status:empty { display: none; }
       round = key;
       clearRound();
       const found = await ggs.game.roundLocation().catch(() => null);
-      // A newer round took over during the wait, so this one's results are dropped.
-      if (round !== key) return;
+      // A newer round took over during the wait (or radio was switched off), so this one's
+      // results are dropped.
+      if (stopped || round !== key) return;
       loc = found;
       if (!loc) {
         tuning = false;
-        return setStatus(`No location: ${ggs.game.whyNoRound() || 'unknown'}`);
+        return setStatus(ggs.game.whyNoRound() || 'No location for this round');
       }
       const { list, failed } = await searchStations();
-      if (round !== key) return;
+      if (stopped || round !== key) return;
       stations = list;
       tuning = false;
       playFound(failed);
@@ -6953,6 +7414,10 @@ section.flat .status:empty { display: none; }
 
     function leaveGame() {
       drop();
+      stopTimers();
+      clearTimeout(skipping);
+      skipping = 0;
+      stations = [];
       ui?.hide(true);
       round = null;
     }
@@ -6980,6 +7445,8 @@ section.flat .status:empty { display: none; }
         if (retune) round = null; // retune this round
       },
       stop() {
+        stopped = true;
+        round = null;
         clearInterval(tick);
         clearTimeout(skipping);
         window.removeEventListener('pointerdown', unblock, true);
@@ -7035,7 +7502,8 @@ section.flat .status:empty { display: none; }
   const GEN4_WIDTH = 16384;
   const NEAR_DEG = 0.05; // ~5 km leeway at Ghana's coarse outline
 
-  const panos = new Map(); // pano -> container div (StreetViewPanorama has no getDiv())
+  // pano -> container div (StreetViewPanorama has no getDiv()); weak, so old ones can go
+  const panos = new WeakMap();
   let active = null;
   ggs.maps.hook('StreetViewPanorama', (p, args) => {
     if (!(args[0] instanceof HTMLElement)) return;
@@ -7066,23 +7534,13 @@ section.flat .status:empty { display: none; }
   }
   const inGhana = pt => insidePolygon(pt, ggs.GHANA) || nearEdge(pt, ggs.GHANA);
 
-  // pano id -> Promise<{ width, centerHeading } | null>, from the page's own Maps API
-  const tileCache = new Map();
-  function tiles(id) {
-    if (!tileCache.has(id)) {
-      tileCache.set(
-        id,
-        new window.google.maps.StreetViewService()
-          .getPanorama({ pano: id })
-          .then(({ data }) => ({
-            width: data.tiles.worldSize.width,
-            centerHeading: data.tiles.centerHeading,
-          }))
-          .catch(() => null),
-      );
-    }
-    return tileCache.get(id);
-  }
+  // { width, centerHeading } of a panorama, or null, from maps.js's shared lookup (which
+  // tries again next time after a failure)
+  const tiles = id =>
+    ggs.maps
+      .panoData(id)
+      .then(data => ({ width: data.tiles.worldSize.width, centerHeading: data.tiles.centerHeading }))
+      .catch(() => null);
 
   const rad = d => (d * Math.PI) / 180;
   function toCamera([x, y, z], pov) {
@@ -7114,6 +7572,17 @@ section.flat .status:empty { display: none; }
     return clipped.map(([x, y, z]) => [w / 2 + (f * x) / z, h / 2 - (f * y) / z]);
   }
 
+  // Panoramas gone from the page and from maps.js's list (which keeps the newest few, as a new
+  // one can be put on the page after it's made).
+  function gone(list) {
+    const kept = ggs.maps.panoramas();
+    return list.filter(p => !panos.get(p)?.isConnected && !kept.includes(p));
+  }
+  // The canvas lines up with its panorama once that is on the page.
+  function placeable(div) {
+    if (div.isConnected && getComputedStyle(div).position === 'static') div.style.position = 'relative';
+  }
+
   function start(cfg) {
     const attached = new Map(); // pano -> { canvas, listeners, resize, info }
 
@@ -7122,6 +7591,7 @@ section.flat .status:empty { display: none; }
       if (!st) return;
       const { canvas } = st;
       const div = panos.get(pano);
+      placeable(div);
       const w = div.clientWidth;
       const h = div.clientHeight;
       const dpr = devicePixelRatio || 1;
@@ -7254,13 +7724,21 @@ section.flat .status:empty { display: none; }
       draw(pano);
     }
 
+    // Panoramas that left the page let go of their canvas and listeners.
+    function detach(pano, st) {
+      for (const l of st.listeners) l.remove();
+      st.resize.disconnect();
+      st.canvas.remove();
+      attached.delete(pano);
+    }
+
     function attach(pano) {
       if (attached.has(pano)) return;
+      for (const p of gone([...attached.keys()])) detach(p, attached.get(p));
       const div = panos.get(pano);
       const canvas = document.createElement('canvas');
       canvas.style.cssText =
         'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000';
-      if (getComputedStyle(div).position === 'static') div.style.position = 'relative';
       div.append(canvas);
       const redraw = () => {
         try {
@@ -7285,7 +7763,7 @@ section.flat .status:empty { display: none; }
     }
 
     active = { attach };
-    for (const p of panos.keys()) attach(p);
+    for (const [p, el] of ggs.maps.panoramaEls()) if (el instanceof HTMLElement) attach(p);
 
     return {
       update(next) {
@@ -7295,12 +7773,7 @@ section.flat .status:empty { display: none; }
       },
       stop() {
         active = null;
-        for (const st of attached.values()) {
-          for (const l of st.listeners) l.remove();
-          st.resize.disconnect();
-          st.canvas.remove();
-        }
-        attached.clear();
+        for (const [p, st] of attached) detach(p, st);
       },
     };
   }
@@ -8254,7 +8727,8 @@ section.flat .status:empty { display: none; }
 // ==================== src/scripts/lying-signs/detector.js =========================
 // Lying signs: the text detector. worker.js (PP-OCRv4 on onnxruntime-web) runs in a blob
 // worker, with its files fetched from ggs.extBase, and tiles wait in a queue that runs the
-// one nearest the view first. Shared on ggs.lyingSigns as loadDetector and detect.
+// one nearest the view first. Shared on ggs.lyingSigns as loadDetector, unloadDetector and
+// detect.
 (() => {
   const ggs = globalThis.__ggs;
   const ls = ggs.lyingSigns;
@@ -8268,56 +8742,123 @@ section.flat .status:empty { display: none; }
   let workerReady = null;
   let nextId = 0;
   const waiting = new Map(); // id -> resolve
+  // A failed load is tried again after RETRY_MS, at most LOAD_TRIES times a session, so a
+  // broken detector doesn't download its files again and again.
+  const RETRY_MS = 60000;
+  const LOAD_TRIES = 3;
+  let failures = 0;
+  let failedAt = -Infinity;
+  // Counts loads and unloads, so a load overtaken by an unload stops and leaves no worker.
+  let loadRun = 0;
+  // Rejects the worker's start while it's loading, so an unload can end it.
+  let abortInit = null;
 
   function loadDetector() {
     if (workerReady) return workerReady;
-    workerReady = startWorker();
+    if (failures >= LOAD_TRIES || performance.now() - failedAt < RETRY_MS) {
+      return Promise.reject(new Error('text detector unavailable'));
+    }
+    const run = ++loadRun;
+    workerReady = startWorker(run);
     workerReady.catch(err => {
+      // unloaded meanwhile: not a failure, and a newer load may be running
+      if (run !== loadRun) return;
+      failures++;
       ggs.log('lying-signs: text detector failed to load', err);
-      // Close the half-started worker so a retry doesn't leave it running.
-      worker?.terminate();
-      worker = null;
-      workerReady = null;
+      if (failures >= LOAD_TRIES) ggs.status('lying-signs', "Sign reading isn't working on this computer");
+      failedAt = performance.now();
+      stopWorker();
     });
     return workerReady;
   }
-  async function startWorker() {
+  // The script is off: the worker and its model go, and tiles still waiting get nothing.
+  // The next loadDetector starts it again.
+  function unloadDetector() {
+    loadRun++;
+    for (const j of queue.splice(0)) j.res(null);
+    stopWorker();
+  }
+  // Closes the worker (a half-started one too, so a retry doesn't leave it running) and
+  // answers every waiting tile with nothing.
+  function stopWorker() {
+    abortInit?.(new Error('text detector stopped'));
+    abortInit = null;
+    worker?.terminate();
+    worker = null;
+    workerReady = null;
+    for (const id of [...waiting.keys()]) settle(id, null);
+  }
+  // Blob URLs handed to the worker are freed once it has loaded them or failed.
+  async function startWorker(run) {
     if (!ggs.extBase) throw new Error('extension base URL not known yet');
-    const files = await fetchFiles();
-    worker = new Worker(URL.createObjectURL(new Blob([files.src], { type: 'text/javascript' })));
-    worker.onmessage = onResult;
-    const backend = await initWorker(files);
-    stats.backend = backend;
-    ggs.debug(`lying-signs: text detector ready (${backend})`);
+    const urls = [];
+    try {
+      const files = await fetchFiles(urls);
+      if (run !== loadRun) throw new Error('text detector stopped');
+      const src = URL.createObjectURL(new Blob([files.src], { type: 'text/javascript' }));
+      urls.push(src);
+      worker = new Worker(src);
+      worker.onmessage = onResult;
+      const backend = await initWorker(files);
+      watchCrash();
+      stats.backend = backend;
+      ggs.debug(`lying-signs: text detector ready (${backend})`);
+    } finally {
+      for (const u of urls) URL.revokeObjectURL(u);
+    }
+  }
+  // It's running now: a crash later gives up on the tiles it had and loads again on demand.
+  function watchCrash() {
+    worker.onerror = err => {
+      ggs.log('lying-signs: text detector crashed', err.message);
+      failedAt = performance.now();
+      stopWorker();
+    };
   }
   // The worker's source, and the runtime as blob URLs (a page can't hand a worker
-  // chrome-extension:// URLs), and the model.
-  async function fetchFiles() {
+  // chrome-extension:// URLs), and the model. A file that didn't come back fails the load.
+  async function fetchFiles(urls) {
     const u = f => ggs.extBase + VENDOR + f;
-    const blobUrl = async (url, type) => {
-      const bytes = await (await fetch(url)).arrayBuffer();
-      return URL.createObjectURL(new Blob([bytes], { type }));
+    const get = async url => {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url.split('/').pop()}: HTTP ${r.status}`);
+      return r;
     };
-    const [src, ort, mjs, wasm, model] = await Promise.all([
-      fetch(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
+    const blobUrl = async (url, type) => {
+      const bytes = await (await get(url)).arrayBuffer();
+      const b = URL.createObjectURL(new Blob([bytes], { type }));
+      urls.push(b);
+      return b;
+    };
+    // all settled before failing, so every blob URL made is in `urls` to be freed
+    const got = await Promise.allSettled([
+      get(`${ggs.extBase}src/scripts/lying-signs/worker.js`).then(r => r.text()),
       blobUrl(u('ort.webgpu.min.js'), 'text/javascript'),
       blobUrl(u('ort-wasm-simd-threaded.asyncify.mjs'), 'text/javascript'),
       blobUrl(u('ort-wasm-simd-threaded.asyncify.wasm'), 'application/wasm'),
-      fetch(u('ch_PP-OCRv4_det.onnx')).then(r => r.arrayBuffer()),
+      get(u('ch_PP-OCRv4_det.onnx')).then(r => r.arrayBuffer()),
     ]);
+    const failed = got.find(r => r.status === 'rejected');
+    if (failed) throw failed.reason;
+    const [src, ort, mjs, wasm, model] = got.map(r => r.value);
     return { src, ort, mjs, wasm, model };
   }
-  // Sends the files to the worker; resolves with the backend it got (webgpu or wasm).
+  // Sends the files to the worker; resolves with the backend it got (webgpu or wasm), or fails
+  // if the worker won't start or reports an error.
   function initWorker({ ort, mjs, wasm, model }) {
     return new Promise((res, rej) => {
+      abortInit = rej;
       const onmsg = e => {
         if (e.data.type === 'ready') {
+          abortInit = null;
           worker.removeEventListener('message', onmsg);
+          worker.onerror = null;
           res(e.data.backend);
         } else if (e.data.type === 'error') {
           rej(new Error(e.data.message));
         }
       };
+      worker.onerror = e => rej(new Error(e.message || 'worker failed to start'));
       worker.addEventListener('message', onmsg);
       worker.postMessage({ type: 'init', ort, mjs, wasm, model }, [model]);
     });
@@ -8340,6 +8881,11 @@ section.flat .status:empty { display: none; }
   }
   async function runDetector(img) {
     const bitmap = await createImageBitmap(img);
+    // unloaded while the picture was copied
+    if (!worker) {
+      bitmap.close();
+      return null;
+    }
     return new Promise(r => {
       const id = ++nextId;
       waiting.set(id, r);
@@ -8369,25 +8915,35 @@ section.flat .status:empty { display: none; }
     stats.skipped = (stats.skipped || 0) + 1;
     job.res(null);
   }
+  // No detector: every waiting tile gets nothing (it's tried again if uploaded again). One
+  // tile failing only drops that tile.
   async function pump() {
     if (inflight >= MAX_INFLIGHT || !queue.length) return;
     inflight++;
     try {
-      await loadDetector();
-      const job = pickJob();
-      // another pump may have taken the last job while the detector loaded
-      if (!job) return;
-      if (!job.alive()) {
-        drop(job);
-        return;
-      }
+      if (
+        await loadDetector().then(
+          () => true,
+          () => false,
+        )
+      )
+        await runNext();
+      else for (const j of queue.splice(0)) j.res(null);
+    } finally {
+      inflight--;
+      if (queue.length && workerReady) pump();
+    }
+  }
+  async function runNext() {
+    const job = pickJob();
+    // another pump may have taken the last job while the detector loaded
+    if (!job) return;
+    if (!job.alive()) return drop(job);
+    try {
       job.res(await runDetector(job.img));
     } catch {
       stats.failed++;
-      for (const j of queue.splice(0)) j.res(null);
-    } finally {
-      inflight--;
-      if (queue.length) pump();
+      job.res(null);
     }
   }
   function pickJob() {
@@ -8405,16 +8961,14 @@ section.flat .status:empty { display: none; }
   }
 
   // ---- which way you're looking, for the queue order ----
-  const panos = new Set();
   ggs.maps.hook('StreetViewPanorama', p => {
-    panos.add(p);
     try {
       p.addListener('pano_changed', pruneQueue);
     } catch {}
   });
   function pruneQueue() {
     const shown = new Set();
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       try {
         shown.add(p.getPano());
       } catch {}
@@ -8428,7 +8982,7 @@ section.flat .status:empty { display: none; }
   function tileDistance(url) {
     const k = ggs.tileKey(url);
     if (!k) return null;
-    for (const p of panos) {
+    for (const p of ggs.maps.panoramas()) {
       const view = viewOf(p, k.pano);
       if (view === undefined) continue;
       if (!view) return null;
@@ -8460,7 +9014,7 @@ section.flat .status:empty { display: none; }
   // queue sizes, for ggs.lyingSigns.debug()
   const queueState = () => ({ queue: queue.length, inflight, waiting: waiting.size });
 
-  Object.assign(ls, { loadDetector, detect, queueState });
+  Object.assign(ls, { loadDetector, unloadDetector, detect, queueState });
 })();
 
 // ==================== src/scripts/lying-signs/main.js =============================
@@ -8582,7 +9136,12 @@ section.flat .status:empty { display: none; }
 
   // ---- tiles ----
   // url -> { key, img, canvas, cfg, recs: [upload records], drawn: Set of signs }
+  // Each edit is a ~1 MB canvas, so only the last KEEP_PANOS panoramas' tiles are kept (never
+  // one on screen), and at most MAX_TILES in all.
   const tiles = new Map();
+  const KEEP_PANOS = 2;
+  const MAX_TILES = 1200;
+  let recent = []; // panoramas with kept tiles, last used last
 
   // What goes into WebGL for this tile: the edit if the area is known, otherwise a blur while
   // the detector works. Tiles another script already swapped for a canvas are left alone.
@@ -8607,22 +9166,51 @@ section.flat .status:empty { display: none; }
     if (!t) {
       t = { key: k, img, canvas: null, cfg: null, recs: [], drawn: new Set() };
       tiles.set(rec.url, t);
-      if (tiles.size > 800) tiles.delete(tiles.keys().next().value);
+      if (tiles.size > MAX_TILES) dropTile(tiles.keys().next().value);
       stats.seen++;
     }
+    keepRecent(k.pano);
     t.img = img;
     t.recs = t.recs.filter(ggs.tiles.live);
     t.recs.push(rec);
     return t;
   }
 
+  function keepRecent(pano) {
+    if (recent.at(-1) === pano) return;
+    recent = [...recent.filter(p => p !== pano), pano];
+    if (recent.length <= KEEP_PANOS) return;
+    const shown = shownPanos();
+    const old = recent.find(p => p !== pano && !shown.has(p));
+    if (old) dropPano(old);
+  }
+  function shownPanos() {
+    const shown = new Set();
+    for (const p of ggs.maps.panoramas()) {
+      try {
+        shown.add(p.getPano());
+      } catch {}
+    }
+    return shown;
+  }
+  function dropPano(pano) {
+    recent = recent.filter(p => p !== pano);
+    for (const [url, t] of tiles) if (t.key.pano === pano) dropTile(url);
+  }
+  function dropTile(url) {
+    stale.delete(tiles.get(url));
+    tiles.delete(url);
+  }
+  // A tile dropped from `tiles` is done with: its detection is skipped, or its result ignored.
+  const kept = (t, url) => tiles.get(url) === t;
+
   function queueDetect(t, url) {
     const k = t.key;
     const W = t.img.naturalWidth || t.img.width;
     t.queued = true;
-    detect(t.img, () => t.recs.some(ggs.tiles.live), url).then(found => {
+    detect(t.img, () => kept(t, url) && t.recs.some(ggs.tiles.live), url).then(found => {
       t.queued = false;
-      if (!found) return; // skipped or failed; a later upload retries
+      if (!found || !kept(t, url)) return; // skipped or failed; a later upload retries
       detectedTiles.add(tileId(k));
       stats.boxes += found.length;
       const { added, removed } = addSigns(k, W, found);
@@ -8707,7 +9295,7 @@ section.flat .status:empty { display: none; }
     t.recs = t.recs.filter(ggs.tiles.live);
     for (const r of t.recs) {
       try {
-        if (ggs.tiles.upload(r, t.canvas)) stats.edited++;
+        if (ggs.tiles.reupload(r, t.canvas, 1)) stats.edited++;
       } catch (err) {
         stats.failed++;
         if (stats.failed < 4) ggs.log('lying-signs: re-upload failed', err);
@@ -8717,14 +9305,32 @@ section.flat .status:empty { display: none; }
 
   ls.debug = () => ({ ...ls.queueState(), tiles: tiles.size, panos: signs.size, stale: stale.size });
 
+  // Everything found and drawn, freed on stop.
+  function forgetAll() {
+    tiles.clear();
+    stale.clear();
+    signs.clear();
+    detectedTiles.clear();
+    recent = [];
+  }
+
+  // The detector (worker and model) goes a while after the script stops, so switching it
+  // straight back on (Chaos mode) doesn't load it again.
+  const UNLOAD_MS = 30000;
+  let unloadTimer = null;
+
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
-    loadDetector();
+    clearTimeout(unloadTimer);
+    loadDetector().catch(() => {}); // the detector says why itself
     ggs.tiles.replay();
     return {
       stop() {
         active = null;
+        forgetAll();
+        clearTimeout(unloadTimer);
+        unloadTimer = setTimeout(ls.unloadDetector, UNLOAD_MS);
         ggs.tiles.replay();
       },
       update(next) {
@@ -8924,7 +9530,7 @@ section.flat .status:empty { display: none; }
     new Promise(r => (document.hidden ? setTimeout(r) : requestAnimationFrame(() => setTimeout(r))));
   function reupload(k, t, tiles) {
     try {
-      return ggs.tiles.upload(t.rec, melt(k, t.src, tiles));
+      return ggs.tiles.reupload(t.rec, melt(k, t.src, tiles), 2);
     } catch (err) {
       ggs.log('gradient: re-upload failed', err);
       return false;
@@ -9813,14 +10419,21 @@ section.flat .status:empty { display: none; }
     let stream = null;
     let audio = null;
     let analyser = null;
+    let track = null;
     let raf = 0;
+    // switched itself off: its message stays for the popup to show
+    let blocked = false;
     const status = text => ggs.status('eye', text);
+    status('');
 
-    // no sheet until there's a microphone to open the eye with
+    // No sheet unless the microphone is really heard, so silence from a paused page or a
+    // lost microphone never keeps the view covered.
+    const hearing = () =>
+      analyser && audio.state === 'running' && track?.readyState === 'live' && !track.muted;
     const mask = ggs.view.mask({
       over: 'pano',
       look: 'paper',
-      cut: (w, h) => (!analyser || open > 0.98 ? null : lids(w, h, open)),
+      cut: (w, h) => (!hearing() || open > 0.98 ? null : lids(w, h, open)),
     });
 
     const resume = () => {
@@ -9830,8 +10443,13 @@ section.flat .status:empty { display: none; }
       if (stopped) return;
       const running = audio.state === 'running';
       for (const t of GESTURES) window[running ? 'removeEventListener' : 'addEventListener'](t, resume, true);
-      status(running ? 'Listening' : 'Click the page to start listening');
+      status(running ? micState() : 'Click the page to start listening, the eye is open until then');
     };
+    function micState() {
+      if (track.readyState !== 'live') return 'Microphone lost, so the eye stays open';
+      if (track.muted) return 'Microphone muted, so the eye stays open';
+      return 'Listening';
+    }
 
     const buf = new Float32Array(1024);
     function frame() {
@@ -9848,6 +10466,7 @@ section.flat .status:empty { display: none; }
     // refused: it switches itself off rather than stay on doing nothing
     function micFailed(err) {
       if (err?.name === 'NotAllowedError') {
+        blocked = true;
         ggs.saveSetting('eye', { enabled: false });
         status('Microphone blocked, so it was switched off');
       } else {
@@ -9857,10 +10476,13 @@ section.flat .status:empty { display: none; }
 
     function listen() {
       audio = new AudioContext();
+      ggs.radio?.exempt?.(audio); // radio mode mustn't silence it
       const a = audio.createAnalyser();
       a.fftSize = buf.length;
       audio.createMediaStreamSource(stream).connect(a);
       analyser = a;
+      track = stream.getAudioTracks()[0];
+      for (const t of ['ended', 'mute', 'unmute']) track?.addEventListener(t, onState);
       audio.addEventListener('statechange', onState);
       onState();
       frame();
@@ -9891,7 +10513,7 @@ section.flat .status:empty { display: none; }
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
         if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
-        status('');
+        if (!blocked) status('');
       },
       update(next) {
         sensitivity = next.sensitivity ?? 5;
@@ -10152,17 +10774,12 @@ section.flat .status:empty { display: none; }
   };
 
   // ---- panoramas, for rubber-banding and stutter ----
-  const panos = new Map(); // StreetViewPanorama -> its element
   ggs.lag ??= {};
   ggs.lag.onMove = null; // the running script's pano_changed handler
-  ggs.maps.hook('StreetViewPanorama', (p, args) => {
-    panos.set(p, args[0]);
+  ggs.maps.hook('StreetViewPanorama', p => {
     window.google.maps.event.addListener(p, 'pano_changed', () => ggs.lag.onMove?.(p));
   });
-  function pano() {
-    const el = ggs.view.panoElement();
-    return el && [...panos].reverse().find(([, e]) => e === el || e?.contains?.(el) || el.contains(e))?.[0];
-  }
+  const pano = () => ggs.maps.panoramaAt(ggs.view.panoElement());
 
   Object.assign(ggs.lag, { inRound, panoRect, chunky, pano });
 })();
@@ -10894,7 +11511,6 @@ section.flat .status:empty { display: none; }
     let amount = cfg.amount ?? 6;
     let round = null;
     let pano = null;
-    let saved = null;
     let drag = null;
     const host = document.createElement('div');
     host.setAttribute('data-ggs-view', '');
@@ -11009,17 +11625,16 @@ section.flat .status:empty { display: none; }
 
     // ---- placement: on the panorama during a round, nowhere otherwise ----
     function unpin() {
-      if (pano) Object.assign(pano.style, saved);
+      if (pano) ggs.view.unpinPano(pano);
       pano = null;
     }
-    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD
+    // the panorama becomes its own stacking layer, so the foil stays under GeoGuessr's HUD;
+    // shared with view masks, so whichever leaves last puts its style back
     function pin(el) {
       unpin();
       el.append(host);
       pano = el;
-      saved = { isolation: el.style.isolation, position: el.style.position };
-      el.style.isolation = 'isolate';
-      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+      ggs.view.pinPano(el);
     }
     const resized = () => {
       const dpr = devicePixelRatio || 1;
@@ -11222,7 +11837,10 @@ section.flat .status:empty { display: none; }
     let stopped = false;
     let stream = null;
     let audio = null;
+    // switched itself off: its message stays for the popup to show
+    let blocked = false;
     const status = text => ggs.status('jammer', text);
+    status('');
 
     // a page can only start sound after a click or key press, so it waits for one if needed
     const resume = () => {
@@ -11238,6 +11856,7 @@ section.flat .status:empty { display: none; }
     // refused: it switches itself off rather than stay on doing nothing
     function micFailed(err) {
       if (err?.name === 'NotAllowedError') {
+        blocked = true;
         ggs.saveSetting('jammer', { enabled: false });
         status('Microphone blocked, so it was switched off');
       } else {
@@ -11260,6 +11879,7 @@ section.flat .status:empty { display: none; }
         return;
       }
       audio = new AudioContext({ latencyHint: 'interactive' });
+      ggs.radio?.exempt?.(audio); // radio mode mustn't silence it
       graph(audio, stream);
       audio.addEventListener('statechange', onState);
       onState();
@@ -11271,7 +11891,7 @@ section.flat .status:empty { display: none; }
         for (const t of GESTURES) window.removeEventListener(t, resume, true);
         if (stream) for (const t of stream.getTracks()) t.stop();
         audio?.close().catch(() => {});
-        status('');
+        if (!blocked) status('');
       },
     };
   }
@@ -11328,7 +11948,8 @@ section.flat .status:empty { display: none; }
 // effect FIRST_MS in. A drawing board stays for the rest of its round and ends the effects that
 // need the map.
 // The next effect is picked a whole interval ahead so slow ones (tile filters, Minecraft) can
-// prepare. One that isn't ready in time waits a turn and a quick one goes instead.
+// prepare; Minecraft starts only LEAD before its slot. One that isn't ready in time waits a
+// turn and a quick one goes instead.
 (() => {
   const ggs = globalThis.__ggs;
   const EVERY = [10, 15, 20, 30, 45, 60, 90, 120]; // seconds, by the slider
@@ -11581,10 +12202,20 @@ section.flat .status:empty { display: none; }
       const key = board || !others.length ? (pick(boards) ?? null) : pick(others);
       return key && make(key);
     }
-    // The effect for the slot `ms` from now, starting to get ready.
+    // The effect for the slot `ms` from now, starting to get ready. One with a LEAD (a paid
+    // Minecraft generation) only starts once its slot is that near (prepareDue), so less is
+    // wasted when the round ends or the player moves before it goes on.
     function queue(ms) {
       queued = choose(ms, false);
       if (!queued) return;
+      if (ms > (LEAD[queued.key] ?? ms)) queued.waiting = true;
+      else getReady(ms);
+    }
+    function prepareDue() {
+      if (queued?.waiting && next <= LEAD[queued.key]) getReady(next);
+    }
+    function getReady(ms) {
+      delete queued.waiting;
       const prepare = () => {
         try {
           queued.prep = ggs.scripts[queued.key]?.prepare?.(queued.cfg) ?? null;
@@ -11660,6 +12291,15 @@ section.flat .status:empty { display: none; }
       return gone;
     }
 
+    // In a round: the next slot comes closer, and is filled when it's due.
+    function countDown(dt) {
+      next -= dt;
+      prepareDue();
+      if (next > 0) return;
+      next = span = EVERY[cfg.every] * 1000;
+      slot();
+    }
+
     const tick = setInterval(() => {
       const now = performance.now();
       const dt = now - last;
@@ -11673,11 +12313,7 @@ section.flat .status:empty { display: none; }
       const reset = round !== lastRound && resetRound(round);
       const gone = age(dt, inRound, over, round);
       if (reset || gone) changed();
-      if (inRound) next -= dt;
-      if (inRound && next <= 0) {
-        next = span = EVERY[cfg.every] * 1000;
-        slot();
-      }
+      if (inRound) countDown(dt);
       panel.show(!!ggs.game.context());
       draw(false);
     }, TICK_MS);
@@ -11895,12 +12531,15 @@ section.flat .status:empty { display: none; }
     }
   }
 
-  // Single-page app, so watch the path. A game that might be competitive is blocked at
-  // once and only unblocked when the check says it's friendly.
+  const RECHECK_MS = 5000;
+  // Single-page app, so watch the path and the game on it (party games change game under one
+  // path). A game that might be competitive is blocked at once and only unblocked when the
+  // check says it's friendly.
   function onPath() {
-    if (location.pathname === path) return;
-    path = location.pathname;
-    ggs.game.noteLobby(path);
+    const now = `${location.pathname}|${ggs.game.context()?.token ?? ''}`;
+    if (now === path) return;
+    path = now;
+    ggs.game.noteLobby(location.pathname);
     const ctx = ggs.game.context();
     const maybe = ctx && ctx.mode !== 'standard' && ctx.mode !== 'challenge';
     if (maybe && !blocked) {
@@ -11908,16 +12547,23 @@ section.flat .status:empty { display: none; }
       apply();
     }
     const id = ++check;
-    ggs.game.competitive().then(({ competitive, why }) => {
-      if (id !== check) return;
-      if (competitive || maybe) {
-        ggs.debug(competitive ? 'competitive game: all scripts off' : 'friendly game: scripts on', why);
-      }
-      if (competitive !== blocked) {
-        blocked = competitive;
-        apply();
-      }
-    });
+    ggs.game.competitive().then(result => checked(id, maybe, result));
+  }
+  function checked(id, maybe, { competitive, why, retry }) {
+    if (id !== check) return;
+    // The game data couldn't be read: checked again shortly (the path test lets it through).
+    if (retry) {
+      setTimeout(() => {
+        if (id === check) path = null;
+      }, RECHECK_MS);
+    }
+    if (competitive || maybe) {
+      ggs.debug(competitive ? 'competitive game: all scripts off' : 'friendly game: scripts on', why);
+    }
+    if (competitive !== blocked) {
+      blocked = competitive;
+      apply();
+    }
   }
 
   // The game mode goes out as the '_mode' status line, so the form can hide options
