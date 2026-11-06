@@ -59,6 +59,7 @@
     }
   }
 
+  const RECHECK_MS = 5000;
   // Single-page app, so watch the path. A game that might be competitive is blocked at
   // once and only unblocked when the check says it's friendly.
   function onPath() {
@@ -72,16 +73,23 @@
       apply();
     }
     const id = ++check;
-    ggs.game.competitive().then(({ competitive, why }) => {
-      if (id !== check) return;
-      if (competitive || maybe) {
-        ggs.debug(competitive ? 'competitive game: all scripts off' : 'friendly game: scripts on', why);
-      }
-      if (competitive !== blocked) {
-        blocked = competitive;
-        apply();
-      }
-    });
+    ggs.game.competitive().then(result => checked(id, maybe, result));
+  }
+  function checked(id, maybe, { competitive, why, retry }) {
+    if (id !== check) return;
+    // The game data couldn't be read: checked again shortly (the path test lets it through).
+    if (retry) {
+      setTimeout(() => {
+        if (id === check) path = null;
+      }, RECHECK_MS);
+    }
+    if (competitive || maybe) {
+      ggs.debug(competitive ? 'competitive game: all scripts off' : 'friendly game: scripts on', why);
+    }
+    if (competitive !== blocked) {
+      blocked = competitive;
+      apply();
+    }
   }
 
   // The game mode goes out as the '_mode' status line, so the form can hide options
