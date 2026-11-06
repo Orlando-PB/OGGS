@@ -5,7 +5,8 @@
 // effect FIRST_MS in. A drawing board stays for the rest of its round and ends the effects that
 // need the map.
 // The next effect is picked a whole interval ahead so slow ones (tile filters, Minecraft) can
-// prepare. One that isn't ready in time waits a turn and a quick one goes instead.
+// prepare; Minecraft starts only LEAD before its slot. One that isn't ready in time waits a
+// turn and a quick one goes instead.
 (() => {
   const ggs = globalThis.__ggs;
   const EVERY = [10, 15, 20, 30, 45, 60, 90, 120]; // seconds, by the slider
@@ -258,10 +259,20 @@
       const key = board || !others.length ? (pick(boards) ?? null) : pick(others);
       return key && make(key);
     }
-    // The effect for the slot `ms` from now, starting to get ready.
+    // The effect for the slot `ms` from now, starting to get ready. One with a LEAD (a paid
+    // Minecraft generation) only starts once its slot is that near (prepareDue), so less is
+    // wasted when the round ends or the player moves before it goes on.
     function queue(ms) {
       queued = choose(ms, false);
       if (!queued) return;
+      if (ms > (LEAD[queued.key] ?? ms)) queued.waiting = true;
+      else getReady(ms);
+    }
+    function prepareDue() {
+      if (queued?.waiting && next <= LEAD[queued.key]) getReady(next);
+    }
+    function getReady(ms) {
+      delete queued.waiting;
       const prepare = () => {
         try {
           queued.prep = ggs.scripts[queued.key]?.prepare?.(queued.cfg) ?? null;
@@ -337,6 +348,15 @@
       return gone;
     }
 
+    // In a round: the next slot comes closer, and is filled when it's due.
+    function countDown(dt) {
+      next -= dt;
+      prepareDue();
+      if (next > 0) return;
+      next = span = EVERY[cfg.every] * 1000;
+      slot();
+    }
+
     const tick = setInterval(() => {
       const now = performance.now();
       const dt = now - last;
@@ -350,11 +370,7 @@
       const reset = round !== lastRound && resetRound(round);
       const gone = age(dt, inRound, over, round);
       if (reset || gone) changed();
-      if (inRound) next -= dt;
-      if (inRound && next <= 0) {
-        next = span = EVERY[cfg.every] * 1000;
-        slot();
-      }
+      if (inRound) countDown(dt);
       panel.show(!!ggs.game.context());
       draw(false);
     }, TICK_MS);
