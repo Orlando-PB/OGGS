@@ -30,10 +30,7 @@
         return;
       }
       // the outermost marker element, and its offset from the clicked spot
-      let root = el;
-      while (root.parentElement?.matches(ggs.maps.GUESS_PIN_SELECTORS.join(', '))) {
-        root = root.parentElement;
-      }
+      const root = ggs.maps.pinRoot(el);
       const r = root.getBoundingClientRect();
       const m = map.getDiv().getBoundingClientRect();
       const p = proj.fromLatLngToContainerPixel(latLng);

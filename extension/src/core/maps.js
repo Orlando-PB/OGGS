@@ -26,6 +26,13 @@
   // GeoGuessr's own guess pin (guessed, never seen live). The extra-guesses script hides it
   // so its pins all look the same.
   const GUESS_PIN_SELECTORS = ['[class*="guess-map_"] [class*="marker_"]', '[data-qa="guess-marker"]'];
+  // The whole pin round a matched element: its outermost ancestor that also matches.
+  const pinRoot = el => {
+    const sel = GUESS_PIN_SELECTORS.join(', ');
+    let root = el;
+    while (root.parentElement?.matches(sel)) root = root.parentElement;
+    return root;
+  };
 
   // ---- constructor hooks: see every Map / StreetViewPanorama GeoGuessr makes ----
   // hook('StreetViewPanorama', (instance, args) => ...). Wrapped once google.maps exists.
@@ -203,6 +210,7 @@
     guessButton,
     GUESS_AREA,
     GUESS_PIN_SELECTORS,
+    pinRoot,
     hook,
     debug,
   };
