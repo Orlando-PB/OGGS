@@ -116,7 +116,12 @@
 
   // ---- tiles ----
   // url -> { key, img, canvas, cfg, recs: [upload records], drawn: Set of signs }
+  // Each edit is a ~1 MB canvas, so only the last KEEP_PANOS panoramas' tiles are kept (never
+  // one on screen), and at most MAX_TILES in all.
   const tiles = new Map();
+  const KEEP_PANOS = 2;
+  const MAX_TILES = 1200;
+  let recent = []; // panoramas with kept tiles, last used last
 
   // What goes into WebGL for this tile: the edit if the area is known, otherwise a blur while
   // the detector works. Tiles another script already swapped for a canvas are left alone.
@@ -141,22 +146,51 @@
     if (!t) {
       t = { key: k, img, canvas: null, cfg: null, recs: [], drawn: new Set() };
       tiles.set(rec.url, t);
-      if (tiles.size > 800) tiles.delete(tiles.keys().next().value);
+      if (tiles.size > MAX_TILES) dropTile(tiles.keys().next().value);
       stats.seen++;
     }
+    keepRecent(k.pano);
     t.img = img;
     t.recs = t.recs.filter(ggs.tiles.live);
     t.recs.push(rec);
     return t;
   }
 
+  function keepRecent(pano) {
+    if (recent.at(-1) === pano) return;
+    recent = [...recent.filter(p => p !== pano), pano];
+    if (recent.length <= KEEP_PANOS) return;
+    const shown = shownPanos();
+    const old = recent.find(p => p !== pano && !shown.has(p));
+    if (old) dropPano(old);
+  }
+  function shownPanos() {
+    const shown = new Set();
+    for (const p of ggs.maps.panoramas()) {
+      try {
+        shown.add(p.getPano());
+      } catch {}
+    }
+    return shown;
+  }
+  function dropPano(pano) {
+    recent = recent.filter(p => p !== pano);
+    for (const [url, t] of tiles) if (t.key.pano === pano) dropTile(url);
+  }
+  function dropTile(url) {
+    stale.delete(tiles.get(url));
+    tiles.delete(url);
+  }
+  // A tile dropped from `tiles` is done with: its detection is skipped, or its result ignored.
+  const kept = (t, url) => tiles.get(url) === t;
+
   function queueDetect(t, url) {
     const k = t.key;
     const W = t.img.naturalWidth || t.img.width;
     t.queued = true;
-    detect(t.img, () => t.recs.some(ggs.tiles.live), url).then(found => {
+    detect(t.img, () => kept(t, url) && t.recs.some(ggs.tiles.live), url).then(found => {
       t.queued = false;
-      if (!found) return; // skipped or failed; a later upload retries
+      if (!found || !kept(t, url)) return; // skipped or failed; a later upload retries
       detectedTiles.add(tileId(k));
       stats.boxes += found.length;
       const { added, removed } = addSigns(k, W, found);
@@ -251,14 +285,24 @@
 
   ls.debug = () => ({ ...ls.queueState(), tiles: tiles.size, panos: signs.size, stale: stale.size });
 
+  // Everything found and drawn, freed on stop.
+  function forgetAll() {
+    tiles.clear();
+    stale.clear();
+    signs.clear();
+    detectedTiles.clear();
+    recent = [];
+  }
+
   function start(cfg) {
     active = cfg;
     ggs.debug('lying-signs on', cfg);
-    loadDetector();
+    loadDetector().catch(() => {}); // the detector says why itself
     ggs.tiles.replay();
     return {
       stop() {
         active = null;
+        forgetAll();
         ggs.tiles.replay();
       },
       update(next) {
